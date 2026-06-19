@@ -1,0 +1,6 @@
+(ql:quickload :cl-json)
+(format t "nil: ~A~%" (cl-json:encode-json-to-string nil))
+(format t "t: ~A~%" (cl-json:encode-json-to-string t))
+(format t "json-false: ~A~%" (cl-json:encode-json-to-string :false))
+(format t "json-false-var: ~A~%" (cl-json:encode-json-to-string cl-json:*json-false*))
+(uiop:quit)
