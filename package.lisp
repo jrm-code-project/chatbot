@@ -6,13 +6,33 @@
   (:shadowing-import-from "SERIES" "DEFUN" "FUNCALL" "LET*" "MULTIPLE-VALUE-BIND")
   (:use "ALEXANDRIA" "CL" "FOLD" "FUNCTION" "JSONX" "NAMED-LET" "PROMISE" "SERIES" "TRIVIAL-TIMEOUT")
   (:export "CHAT"
+           "MAKE-RUNTIME-CONTEXT"
            "NEW-CHAT"
            "NEW-CHAT-PERSONA"
+           "INITIALIZE-STARTUP-CHATBOT"
+           "STARTUP-CHATBOT-INITIALIZED-P"
+           "STARTUP-CHATBOT-MCP-STATUS"
+           "LOG-MESSAGE"
+           "SHUTDOWN-CHATBOT"
+           ;; Compatibility-only ambient runtime globals. Prefer
+           ;; MAKE-RUNTIME-CONTEXT plus explicit :RUNTIME-CONTEXT arguments.
+           "*WARN-ON-LEGACY-RUNTIME-GLOBALS-P*"
+           "*MCP-CONFIG-PATH*"
+           "*AUTO-INITIALIZE-STARTUP-MCP-SERVERS-P*"
            "*DEFAULT-CONVERSATION*"
+           "*LOGGING-ENABLED-P*"
+           "*LOG-LEVEL*"
+           "*LOG-STREAM*"
+           "*HTTP-CONNECT-TIMEOUT*"
+           "*HTTP-READ-TIMEOUT*"
+           "*BACKEND-DEFAULT-MODELS*"
+           "BACKEND-DEFAULT-MODEL"
+           "*GEMINI-BASE-URL*"
+           "*GEMINI-API-REVISION*"
            "*OPENAI-BASE-URL*"
            "*OPENAI-API-KEY*"
            "OPENAI-API-KEY"
            "*LM-STUDIO-BASE-URL*"
+           "*LM-STUDIO-DEFAULT-API-KEY*"
            "*LM-STUDIO-API-KEY*"
            "LM-STUDIO-API-KEY"))
-

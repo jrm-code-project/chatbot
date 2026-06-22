@@ -11,7 +11,7 @@
      `(:source-registry (:tree ,repos-dir) :inherit-configuration))))
 
 (push (uiop:getcwd) asdf:*central-registry*)
-(ql:quickload :chatbot)
+(ql:quickload "chatbot/tests")
 (if (chatbot::run-all-tests)
     (uiop:quit 0)
     (uiop:quit 1))

@@ -12,7 +12,7 @@ Implement a Model Context Protocol (MCP) client within the Chatbot framework to 
    - Configuration will be loaded from a cross-platform location using `uiop:xdg-config-home`. On Windows, this resolves to `~/AppData/Local/mcp/mcp.lisp`, and on Unix systems to `~/.config/mcp/mcp.lisp`.
    - The file will contain an s-expression defining servers, their execution commands, and arguments.
 2. **Process Management & JSON-RPC (Asynchronous/Threaded):**
-   - We will add `bordeaux-threads` to `chatbot.asd` to handle threading cross-platform.
+   - We will utilize SBCL native threads (`sb-thread`) to handle threading, avoiding the need for third-party threading dependencies.
    - For each configured MCP server, we will launch a subprocess using `uiop:launch-program` with `:input :stream` and `:output :stream`.
    - A dedicated reader thread will be spawned per server to parse incoming JSON-RPC responses asynchronously. This prevents blocking the main REPL and handles asynchronous notifications.
 3. **Tool Injection & Execution Pipeline:**
@@ -25,13 +25,13 @@ Implement a Model Context Protocol (MCP) client within the Chatbot framework to 
 
 ## Implementation Steps
 **Phase 1: Foundation & Process Management**
-1. Update `chatbot.asd` to include `bordeaux-threads` and a new `mcp.lisp` file.
+1. Update `chatbot.asd` to include the new `mcp.lisp` file.
 2. Create `mcp.lisp` and define `mcp-server` CLOS classes.
 3. Implement `read-mcp-config` to locate and parse the `mcp.lisp` configuration file.
-4. Implement process spawning (`uiop:launch-program`) and the threaded JSON-RPC message listener using `cl-json`.
+4. Implement process spawning (`uiop:launch-program`) and the threaded JSON-RPC message listener using `cl-json` and `sb-thread` primitives.
 
 **Phase 2: Protocol Handlers**
-1. Implement synchronous wrapper functions that send JSON-RPC requests (e.g., `initialize`, `tools/list`, `tools/call`) and block via condition variables or promises until the listener thread signals a response.
+1. Implement synchronous wrapper functions that send JSON-RPC requests (e.g., `initialize`, `tools/list`, `tools/call`) and block via `sb-thread:make-mailbox` or other native SBCL synchronization primitives until the listener thread signals a response.
 2. Translate standard MCP `tools/list` JSON schemas into the Gemini/Google API tool format and the OpenAI tool format.
 
 **Phase 3: Core Framework Integration**
@@ -41,7 +41,7 @@ Implement a Model Context Protocol (MCP) client within the Chatbot framework to 
 
 ## Verification & Testing
 - **Unit Tests:** Add tests for JSON-RPC parsing, config resolution (`get-mcp-config-path`), and tool payload translation.
-- **Integration Test:** Create a mock script (e.g., `mock-mcp-server.py`) and verify that `uiop:launch-program` correctly binds streams, that `tools/list` is successfully parsed, and that a `tools/call` returns the expected value.
+- **Integration Test:** Create a mock script (e.g., `mock-mcp-server.py`) and verify that `uiop:launch-program` correctly binds streams, that `tools/list` is successfully parsed, and that a `tools/call` returns the expected value using native `sb-thread` interactions.
 
 ## Migration & Rollback
 - Ensure backward compatibility for users without `mcp.lisp` or MCP configurations (the tool list will simply be empty).
