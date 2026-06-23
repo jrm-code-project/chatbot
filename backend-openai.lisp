@@ -3,7 +3,8 @@
 
 (in-package "CHATBOT")
 
-(defun chat-openai (bot input conversation callback)
+(defun chat-openai (bot input conversation callback
+                    &key file-attachments request-messages history-messages)
   "Sends user input to the active conversation using an OpenAI-compliant chat completions API."
   (let* ((backend (chatbot-backend bot))
          (api-key (if (eq backend :lm-studio)
@@ -18,11 +19,14 @@
            (current-messages (conversation-messages conversation))
            (persona-memory (conversation-persona-memory conversation))
            (persona-diary-entries (conversation-persona-diary-entries conversation))
-          (history-messages (append-user-input-to-conversation-messages current-messages input))
-          (request-messages (build-openai-request-messages system-inst current-messages input
-                                                           :chatbot bot
-                                                           :persona-memory persona-memory
-                                                           :persona-diary-entries persona-diary-entries)))
+          (history-messages (or history-messages
+                                (append-user-input-to-conversation-messages current-messages input)))
+          (request-messages (or request-messages
+                                (build-openai-request-messages system-inst current-messages input
+                                                               :chatbot bot
+                                                               :persona-memory persona-memory
+                                                               :persona-diary-entries persona-diary-entries
+                                                               :file-attachments file-attachments))))
       (let* ((openai-tools (openai-request-tools bot))
             (payload-alist (list (cons "model" (chatbot-model bot))
                                  (cons "messages" request-messages)
@@ -115,9 +119,21 @@
                                   ("name" . ,name)
                                   ("content" . ,res-text))
                                 tool-responses)))))
-                  (setf (conversation-messages conversation)
-                        (append history-messages (list assistant-msg) (nreverse tool-responses)))
-                  (chat-openai bot nil conversation callback))
+                  (let ((ordered-tool-responses (nreverse tool-responses)))
+                    (let ((recursive-history (append history-messages
+                                                     (list assistant-msg)
+                                                     ordered-tool-responses)))
+                      (setf (conversation-messages conversation)
+                            recursive-history)
+                    (chat-openai bot
+                                 nil
+                                 conversation
+                                 callback
+                                 :history-messages recursive-history
+                                 :request-messages (append request-messages
+                                                           (list assistant-msg)
+                                                           ordered-tool-responses)
+                                 :file-attachments file-attachments))))
                 (let ((final-str (coerce full-text 'string)))
                   (setf (conversation-messages conversation)
                         (append history-messages

@@ -108,6 +108,94 @@ data: [DONE]")
         (fiveam:is (string= "Stored persona memory."
                            (conversation-persona-memory conv)))))))
 
+(fiveam:test test-openai-chat-includes-transient-file-attachments-without-persisting-them
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "openai-chat-files/" temp-dir))
+        (file-path (merge-pathnames "note.txt" root))
+        (captured-payloads nil))
+    (ensure-directories-exist root)
+    (with-open-file (stream file-path :direction :output :if-exists :supersede)
+      (write-string "Alpha attachment" stream))
+    (unwind-protect
+        (let* ((*openai-api-key* "test-key")
+               (context (make-runtime-context
+                         :http-post-function
+                         (lambda (url &rest args)
+                           (declare (ignore url))
+                           (setf captured-payloads
+                                 (append captured-payloads (list (getf args :content))))
+                           (values (make-string-input-stream
+                                    "data: {\"choices\": [{\"delta\": {\"content\": \"Hello OpenAI\"}}]}
+data: [DONE]")
+                                   200))))
+               (conv (new-chat :backend :openai
+                               :system-instruction "Be helpful"
+                               :runtime-context context)))
+          (fiveam:is (string= "Hello OpenAI"
+                              (chat "Summarize" :conversation conv :files (list file-path))))
+          (fiveam:is (string= "Hello OpenAI"
+                              (chat "No files now" :conversation conv)))
+          (fiveam:is (= 2 (length captured-payloads)))
+          (let* ((first-payload (cl-json:decode-json-from-string (first captured-payloads)))
+                 (first-messages (cdr (assoc :messages first-payload)))
+                 (first-content (cdr (assoc :content (second first-messages))))
+                 (second-payload (cl-json:decode-json-from-string (second captured-payloads)))
+                 (second-messages (cdr (assoc :messages second-payload)))
+                 (stored-history (conversation-messages conv)))
+            (fiveam:is (= 2 (length first-content)))
+            (fiveam:is (string= "Summarize"
+                                (cdr (assoc :text (first first-content)))))
+            (fiveam:is (search "Alpha attachment"
+                               (cdr (assoc :text (second first-content)))))
+            (fiveam:is (string= "Summarize"
+                                (cdr (assoc :content (second second-messages)))))
+            (fiveam:is (notany (lambda (message)
+                                 (search "Alpha attachment"
+                                         (princ-to-string (cdr (assoc :content message)))))
+                               second-messages))
+            (fiveam:is (= 4 (length stored-history)))
+            (fiveam:is (string= "Summarize"
+                                (cdr (assoc "content" (first stored-history) :test #'string=))))
+            (fiveam:is (notany (lambda (message)
+                                 (search "Alpha attachment"
+                                         (princ-to-string
+                                          (cdr (assoc "content" message :test #'string=)))))
+                               stored-history))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-openai-chat-file-alias-matches-singleton-files
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "openai-chat-file-alias/" temp-dir))
+         (file-path (merge-pathnames "note.txt" root))
+         (captured-payloads nil))
+    (ensure-directories-exist root)
+    (with-open-file (stream file-path :direction :output :if-exists :supersede)
+      (write-string "Alias attachment" stream))
+    (unwind-protect
+         (let* ((*openai-api-key* "test-key")
+                (context (make-runtime-context
+                          :http-post-function
+                          (lambda (url &rest args)
+                            (declare (ignore url))
+                            (setf captured-payloads
+                                 (append captured-payloads (list (getf args :content))))
+                            (values (make-string-input-stream
+                                    "data: {\"choices\": [{\"delta\": {\"content\": \"Hello OpenAI\"}}]}
+data: [DONE]")
+                                   200)))))
+           (fiveam:is (string= "Hello OpenAI"
+                               (chat "Summarize"
+                                    :conversation (new-chat :backend :openai :runtime-context context)
+                                    :file file-path)))
+           (fiveam:is (string= "Hello OpenAI"
+                               (chat "Summarize"
+                                    :conversation (new-chat :backend :openai :runtime-context context)
+                                    :files (list file-path))))
+           (fiveam:is (= 2 (length captured-payloads)))
+           (fiveam:is (string= (first captured-payloads)
+                               (second captured-payloads))))
+      (uiop:delete-directory-tree root :validate t))))
+
 (fiveam:test test-openai-chat-includes-preloaded-diary-history
   (let ((captured-payload nil))
     (let* ((*openai-api-key* "test-key")

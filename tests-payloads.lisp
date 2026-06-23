@@ -42,9 +42,95 @@
                                       (aref (cdr (assoc "content" third-step :test #'string=)) 0)
                                       :test #'string=)))))))
 
+(fiveam:test test-resolve-chat-input-files-expands-directories-wildcards-and-deduplicates
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "chat-files-expand/" temp-dir))
+        (nested (merge-pathnames "nested/" root))
+        (deeper (merge-pathnames "nested\\deeper/" root))
+        (alpha (merge-pathnames "alpha.txt" root))
+        (beta (merge-pathnames "beta.txt" root))
+        (gamma (merge-pathnames "gamma.txt" nested))
+        (delta (merge-pathnames "delta.txt" deeper)))
+    (ensure-directories-exist deeper)
+    (dolist (path (list alpha beta gamma delta))
+      (with-open-file (stream path :direction :output :if-exists :supersede)
+       (write-line (file-namestring path) stream)))
+    (unwind-protect
+        (let* ((resolved (resolve-chat-input-files
+                          (list alpha
+                                (merge-pathnames "*.txt" root)
+                                nested)))
+               (resolved-names (mapcar #'file-namestring resolved)))
+          (fiveam:is (equal '("alpha.txt" "beta.txt" "gamma.txt" "delta.txt")
+                            resolved-names)))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-openai-request-messages-include-text-file-attachments-as-text-parts
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "chat-files-openai-builder/" temp-dir))
+        (file-path (merge-pathnames "note.txt" root)))
+    (ensure-directories-exist root)
+    (with-open-file (stream file-path :direction :output :if-exists :supersede)
+      (write-string "Alpha attachment" stream))
+    (unwind-protect
+        (let* ((attachments (prepare-chat-file-attachments (list file-path)))
+               (messages (build-openai-request-messages
+                          nil
+                          nil
+                          "Summarize"
+                          :chatbot (make-instance 'chatbot :model "gemini-3.5-flash")
+                          :file-attachments attachments))
+               (content (cdr (assoc "content" (first messages) :test #'string=))))
+          (fiveam:is (= 2 (length content)))
+          (fiveam:is (string= "text"
+                              (cdr (assoc "type" (first content) :test #'string=))))
+          (fiveam:is (string= "Summarize"
+                              (cdr (assoc "text" (first content) :test #'string=))))
+          (fiveam:is (search "Alpha attachment"
+                             (cdr (assoc "text" (second content) :test #'string=)))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-generate-content-and-interaction-builders-include-file-blobs
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "chat-files-gemini-builder/" temp-dir))
+        (file-path (merge-pathnames "note.txt" root))
+        (bot (make-instance 'chatbot :model "gemini-3.5-flash")))
+    (ensure-directories-exist root)
+    (with-open-file (stream file-path :direction :output :if-exists :supersede)
+      (write-string "Alpha attachment" stream))
+    (unwind-protect
+        (let* ((attachments (prepare-chat-file-attachments (list file-path)))
+               (contents (build-generate-content-request-contents nil
+                                                                  "Summarize"
+                                                                  :chatbot bot
+                                                                  :file-attachments attachments))
+               (payload (make-interaction-payload bot
+                                                  "Summarize"
+                                                  :file-attachments attachments
+                                                  :stream t))
+               (generate-parts (cdr (assoc "parts" (first contents) :test #'string=)))
+               (interaction-input (cdr (assoc "input" payload :test #'string=)))
+               (user-step (aref interaction-input 0))
+               (interaction-parts (cdr (assoc "content" user-step :test #'string=))))
+          (fiveam:is (= 2 (length generate-parts)))
+          (fiveam:is (string= "Summarize"
+                              (cdr (assoc "text" (aref generate-parts 0) :test #'string=))))
+          (let ((inline-data (cdr (assoc "inlineData" (aref generate-parts 1) :test #'string=))))
+            (fiveam:is (string= "text/plain"
+                                (cdr (assoc "mimeType" inline-data :test #'string=))))
+            (fiveam:is (stringp (cdr (assoc "data" inline-data :test #'string=)))))
+          (fiveam:is (= 2 (length interaction-parts)))
+          (fiveam:is (string= "text"
+                              (cdr (assoc "type" (aref interaction-parts 0) :test #'string=))))
+          (fiveam:is (string= "document"
+                              (cdr (assoc "type" (aref interaction-parts 1) :test #'string=))))
+          (fiveam:is (string= "text/plain"
+                              (cdr (assoc "mime_type" (aref interaction-parts 1) :test #'string=)))))
+      (uiop:delete-directory-tree root :validate t))))
+
 (fiveam:test test-format-prompt-timestamp
   (fiveam:is (string= "[14:29 26-Jun-2026]"
-                      (format-prompt-timestamp
+                     (format-prompt-timestamp
                        (encode-universal-time 0 29 14 26 6 2026 0)
                        0))))
 

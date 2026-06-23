@@ -10,7 +10,8 @@
       (subseq model (length "models/"))
       model))
 
-(defun chat-google (bot input conversation callback)
+(defun chat-google (bot input conversation callback
+                   &key file-attachments request-contents history-messages)
   "Sends user input to the active conversation using Google's non-streaming generateContent API."
   (let ((api-key (gemini-api-key)))
     (unless (and api-key (string/= api-key ""))
@@ -19,24 +20,16 @@
            (current-messages (conversation-messages conversation))
            (persona-memory (conversation-persona-memory conversation))
            (persona-diary-entries (conversation-persona-diary-entries conversation))
-           (messages (build-request-history-messages current-messages input
-                                                     :chatbot bot
-                                                     :persona-memory persona-memory
-                                                     :persona-diary-entries persona-diary-entries))
-           (contents (coerce
-                      (mapcar (lambda (msg)
-                                (let ((role (cdr (assoc "role" msg :test #'string=)))
-                                      (content (cdr (assoc "content" msg :test #'string=)))
-                                      (parts (cdr (assoc "parts" msg :test #'string=))))
-                                  (cond
-                                    (parts
-                                     (list (cons "role" (generate-content-role-for-message role))
-                                           (cons "parts" parts)))
-                                    (t
-                                     (list (cons "role" (generate-content-role-for-message role))
-                                           (cons "parts" (vector (list (cons "text" content)))))))))
-                              messages)
-                      'vector))
+           (history-messages (or history-messages
+                                (append-user-input-to-conversation-messages current-messages input)))
+           (contents-list (or request-contents
+                             (build-generate-content-request-contents current-messages
+                                                                      input
+                                                                      :chatbot bot
+                                                                      :persona-memory persona-memory
+                                                                      :persona-diary-entries persona-diary-entries
+                                                                      :file-attachments file-attachments)))
+           (contents (coerce contents-list 'vector))
            (gemini-tools (generate-content-request-tools bot))
            (payload-alist (list (cons "contents" contents)))
            (url (concatenate 'string
@@ -98,10 +91,17 @@
                            (let* ((res-text (execute-chatbot-tool bot srv name args))
                                   (resp-msg `(("role" . "user")
                                               ("parts" . ,(vector `(("functionResponse" . (("name" . ,name) ("response" . (("result" . ,res-text)))))))))))
-                             (setf (conversation-messages conversation)
-                                   (append (append-user-input-to-conversation-messages current-messages input)
-                                           (list model-msg resp-msg)))
-                             (chat-google bot nil conversation callback)))))
+                             (let ((recursive-history (append history-messages
+                                                              (list model-msg resp-msg))))
+                               (setf (conversation-messages conversation)
+                                     recursive-history)
+                               (chat-google bot
+                                            nil
+                                            conversation
+                                            callback
+                                            :history-messages recursive-history
+                                            :request-contents (append contents-list (list model-msg resp-msg))
+                                            :file-attachments file-attachments))))))
                       (t
                        (unless final-str
                          (error "No text returned from Gemini API response: ~A" response-body))
@@ -110,7 +110,7 @@
                        (when callback
                          (funcall callback final-str))
                        (setf (conversation-messages conversation)
-                             (append (append-user-input-to-conversation-messages current-messages input)
+                             (append history-messages
                                      (list (list (cons "role" "model") (cons "content" final-str)))))
                        final-str)))
                   (error "API responded with HTTP status ~A" status)))

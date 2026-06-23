@@ -3,7 +3,7 @@
 
 (in-package "CHATBOT")
 
-(defun chat-gemini (bot input conversation callback)
+(defun chat-gemini (bot input conversation callback &key file-attachments)
   "Sends user input to the active conversation using the Gemini Interactions API."
   (let ((api-key (gemini-api-key)))
     (unless (and api-key (string/= api-key ""))
@@ -15,6 +15,7 @@
                            :persona-memory (conversation-persona-memory conversation)
                            :persona-diary-entries (conversation-persona-diary-entries conversation)
                            :previous-interaction-id (conversation-interaction-id conversation)
+                           :file-attachments file-attachments
                            :stream t))
            (payload-json (cl-json:encode-json-to-string payload-alist))
            (url (concatenate 'string *gemini-base-url* "/interactions?alt=sse"))
@@ -89,7 +90,8 @@
             (if (and (search "/interactions?alt=sse" message)
                      (search "404" message)
                      (search "not found" message))
-                (return-from chat-gemini (chat-google bot input conversation callback))
+                (return-from chat-gemini
+                  (chat-google bot input conversation callback :file-attachments file-attachments))
                 (error "Gemini Chat Error: ~A" e)))))
       (if function-calls-to-run
           (let ((results nil))

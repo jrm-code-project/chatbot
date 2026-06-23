@@ -97,6 +97,57 @@
         (fiveam:is (string= "Stored persona memory."
                            (conversation-persona-memory conv)))))))
 
+(fiveam:test test-google-chat-includes-transient-file-attachments-without-persisting-them
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "google-chat-files/" temp-dir))
+        (file-path (merge-pathnames "note.txt" root))
+        (captured-payloads nil))
+    (ensure-directories-exist root)
+    (with-open-file (stream file-path :direction :output :if-exists :supersede)
+      (write-string "Alpha attachment" stream))
+    (unwind-protect
+        (let* ((context (make-runtime-context
+                         :gemini-api-key-function (lambda () "mocked-google-api-key")
+                         :http-post-function
+                         (lambda (url &rest args)
+                           (declare (ignore url))
+                           (setf captured-payloads
+                                 (append captured-payloads (list (getf args :content))))
+                           (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}"
+                                   200))))
+               (conv (new-chat :backend :google :runtime-context context)))
+          (fiveam:is (string= "Hello from Google non-streaming"
+                              (chat "Summarize" :conversation conv :files (list file-path))))
+          (fiveam:is (string= "Hello from Google non-streaming"
+                              (chat "No files now" :conversation conv)))
+          (fiveam:is (= 2 (length captured-payloads)))
+          (let* ((first-payload (cl-json:decode-json-from-string (first captured-payloads)))
+                 (first-contents (cdr (assoc :contents first-payload)))
+                 (first-parts (cdr (assoc :parts (first first-contents))))
+                 (inline-data (cdr (assoc :inline-data (second first-parts))))
+                 (second-payload (cl-json:decode-json-from-string (second captured-payloads)))
+                 (second-contents (cdr (assoc :contents second-payload)))
+                 (stored-history (conversation-messages conv)))
+            (fiveam:is (= 2 (length first-parts)))
+            (fiveam:is (string= "Summarize"
+                                (cdr (assoc :text (first first-parts)))))
+            (fiveam:is (string= "text/plain"
+                                (cdr (assoc :mime-type inline-data))))
+            (fiveam:is (string= "Summarize"
+                                (cdr (assoc :text (car (cdr (assoc :parts (first second-contents))))))))
+            (fiveam:is (notany (lambda (content)
+                                 (search ":INLINE-DATA" (princ-to-string content)))
+                               second-contents))
+            (fiveam:is (= 4 (length stored-history)))
+            (fiveam:is (string= "Summarize"
+                                (cdr (assoc "content" (first stored-history) :test #'string=))))
+            (fiveam:is (notany (lambda (message)
+                                 (search "Alpha attachment"
+                                         (princ-to-string
+                                          (cdr (assoc "content" message :test #'string=)))))
+                               stored-history))))
+      (uiop:delete-directory-tree root :validate t))))
+
 (fiveam:test test-google-chat-continues-without-persona
   (let ((captured-payloads nil)
         (call-count 0))
