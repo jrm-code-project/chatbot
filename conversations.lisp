@@ -7,11 +7,22 @@
   "Reads and validates a persona config form from CONFIG-PATH."
   (handler-case
       (with-open-file (stream config-path :direction :input)
-        (let ((config (read stream nil :eof)))
+        (let* ((eof-marker (gensym "EOF"))
+               (forms (loop for form = (read stream nil eof-marker)
+                            until (eq form eof-marker)
+                            collect form))
+               (config (cond
+                         ((null forms) :eof)
+                         ((and (= 1 (length forms))
+                               (listp (car forms)))
+                          (car forms))
+                         (t forms))))
           (when (eq config :eof)
             (error "Persona config file is empty: ~A" config-path))
           (unless (listp config)
             (error "Persona config must be a property list: ~A" config-path))
+          (unless (and config (keywordp (car config)))
+            (error "Persona config must start with a keyword property: ~A" config-path))
           config))
     (error (e)
       (error "Invalid persona config in ~A: ~A" config-path e))))
@@ -25,6 +36,7 @@ configuration, instructions, or preloaded memory."
     (call-with-runtime-context
      resolved-context
      (lambda ()
+      (maybe-auto-initialize-startup-chatbot resolved-context)
       (let* ((chosen-model (or model
                                (backend-default-model backend)))
              (bot (make-instance 'chatbot
@@ -65,11 +77,13 @@ Use NEW-CHAT instead when no persona should be loaded."
            (backend (cond
                       ((eq googleapi :google-api) :google)
                       (t :gemini))))
-      (preload-persona-conversation-memory
-       (new-chat :backend backend
-                 :model model
-                 :system-instruction system-instruction
-                 :google-search-p google-search-p
-                 :code-execution-p code-execution-p
-                 :runtime-context runtime-context)
-       persona-dir))))
+      (let ((conversation
+              (preload-persona-conversation-memory
+               (new-chat :backend backend
+                         :model model
+                         :system-instruction system-instruction
+                         :google-search-p google-search-p
+                         :code-execution-p code-execution-p
+                         :runtime-context runtime-context)
+               persona-dir)))
+        (attach-persona-memory-mcp-server conversation persona-dir)))))

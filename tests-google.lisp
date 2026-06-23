@@ -36,6 +36,24 @@
           (fiveam:is (string= "Hi Google" (cdr (assoc :text (car parts)))))
           (fiveam:is (string= "Be concise" (cdr (assoc :text (car (cdr (assoc :parts sys-inst))))))))))))
 
+(fiveam:test test-google-chat-flow-supports-models-prefix
+  (let ((captured-url nil))
+    (let ((*gemini-base-url* "https://example.test/gemini"))
+      (let* ((context (make-runtime-context
+                       :gemini-api-key-function (lambda () "mocked-google-api-key")
+                       :http-post-function
+                       (lambda (url &rest args)
+                         (declare (ignore args))
+                         (setf captured-url url)
+                         (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}" 200))))
+             (conv (new-chat :backend :google
+                             :model "models/gemini-prefixed-model"
+                             :runtime-context context)))
+        (fiveam:is (string= "Hello from Google non-streaming"
+                            (chat "Hi Google" :conversation conv)))
+        (fiveam:is (string= "https://example.test/gemini/models/gemini-prefixed-model:generateContent?key=mocked-google-api-key"
+                            captured-url))))))
+
 (fiveam:test test-google-chat-preserves-preloaded-history-every-turn
   (let ((captured-payloads nil))
     (let* ((context (make-runtime-context

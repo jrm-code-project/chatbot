@@ -3,6 +3,13 @@
 
 (in-package "CHATBOT")
 
+(defun generate-content-model-name (model)
+  "Returns MODEL in the form expected by the generateContent URL path."
+  (if (and (stringp model)
+           (alexandria:starts-with-subseq "models/" model))
+      (subseq model (length "models/"))
+      model))
+
 (defun chat-google (bot input conversation callback)
   "Sends user input to the active conversation using Google's non-streaming generateContent API."
   (let ((api-key (gemini-api-key)))
@@ -27,15 +34,14 @@
                                            (cons "parts" (vector (list (cons "text" content)))))))))
                               messages)
                       'vector))
-           (mcp-tools (get-all-mcp-tools bot))
-           (gemini-tools (when mcp-tools
-                           (list `(("functionDeclarations" . ,(coerce
-                                                               (mapcar (lambda (pair)
-                                                                         (translate-mcp-tool-to-gemini-fn (cdr pair)))
-                                                                       mcp-tools)
-                                                               'vector))))))
+           (gemini-tools (generate-content-request-tools bot))
            (payload-alist (list (cons "contents" contents)))
-           (url (concatenate 'string *gemini-base-url* "/models/" (chatbot-model bot) ":generateContent?key=" api-key))
+           (url (concatenate 'string
+                             *gemini-base-url*
+                             "/models/"
+                             (generate-content-model-name (chatbot-model bot))
+                             ":generateContent?key="
+                             api-key))
            (headers (list (cons "Content-Type" "application/json"))))
       (when system-inst
         (setf payload-alist

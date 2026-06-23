@@ -202,3 +202,34 @@ data: [DONE]")
           (fiveam:is (string= "assistant" (cdr (assoc "role" (second stored-history) :test #'string=))))
           (fiveam:is (string= "tool" (cdr (assoc "role" (third stored-history) :test #'string=))))
           (fiveam:is (string= "assistant" (cdr (assoc "role" (fourth stored-history) :test #'string=)))))))))
+
+(fiveam:test test-openai-chat-includes-mcp-tools-in-request
+  (let ((captured-payload nil))
+    (let* ((*openai-api-key* "test-key")
+          (*get-all-mcp-tools-function*
+            (lambda (bot)
+              (declare (ignore bot))
+              (list (cons :mock-server
+                          '((:name . "echo_tool")
+                            (:description . "Echo tool")
+                            (:input-schema . ((:type . "object")
+                                              (:properties . nil))))))))
+          (context (make-runtime-context
+                    :http-post-function
+                    (lambda (url &rest args)
+                      (declare (ignore url))
+                      (setf captured-payload (getf args :content))
+                      (values (make-string-input-stream
+                               "data: {\"choices\": [{\"delta\": {\"content\": \"Hello OpenAI\"}}]}
+data: [DONE]")
+                              200))))
+          (conv (new-chat :backend :openai :runtime-context context)))
+      (fiveam:is (string= "Hello OpenAI" (chat "Hi there" :conversation conv)))
+      (let* ((payload (cl-json:decode-json-from-string captured-payload))
+            (tools (cdr (assoc :tools payload)))
+            (first-tool (car tools))
+            (function (cdr (assoc :function first-tool))))
+        (fiveam:is (= 1 (length tools)))
+        (fiveam:is (string= "function" (cdr (assoc :type first-tool))))
+        (fiveam:is (string= "echo_tool" (cdr (assoc :name function))))
+        (fiveam:is (string= "Echo tool" (cdr (assoc :description function))))))))

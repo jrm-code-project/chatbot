@@ -52,6 +52,45 @@
                 history)
         history)))
 
+(defun interaction-request-tools (chatbot)
+  "Builds the Gemini Interactions tool list for CHATBOT, including MCP tools."
+  (let ((tools nil))
+    (when (chatbot-google-search-p chatbot)
+      (push '(("type" . "google_search")) tools))
+    (when (chatbot-code-execution-p chatbot)
+      (push '(("type" . "code_execution")) tools))
+    (let ((mcp-tools (get-all-mcp-tools chatbot)))
+      (when mcp-tools
+        (dolist (pair mcp-tools)
+         (let* ((mcp-tool (cdr pair))
+                (name (mcp-val :name mcp-tool))
+                (description (mcp-val :description mcp-tool))
+                (input-schema (mcp-val :input-schema mcp-tool)))
+           (push `(("type" . "function")
+                   ("name" . ,name)
+                   ("description" . ,(or description ""))
+                   ("parameters" . ,(gemini-tool-parameters input-schema)))
+                 tools)))))
+    (nreverse tools)))
+
+(defun openai-request-tools (chatbot)
+  "Builds the OpenAI-compatible tool list for CHATBOT from MCP tools."
+  (let ((mcp-tools (get-all-mcp-tools chatbot)))
+    (when mcp-tools
+      (mapcar (lambda (pair)
+               (translate-mcp-tool-to-openai (cdr pair)))
+             mcp-tools))))
+
+(defun generate-content-request-tools (chatbot)
+  "Builds the Google generateContent tools payload for CHATBOT from MCP tools."
+  (let ((mcp-tools (get-all-mcp-tools chatbot)))
+    (when mcp-tools
+      (list `(("functionDeclarations" . ,(coerce
+                                         (mapcar (lambda (pair)
+                                                   (translate-mcp-tool-to-gemini-fn (cdr pair)))
+                                                 mcp-tools)
+                                         'vector)))))))
+
 (defun conversation-message->interaction-step (message)
   "Converts a stored conversation message to an Interactions API step."
   (let ((role (cdr (assoc "role" message :test #'string=)))
@@ -85,23 +124,7 @@
       (push (cons "previous_interaction_id" previous-interaction-id) payload))
     (when (chatbot-system-instruction chatbot)
       (push (cons "system_instruction" (chatbot-system-instruction chatbot)) payload))
-    (let ((tools nil))
-      (when (chatbot-google-search-p chatbot)
-        (push '(("type" . "google_search")) tools))
-      (when (chatbot-code-execution-p chatbot)
-        (push '(("type" . "code_execution")) tools))
-      (let ((mcp-tools (get-all-mcp-tools chatbot)))
-        (when mcp-tools
-          (dolist (pair mcp-tools)
-            (let* ((mcp-tool (cdr pair))
-                   (name (mcp-val :name mcp-tool))
-                   (description (mcp-val :description mcp-tool))
-                   (input-schema (mcp-val :input-schema mcp-tool)))
-              (push `(("type" . "function")
-                      ("name" . ,name)
-                      ("description" . ,(or description ""))
-                      ("parameters" . ,(gemini-tool-parameters input-schema)))
-                    tools)))))
+    (let ((tools (interaction-request-tools chatbot)))
       (when tools
-        (push (cons "tools" (nreverse tools)) payload)))
+        (push (cons "tools" tools) payload)))
     (nreverse payload)))

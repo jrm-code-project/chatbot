@@ -42,6 +42,30 @@
     (fiveam:is (equal '("server.js") args))
     (fiveam:is-false required-p)))
 
+(fiveam:test test-parse-mcp-server-def-supports-environment
+  (multiple-value-bind (name command args required-p environment system-instruction)
+     (parse-mcp-server-def '(:name "memory"
+                            :command "npx"
+                            :args ("-y" "@modelcontextprotocol/server-memory")
+                            :env (("MEMORY_FILE_PATH" . "persona-memory.json"))
+                            :system-instruction "memory tools"))
+    (fiveam:is (string= "memory" name))
+    (fiveam:is (string= "npx" command))
+    (fiveam:is (equal '("-y" "@modelcontextprotocol/server-memory") args))
+    (fiveam:is-false required-p)
+    (fiveam:is (equal '(("MEMORY_FILE_PATH" . "persona-memory.json")) environment))
+    (fiveam:is (string= "memory tools" system-instruction))))
+
+(fiveam:test test-merge-mcp-server-environments-inherits-and-overrides
+  (let ((merged (merge-mcp-server-environments
+                 '("PATH=C:\\Windows\\System32" "MEMORY_FILE_PATH=default.json")
+                 '(("MEMORY_FILE_PATH" . "persona.json")
+                   ("HOME" . "C:\\Users\\bitdi")))))
+    (fiveam:is (equal '(("PATH" . "C:\\Windows\\System32")
+                        ("MEMORY_FILE_PATH" . "persona.json")
+                        ("HOME" . "C:\\Users\\bitdi"))
+                      merged))))
+
 (fiveam:test test-mcp-tool-list-is-cached
   (let* ((server (make-instance 'mcp-server :name "cached-server"))
          (call-count 0))

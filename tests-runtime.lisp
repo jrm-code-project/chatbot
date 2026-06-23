@@ -353,7 +353,7 @@ Para two." :width 40 :stream s))))
            (fiveam:is (search "\"Authorization\":\"[REDACTED]\"" log-output))
            (fiveam:is (search "connect-timeout: 15" log-output))
            (fiveam:is (search "read-timeout: 120" log-output))
-           (fiveam:is (search "{\"hello\":\"world\"}" log-output)))
+           (fiveam:is-false (search "{\"hello\":\"world\"}" log-output)))
       (setf *http-post-function* original-post-function))))
 
 (fiveam:test test-backend-selection-and-defaults
@@ -474,10 +474,28 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (fiveam:is (= 0 init-calls))
         (fiveam:is (null (chatbot-mcp-servers bot)))))))
 
+(fiveam:test test-new-chat-auto-initializes-startup-mcp-servers-when-enabled
+  (let* ((context (make-runtime-context :auto-initialize-startup-mcp-servers-p t))
+        (init-calls 0))
+    (let ((*initialize-mcp-servers-for-chatbot-function*
+          (lambda (bot &key strict-required-p)
+            (declare (ignore strict-required-p))
+            (incf init-calls)
+            (setf (chatbot-mcp-servers bot) '(:shared-server))
+            bot)))
+      (let* ((conv (new-chat :runtime-context context))
+            (bot (conversation-chatbot conv)))
+       (fiveam:is (= 1 init-calls))
+       (fiveam:is-true (startup-chatbot-initialized-p context))
+       (fiveam:is (eq (current-startup-chatbot context)
+                      (runtime-context-startup-chatbot context)))
+       (fiveam:is (eq (chatbot-mcp-servers bot)
+                      (chatbot-mcp-servers (current-startup-chatbot context))))))))
+
 (fiveam:test test-auto-startup-chatbot-defaults-to-noop
   (let ((*startup-chatbot* nil)
-        (*auto-initialize-startup-mcp-servers-p* nil)
-        (init-calls 0))
+       (*auto-initialize-startup-mcp-servers-p* nil)
+       (init-calls 0))
     (let ((*initialize-mcp-servers-for-chatbot-function*
            (lambda (bot &key strict-required-p)
              (declare (ignore bot strict-required-p))
@@ -538,17 +556,48 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
     (fiveam:is-false (startup-chatbot-mcp-status))))
 
 (fiveam:test test-shutdown-chatbot-preserves-shared-startup-servers
-  (let* ((shared-servers (list :shared-server))
-         (startup-bot (make-instance 'chatbot :mcp-servers shared-servers))
-         (bot (make-instance 'chatbot :mcp-servers shared-servers))
-         (*startup-chatbot* startup-bot)
+  (let* ((context (make-runtime-context))
+         (shared-servers (list :shared-server))
+         (startup-bot (make-instance 'chatbot
+                                     :mcp-servers shared-servers
+                                     :runtime-context context))
+         (bot (make-instance 'chatbot
+                             :mcp-servers shared-servers
+                             :runtime-context context))
          (stopped nil))
     (let ((*stop-mcp-server-function*
             (lambda (server)
               (push server stopped))))
-      (shutdown-chatbot bot)
-      (fiveam:is (null stopped))
-      (fiveam:is (eq shared-servers (chatbot-mcp-servers startup-bot)))
-      (shutdown-chatbot startup-bot)
-      (fiveam:is (equal shared-servers stopped))
-      (fiveam:is (null *startup-chatbot*)))))
+      (setf (runtime-context-startup-chatbot context) startup-bot)
+      (unwind-protect
+           (progn
+             (shutdown-chatbot bot context)
+             (fiveam:is (null stopped))
+             (fiveam:is (eq shared-servers (chatbot-mcp-servers startup-bot)))
+             (shutdown-chatbot startup-bot context)
+             (fiveam:is (equal shared-servers stopped))
+             (fiveam:is (null (runtime-context-startup-chatbot context))))
+        (setf (runtime-context-startup-chatbot context) nil)))))
+
+(fiveam:test test-shutdown-chatbot-stops-only-persona-specific-mcp-servers
+  (let* ((context (make-runtime-context))
+         (shared-time (make-instance 'mcp-server :name "mcp-server-time"))
+         (shared-memory (make-instance 'mcp-server :name "memory"))
+         (persona-memory (make-instance 'mcp-server :name "memory"))
+         (startup-bot (make-instance 'chatbot
+                                     :mcp-servers (list shared-time shared-memory)
+                                     :runtime-context context))
+         (bot (make-instance 'chatbot
+                             :mcp-servers (list shared-time persona-memory)
+                             :runtime-context context))
+         (stopped nil))
+    (let ((*stop-mcp-server-function*
+            (lambda (server)
+              (push server stopped))))
+      (setf (runtime-context-startup-chatbot context) startup-bot)
+      (unwind-protect
+           (progn
+             (shutdown-chatbot bot context)
+             (fiveam:is (equal (list persona-memory) stopped))
+             (fiveam:is (eq startup-bot (runtime-context-startup-chatbot context))))
+        (setf (runtime-context-startup-chatbot context) nil)))))

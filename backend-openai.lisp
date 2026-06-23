@@ -20,11 +20,7 @@
           (history-messages (append-user-input-to-conversation-messages current-messages input))
           (request-messages (build-openai-request-messages system-inst current-messages input
                                                            :persona-memory persona-memory)))
-      (let* ((mcp-tools (get-all-mcp-tools bot))
-            (openai-tools (when mcp-tools
-                            (mapcar (lambda (pair)
-                                      (translate-mcp-tool-to-openai (cdr pair)))
-                                    mcp-tools)))
+      (let* ((openai-tools (openai-request-tools bot))
             (payload-alist (list (cons "model" (chatbot-model bot))
                                  (cons "messages" request-messages)
                                  (cons "stream" t))))

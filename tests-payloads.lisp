@@ -95,3 +95,22 @@
     (fiveam:is (not (null (gethash "nextThoughtNeeded" properties))))
     (fiveam:is (equal '("entityName" "entityType" "source_timezone" "nextThoughtNeeded")
                       (coerce required 'list)))))
+
+(fiveam:test test-interaction-payload-includes-mcp-tools
+  (let* ((bot (make-instance 'chatbot :model "gemini-3.5-flash"))
+        (tool '((:name . "lookup_time")
+                (:description . "Looks up the current time")
+                (:input-schema . ((:type . "object")
+                                  (:properties . nil))))))
+    (let ((*get-all-mcp-tools-function*
+           (lambda (ignored-bot)
+             (declare (ignore ignored-bot))
+             (list (cons nil tool)))))
+     (let* ((payload (make-interaction-payload bot "Hello"))
+            (tools (cdr (assoc "tools" payload :test #'string=)))
+            (first-tool (car tools)))
+       (fiveam:is (= 1 (length tools)))
+       (fiveam:is (string= "function" (cdr (assoc "type" first-tool :test #'string=))))
+       (fiveam:is (string= "lookup_time" (cdr (assoc "name" first-tool :test #'string=))))
+       (fiveam:is (string= "Looks up the current time"
+                           (cdr (assoc "description" first-tool :test #'string=))))))))

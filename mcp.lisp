@@ -273,14 +273,70 @@
       (error (e)
         (format *error-output* "MCP Reader thread error for server ~A: ~A~%" (mcp-server-name server) e)))))
 
-(defun default-start-mcp-server (name command args)
+(defun mcp-environment-entry->cons (entry)
+  "Normalizes an environment ENTRY to a (KEY . VALUE) cons."
+  (cond
+    ((stringp entry)
+     (let ((separator (position #\= entry)))
+       (if separator
+          (cons (subseq entry 0 separator)
+                (subseq entry (1+ separator)))
+          (cons entry ""))))
+    ((consp entry)
+     (cons (string (car entry))
+          (princ-to-string (cdr entry))))
+    (t
+     (error "Invalid MCP environment entry: ~S" entry))))
+
+(defun normalize-mcp-server-environment (environment)
+  "Normalizes ENVIRONMENT entries to UIOP-compatible KEY=VALUE strings."
+  (when environment
+    (mapcar (lambda (entry)
+             (let ((normalized-entry (mcp-environment-entry->cons entry)))
+               (format nil "~A=~A"
+                       (car normalized-entry)
+                       (cdr normalized-entry))))
+           environment)))
+
+(defun merge-mcp-server-environments (&rest environments)
+  "Merges ENVIRONMENTS, letting later entries override earlier ones by key."
+  (let ((merged nil))
+    (dolist (environment environments)
+      (dolist (entry environment)
+        (let* ((normalized-entry (mcp-environment-entry->cons entry))
+              (key (car normalized-entry))
+              (existing (assoc key merged
+                               :test (lambda (left right)
+                                       (string-equal (string left)
+                                                     (string right))))))
+         (if existing
+             (setf (cdr existing) (cdr normalized-entry))
+             (push normalized-entry merged)))))
+    (nreverse merged)))
+
+(defun current-process-environment ()
+  "Returns the current process environment in a UIOP-compatible shape."
+  (sb-ext:posix-environ))
+
+(defun default-start-mcp-server (name command args &optional environment)
   "Launches an MCP server subprocess and starts its reader thread."
   (format t "[MCP INFO] Launching server ~A~%" name)
   (format t "[MCP DEBUG] Command: ~A ~A~%" command args)
-  (let* ((process-info (uiop:launch-program (cons command args)
-                                            :input :stream
-                                            :output :stream
-                                            :error-output :stream))
+  (let* ((launch-options (list :input :stream
+                              :output :stream
+                              :error-output :stream))
+         (normalized-environment
+           (normalize-mcp-server-environment
+            (if environment
+                (merge-mcp-server-environments (current-process-environment)
+                                               environment)
+                nil)))
+         (process-info (apply #'uiop:launch-program
+                             (cons (cons command args)
+                                   (if normalized-environment
+                                       (append launch-options
+                                               (list :environment normalized-environment))
+                                       launch-options))))
          (input (uiop:process-info-input process-info))
          (output (uiop:process-info-output process-info))
          (err-output (uiop:process-info-error-output process-info))
@@ -306,11 +362,13 @@
     (format t "[MCP INFO] Server ~A process and threads started successfully.~%" name)
     server))
 
-(defun start-mcp-server (name command args)
+(defun start-mcp-server (name command args &optional environment)
   "Launches an MCP server, honoring the configured test seam when present."
   (if *start-mcp-server-function*
-      (funcall *start-mcp-server-function* name command args)
-      (default-start-mcp-server name command args)))
+      (if environment
+          (funcall *start-mcp-server-function* name command args environment)
+          (funcall *start-mcp-server-function* name command args))
+      (default-start-mcp-server name command args environment)))
 
 (defun default-stop-mcp-server (server)
   "Stops the MCP server process and reader thread cleanly."
@@ -448,19 +506,77 @@ Supports two formats:
      (let ((name (safe-getf srv-raw :name))
            (command (safe-getf srv-raw :command))
            (args (safe-getf srv-raw :args))
-           (required-p (safe-getf srv-raw :required)))
-       (values name command (if (listp args) args (list args)) required-p)))
+           (required-p (safe-getf srv-raw :required))
+           (environment (safe-getf srv-raw :env))
+           (system-instruction (safe-getf srv-raw :system-instruction)))
+       (values name
+               command
+               (cond
+                 ((null args) nil)
+                 ((listp args) args)
+                 (t (list args)))
+               required-p
+               environment
+               system-instruction)))
     ((and (listp srv-raw) (stringp (car srv-raw)))
      (let* ((name (car srv-raw))
             (body (cdr srv-raw))
             (cmd-entry (assoc :command body))
             (args-entry (assoc :args body))
             (required-entry (assoc :required body))
+            (env-entry (assoc :env body))
+            (system-instruction-entry (assoc :system-instruction body))
             (command (and cmd-entry (cadr cmd-entry)))
             (args (and args-entry (cdr args-entry)))
-            (required-p (and required-entry (cadr required-entry))))
-       (values name command args required-p)))
-    (t (values nil nil nil nil))))
+            (required-p (and required-entry (cadr required-entry)))
+            (environment (and env-entry (cdr env-entry)))
+            (system-instruction (and system-instruction-entry (cadr system-instruction-entry))))
+       (values name command args required-p environment system-instruction)))
+    (t (values nil nil nil nil nil nil))))
+
+(defun mcp-config-server-definitions (config)
+  "Returns the raw MCP server definitions from CONFIG."
+  (cond
+    ((null config) nil)
+    ((and (consp config)
+         (consp (car config))
+         (eq (car (car config)) :mcp-servers))
+     (cdr (car config)))
+    (t config)))
+
+(defun find-configured-mcp-server-definition (server-name &optional (config (read-mcp-config)))
+  "Returns the raw configured MCP server definition matching SERVER-NAME."
+  (find server-name
+       (mcp-config-server-definitions config)
+       :test #'string=
+       :key (lambda (srv-raw)
+              (nth-value 0 (parse-mcp-server-def srv-raw)))))
+
+(defun initialize-configured-mcp-server (server-name &key environment)
+  "Starts and initializes the configured MCP server named SERVER-NAME."
+  (let ((server-def (find-configured-mcp-server-definition server-name)))
+    (unless server-def
+     (error "Configured MCP server not found: ~A" server-name))
+    (multiple-value-bind (name command args required-p configured-environment system-instruction)
+       (parse-mcp-server-def server-def)
+     (declare (ignore required-p system-instruction))
+     (unless (and name command)
+       (error "Invalid MCP server definition for ~A." server-name))
+     (let ((server nil))
+       (handler-case
+           (progn
+             (setf server
+                   (let ((merged-environment (merge-mcp-server-environments configured-environment
+                                                                           environment)))
+                     (if merged-environment
+                         (start-mcp-server name command args merged-environment)
+                         (start-mcp-server name command args))))
+             (mcp-initialize server)
+             server)
+         (error (e)
+           (when server
+             (stop-mcp-server server))
+           (error "Failed to start/initialize MCP server ~A: ~A" server-name e)))))))
 
 (defun mcp-startup-status-partial-failure-p (status)
   "Returns true when STATUS represents a mix of successful and failed server startups."
@@ -504,14 +620,11 @@ Supports two formats:
     (if config
        (let* ((servers nil)
               (entries nil)
-              (raw-list (cond
-                          ((null config) nil)
-                          ((eq (car (car config)) :mcp-servers)
-                           (cdr (car config)))
-                          (t config))))
+             (raw-list (mcp-config-server-definitions config)))
          (format t "[MCP INFO] Found ~A server definitions to initialize.~%" (length raw-list))
          (dolist (cfg raw-list)
-           (multiple-value-bind (name command args required-p) (parse-mcp-server-def cfg)
+           (multiple-value-bind (name command args required-p environment system-instruction) (parse-mcp-server-def cfg)
+             (declare (ignore system-instruction))
              (let ((entry (make-instance 'mcp-startup-entry
                                          :name (or name "<invalid-server>")
                                          :command command
@@ -528,7 +641,9 @@ Supports two formats:
                   (let ((server nil))
                     (handler-case
                         (progn
-                          (setf server (start-mcp-server name command args))
+                          (setf server (if environment
+                                           (start-mcp-server name command args environment)
+                                           (start-mcp-server name command args)))
                           (mcp-initialize server)
                           (setf (mcp-startup-entry-success-p entry) t)
                           (setf (mcp-startup-entry-server entry) server)
@@ -636,14 +751,16 @@ Supports two formats:
   "Closes and stops all MCP servers connected to the chatbot."
   (let* ((context (or context (chatbot-runtime-context bot)))
          (startup-bot (ensure-startup-chatbot context)))
-    (unless (startup-chatbot-shared-servers-p bot context)
-      (dolist (server (chatbot-mcp-servers bot))
+    (dolist (server (chatbot-mcp-servers bot))
+      (unless (and startup-bot
+                  (not (eq bot startup-bot))
+                  (member server (chatbot-mcp-servers startup-bot) :test #'eq))
         (when (typep server 'mcp-server)
-          (invalidate-mcp-tool-list-cache server))
+         (invalidate-mcp-tool-list-cache server))
         (stop-mcp-server server)))
     (when (eq bot startup-bot)
       (if context
-          (setf (current-startup-chatbot context) nil)
+         (setf (current-startup-chatbot context) nil)
           (setf (current-startup-chatbot) nil)))
     (setf (chatbot-mcp-servers bot) nil)))
 
