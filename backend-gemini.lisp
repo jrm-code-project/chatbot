@@ -13,6 +13,7 @@
                            input
                            :messages (conversation-messages conversation)
                            :persona-memory (conversation-persona-memory conversation)
+                           :persona-diary-entries (conversation-persona-diary-entries conversation)
                            :previous-interaction-id (conversation-interaction-id conversation)
                            :stream t))
            (payload-json (cl-json:encode-json-to-string payload-alist))
@@ -97,11 +98,11 @@
                      (name (cdr (assoc :name fc)))
                      (args-str (coerce (cdr (assoc :arguments fc)) 'string))
                      (args (parse-json-or-error args-str :context (format nil "Gemini tool arguments for ~A" name))))
-                (multiple-value-bind (srv tool) (find-mcp-server-and-tool bot name)
+                (multiple-value-bind (srv tool) (find-chatbot-tool bot name)
                   (declare (ignore tool))
                   (unless srv
-                    (error "MCP tool not found: ~A" name))
-                  (let ((res-text (execute-mcp-tool srv name args)))
+                    (error "Tool not found: ~A" name))
+                  (let ((res-text (execute-chatbot-tool bot srv name args)))
                     (push `(("type" . "function_result")
                             ("name" . ,name)
                             ("call_id" . ,id)

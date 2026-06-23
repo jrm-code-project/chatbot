@@ -23,6 +23,7 @@
            (fiveam:is (null (conversation-messages conv)))
            (fiveam:is (string= "Stored persona memory."
                                (conversation-persona-memory conv)))
+           (fiveam:is (null (conversation-persona-diary-entries conv)))
            (fiveam:is (eq :gemini (chatbot-backend (conversation-chatbot conv))))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
@@ -49,6 +50,7 @@
                                 (safe-getf config :model)))
             (fiveam:is (eq :google-api (safe-getf config :googleapi)))
             (fiveam:is-true (safe-getf config :enable-web-tools))
+            (fiveam:is-false (chatbot-filesystem-tools-p (conversation-chatbot conv)))
             (fiveam:is (eq :google
                            (chatbot-backend (conversation-chatbot conv))))
             (fiveam:is (string= "models/gemini-flash-latest"
@@ -107,8 +109,200 @@
                (fiveam:is (string= "models/gemini-mock-model" (chatbot-model bot)))
                (fiveam:is (not (null (search "You are a helpful test assistant." (chatbot-system-instruction bot)))))
                (fiveam:is (null messages))
+               (fiveam:is (null (conversation-persona-diary-entries conv)))
                (fiveam:is (string= "Stored persona memory."
                                    (conversation-persona-memory conv))))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-persona-diary-loads-in-sorted-order-at-startup
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-diary-startup/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-diary-startup/" personas-dir))
+        (diary-dir (merge-pathnames "Diary/" test-persona-dir)))
+    (ensure-directories-exist diary-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "(:model \"models/gemini-mock-model\" :googleapi :google-api)" s))
+    (with-open-file (s (merge-pathnames "10.txt" diary-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "Tenth diary entry." s))
+    (with-open-file (s (merge-pathnames "2.txt" diary-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "Second diary entry." s))
+    (with-open-file (s (merge-pathnames "1.txt" diary-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "First diary entry." s))
+    (with-open-file (s (merge-pathnames "Alpha.md" diary-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "Alpha diary entry." s))
+    (with-open-file (s (merge-pathnames "beta.md" diary-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "Beta diary entry." s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let* ((conv (new-chat-persona "persona-diary-startup"))
+                 (entries (conversation-persona-diary-entries conv)))
+            (fiveam:is (= 5 (length entries)))
+            (fiveam:is (equal '("1.txt" "2.txt" "10.txt" "Alpha.md" "beta.md")
+                              (mapcar (lambda (entry)
+                                        (cdr (assoc :filename entry)))
+                                      entries)))
+            (fiveam:is (string= "First diary entry."
+                                (cdr (assoc :content (first entries)))))
+            (fiveam:is (string= "Beta diary entry."
+                                (cdr (assoc :content (fifth entries)))))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-persona-prefers-compressed-diary-over-diary
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-compressed-diary/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-compressed-diary/" personas-dir))
+        (diary-dir (merge-pathnames "Diary/" test-persona-dir))
+        (compressed-diary-dir (merge-pathnames "CompressedDiary/" test-persona-dir)))
+    (ensure-directories-exist diary-dir)
+    (ensure-directories-exist compressed-diary-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "(:model \"models/gemini-mock-model\" :googleapi :google-api)" s))
+    (with-open-file (s (merge-pathnames "1.txt" diary-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "Ordinary diary entry." s))
+    (with-open-file (s (merge-pathnames "1.txt" compressed-diary-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "Compressed diary entry." s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let* ((conv (new-chat-persona "persona-compressed-diary"))
+                 (entries (conversation-persona-diary-entries conv)))
+            (fiveam:is (= 1 (length entries)))
+            (fiveam:is (string= "Compressed diary entry."
+                                (cdr (assoc :content (first entries)))))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-persona-config-enables-filesystem-tools
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-filesystem-tools/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "persona-filesystem-tools/" personas-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "(:model \"gpt-4o\" :enable-filesystem-tools t)" s))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+           (let* ((conv (new-chat-persona "persona-filesystem-tools"))
+                 (bot (conversation-chatbot conv)))
+            (fiveam:is-true (chatbot-filesystem-tools-p bot))
+            (fiveam:is (equal (truename test-persona-dir)
+                              (chatbot-filesystem-root-directory bot)))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-persona-config-enables-turn-timestamps
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-turn-timestamps/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-turn-timestamps/" personas-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                     :direction :output
+                     :if-exists :supersede)
+      (write-line "(:model \"gpt-4o\" :include-timestamp t)" s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let* ((conv (new-chat-persona "persona-turn-timestamps"))
+                (bot (conversation-chatbot conv)))
+           (fiveam:is-true (chatbot-include-timestamp-p bot))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-persona-config-enables-model-indicator
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-model-indicator/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "persona-model-indicator/" personas-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                     :direction :output
+                     :if-exists :supersede)
+      (write-line "(:model \"gpt-4o\" :include-model t)" s))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let* ((conv (new-chat-persona "persona-model-indicator"))
+                 (bot (conversation-chatbot conv)))
+            (fiveam:is-true (chatbot-include-model-p bot))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-persona-config-enables-web-tools
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-web-tools/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "persona-web-tools/" personas-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                     :direction :output
+                     :if-exists :supersede)
+      (write-line "(:model \"gpt-4o\" :enable-web-tools t)" s))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+           (let* ((conv (new-chat-persona "persona-web-tools"))
+                 (bot (conversation-chatbot conv)))
+            (fiveam:is-true (chatbot-web-tools-p bot))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-persona-config-enables-eval-tool
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-eval-tool/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "persona-eval-tool/" personas-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                     :direction :output
+                     :if-exists :supersede)
+      (write-line "(:model \"gpt-4o\" :enable-eval t)" s))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+           (let* ((conv (new-chat-persona "persona-eval-tool"))
+                 (bot (conversation-chatbot conv)))
+            (fiveam:is-true (chatbot-enable-eval-p bot))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-persona-loads-filesystem-allowlist
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-filesystem-allowlist/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-filesystem-allowlist/" personas-dir))
+        (outside-dir (merge-pathnames "outside-approved/" temp-dir))
+        (allowlist-path (merge-pathnames "filesystem-allowlist.lisp" test-persona-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (ensure-directories-exist outside-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                     :direction :output
+                     :if-exists :supersede)
+      (write-line "(:model \"gpt-4o\" :enable-filesystem-tools t)" s))
+    (with-open-file (s allowlist-path
+                     :direction :output
+                     :if-exists :supersede)
+      (prin1 (list (namestring outside-dir)) s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let* ((conv (new-chat-persona "persona-filesystem-allowlist"))
+                 (bot (conversation-chatbot conv)))
+            (fiveam:is (equal (persona-filesystem-allowlist-path test-persona-dir)
+                              (chatbot-filesystem-allowlist-path bot)))
+            (fiveam:is (equal (list (uiop:ensure-directory-pathname (truename outside-dir)))
+                              (chatbot-filesystem-allowed-directories bot)))))
+      (uiop:delete-directory-tree outside-dir :validate t)
       (uiop:delete-directory-tree mock-home :validate t))))
 
 (fiveam:test test-persona-loading-unexpected-properties

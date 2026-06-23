@@ -176,9 +176,37 @@
                                               (car (cdr (assoc :parts preloaded-model-msg))))))))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
+(fiveam:test test-google-chat-includes-preloaded-diary-history
+  (let ((captured-content nil))
+    (let* ((context (make-runtime-context
+                    :gemini-api-key-function (lambda () "mocked-google-api-key")
+                    :http-post-function
+                    (lambda (url &rest args)
+                      (declare (ignore url))
+                      (setf captured-content (getf args :content))
+                      (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}"
+                              200))))
+          (conv (new-chat :backend :google
+                          :system-instruction "Be concise"
+                          :runtime-context context)))
+      (setf (conversation-persona-memory conv) "Stored persona memory.")
+      (setf (conversation-persona-diary-entries conv)
+           '(((:filename . "1.txt") (:content . "First diary entry."))
+             ((:filename . "2.txt") (:content . "Second diary entry."))))
+      (chat "First live turn" :conversation conv)
+      (let* ((payload (cl-json:decode-json-from-string captured-content))
+            (contents (cdr (assoc :contents payload))))
+       (fiveam:is (= 5 (length contents)))
+       (fiveam:is (string= (format nil "[Diary: 1.txt]~%First diary entry.")
+                           (cdr (assoc :text (car (cdr (assoc :parts (third contents))))))))
+       (fiveam:is (string= (format nil "[Diary: 2.txt]~%Second diary entry.")
+                           (cdr (assoc :text (car (cdr (assoc :parts (fourth contents))))))))
+       (fiveam:is (string= "First live turn"
+                           (cdr (assoc :text (car (cdr (assoc :parts (fifth contents))))))))))))
+
 (fiveam:test test-google-chat-tool-payload-sanitization
   (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
-         (conv (make-instance 'conversation :chatbot bot))
+        (conv (make-instance 'conversation :chatbot bot))
          (tool '((:name . "lookup_time")
                  (:description . "Looks up the current time")
                  (:input-schema . ((:|$schema| . "https://json-schema.org/draft/2020-12/schema")

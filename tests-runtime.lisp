@@ -303,6 +303,7 @@ Para two." :width 40 :stream s))))
       (fiveam:is (search "total-tokens: 22" output)))))
 
 (fiveam:test test-write-turn-token-summary-supports-interactions-usage-keys
+  (reset-global-token-grand-totals)
   (let ((output (with-output-to-string (s)
                   (write-turn-token-summary
                    '(("total_input_tokens" . 12)
@@ -313,7 +314,29 @@ Para two." :width 40 :stream s))))
     (fiveam:is (search "[Tokens] prompt: 12" output))
     (fiveam:is (search "completion: 7" output))
     (fiveam:is (search "thought: 3" output))
-    (fiveam:is (search "total: 22" output))))
+    (fiveam:is (search "total: 22" output))
+    (fiveam:is (search "[Tokens Total] prompt: 12 completion: 7 thought: 3 total: 22" output))))
+
+(fiveam:test test-write-turn-token-summary-accumulates-process-wide-grand-totals
+  (reset-global-token-grand-totals)
+  (let ((first-output (with-output-to-string (s)
+                        (write-turn-token-summary
+                         '((:prompt-token-count . 12)
+                           (:candidates-token-count . 7)
+                           (:thoughts-token-count . 3)
+                           (:total-token-count . 22))
+                         :stream s)))
+        (second-output (with-output-to-string (s)
+                         (write-turn-token-summary
+                          '(("total_input_tokens" . 5)
+                            ("total_output_tokens" . 2)
+                            ("total_thought_tokens" . 1))
+                          :stream s))))
+    (fiveam:is (search "[Tokens Total] prompt: 12 completion: 7 thought: 3 total: 22" first-output))
+    (fiveam:is (search "[Tokens] prompt: 5 completion: 2 thought: 1 total: 8" second-output))
+    (fiveam:is (search "[Tokens Total] prompt: 17 completion: 9 thought: 4 total: 30" second-output))
+    (fiveam:is (equal '(:prompt 17 :completion 9 :thought 4 :total 30)
+                      (current-global-token-grand-totals)))))
 
 (fiveam:test test-post-web-request-logging-redacts-secrets
   (let ((*logging-enabled-p* t)

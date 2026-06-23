@@ -58,6 +58,16 @@
     :accessor runtime-context-gemini-api-key-function
     :initform #'google:gemini-api-key
     :documentation "Gemini API key lookup function for this runtime context.")
+   (filesystem-access-approval-function
+    :initarg :filesystem-access-approval-function
+    :accessor runtime-context-filesystem-access-approval-function
+    :initform nil
+    :documentation "Function used to approve persona filesystem access outside the current allowlist.")
+   (eval-approval-function
+    :initarg :eval-approval-function
+    :accessor runtime-context-eval-approval-function
+    :initform nil
+    :documentation "Function used to approve evaluation of a specific persona eval tool expression.")
    (default-conversation
     :initarg :default-conversation
     :accessor runtime-context-default-conversation
@@ -85,11 +95,51 @@
     :accessor chatbot-google-search-p
     :initform nil
     :documentation "Flag to enable Google Search Grounding tool.")
+   (web-tools-p
+    :initarg :web-tools-p
+    :accessor chatbot-web-tools-p
+    :initform nil
+    :documentation "Flag to enable built-in web grounding search tools for this chatbot.")
    (code-execution-p
     :initarg :code-execution-p
     :accessor chatbot-code-execution-p
     :initform nil
     :documentation "Flag to enable sandboxed Code Execution tool.")
+   (include-timestamp-p
+    :initarg :include-timestamp-p
+    :accessor chatbot-include-timestamp-p
+    :initform nil
+    :documentation "Flag to prepend a fresh timestamp to each live user prompt.")
+   (include-model-p
+    :initarg :include-model-p
+    :accessor chatbot-include-model-p
+    :initform nil
+    :documentation "Flag to prepend the active model name to each live user prompt.")
+   (enable-eval-p
+    :initarg :enable-eval-p
+    :accessor chatbot-enable-eval-p
+    :initform nil
+    :documentation "Flag to enable the built-in eval tool for this chatbot.")
+   (filesystem-tools-p
+    :initarg :filesystem-tools-p
+    :accessor chatbot-filesystem-tools-p
+    :initform nil
+    :documentation "Flag to enable built-in filesystem tools for this chatbot.")
+   (filesystem-root-directory
+    :initarg :filesystem-root-directory
+    :accessor chatbot-filesystem-root-directory
+    :initform nil
+    :documentation "Root directory within which built-in filesystem tools may operate.")
+   (filesystem-allowed-directories
+    :initarg :filesystem-allowed-directories
+    :accessor chatbot-filesystem-allowed-directories
+    :initform nil
+    :documentation "Additional allowed directories a persona may traverse with built-in filesystem tools.")
+   (filesystem-allowlist-path
+    :initarg :filesystem-allowlist-path
+    :accessor chatbot-filesystem-allowlist-path
+    :initform nil
+    :documentation "Persona-owned file path used to persist the filesystem allowlist.")
    (mcp-servers
     :initarg :mcp-servers
     :accessor chatbot-mcp-servers
@@ -116,6 +166,11 @@
     :accessor conversation-persona-memory
     :initform nil
     :documentation "Optional preloaded persona memory kept separate from ordinary conversation turns.")
+   (persona-diary-entries
+    :initarg :persona-diary-entries
+    :accessor conversation-persona-diary-entries
+    :initform nil
+    :documentation "Optional ordered persona diary preload entries kept separate from ordinary conversation turns.")
    (interaction-id
     :initarg :interaction-id
     :accessor conversation-interaction-id

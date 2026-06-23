@@ -18,8 +18,11 @@
     (let* ((system-inst (chatbot-system-instruction bot))
            (current-messages (conversation-messages conversation))
            (persona-memory (conversation-persona-memory conversation))
+           (persona-diary-entries (conversation-persona-diary-entries conversation))
            (messages (build-request-history-messages current-messages input
-                                                     :persona-memory persona-memory))
+                                                     :chatbot bot
+                                                     :persona-memory persona-memory
+                                                     :persona-diary-entries persona-diary-entries))
            (contents (coerce
                       (mapcar (lambda (msg)
                                 (let ((role (cdr (assoc "role" msg :test #'string=)))
@@ -88,11 +91,11 @@
                                                          `(("functionCall" . (("name" . ,name) ("args" . ,args))))
                                                          (when thought-signature
                                                            `(("thoughtSignature" . ,thought-signature)))))))))
-                         (multiple-value-bind (srv tool) (find-mcp-server-and-tool bot name)
+                         (multiple-value-bind (srv tool) (find-chatbot-tool bot name)
                            (declare (ignore tool))
                            (unless srv
-                             (error "MCP tool not found: ~A" name))
-                           (let* ((res-text (execute-mcp-tool srv name args))
+                             (error "Tool not found: ~A" name))
+                           (let* ((res-text (execute-chatbot-tool bot srv name args))
                                   (resp-msg `(("role" . "user")
                                               ("parts" . ,(vector `(("functionResponse" . (("name" . ,name) ("response" . (("result" . ,res-text)))))))))))
                              (setf (conversation-messages conversation)

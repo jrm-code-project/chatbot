@@ -27,7 +27,7 @@
     (error (e)
       (error "Invalid persona config in ~A: ~A" config-path e))))
 
-(defun new-chat (&key model system-instruction google-search-p code-execution-p (backend :gemini) runtime-context)
+(defun new-chat (&key model system-instruction google-search-p web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context)
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
@@ -44,7 +44,15 @@ configuration, instructions, or preloaded memory."
                                  :backend backend
                                  :system-instruction system-instruction
                                  :google-search-p google-search-p
+                                 :web-tools-p web-tools-p
                                  :code-execution-p code-execution-p
+                                 :include-timestamp-p include-timestamp-p
+                                 :include-model-p include-model-p
+                                 :enable-eval-p enable-eval-p
+                                 :filesystem-tools-p filesystem-tools-p
+                                 :filesystem-root-directory filesystem-root-directory
+                                 :filesystem-allowed-directories filesystem-allowed-directories
+                                 :filesystem-allowlist-path filesystem-allowlist-path
                                  :runtime-context resolved-context)))
         (when (startup-chatbot-mcp-servers resolved-context)
           (setf (chatbot-mcp-servers bot)
@@ -73,17 +81,32 @@ Use NEW-CHAT instead when no persona should be loaded."
            (model (safe-getf config :model))
            (googleapi (safe-getf config :googleapi))
            (google-search-p (safe-getf config :google-search-p))
+           (web-tools-p (safe-getf config :enable-web-tools))
            (code-execution-p (safe-getf config :code-execution-p))
+           (include-timestamp-p (safe-getf config :include-timestamp))
+           (include-model-p (safe-getf config :include-model))
+           (enable-eval-p (safe-getf config :enable-eval))
+           (filesystem-tools-p (safe-getf config :enable-filesystem-tools))
            (backend (cond
                       ((eq googleapi :google-api) :google)
                       (t :gemini))))
       (let ((conversation
-              (preload-persona-conversation-memory
-               (new-chat :backend backend
-                         :model model
-                         :system-instruction system-instruction
-                         :google-search-p google-search-p
-                         :code-execution-p code-execution-p
-                         :runtime-context runtime-context)
+              (preload-persona-conversation-diary
+               (preload-persona-conversation-memory
+                (new-chat :backend backend
+                          :model model
+                          :system-instruction system-instruction
+                          :google-search-p google-search-p
+                          :web-tools-p web-tools-p
+                          :code-execution-p code-execution-p
+                          :include-timestamp-p include-timestamp-p
+                          :include-model-p include-model-p
+                          :enable-eval-p enable-eval-p
+                          :filesystem-tools-p filesystem-tools-p
+                          :filesystem-root-directory persona-dir
+                          :filesystem-allowed-directories (persona-filesystem-allowlist-directories persona-dir)
+                          :filesystem-allowlist-path (persona-filesystem-allowlist-path persona-dir)
+                          :runtime-context runtime-context)
+                persona-dir)
                persona-dir)))
         (attach-persona-memory-mcp-server conversation persona-dir)))))

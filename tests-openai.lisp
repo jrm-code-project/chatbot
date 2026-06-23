@@ -108,6 +108,36 @@ data: [DONE]")
         (fiveam:is (string= "Stored persona memory."
                            (conversation-persona-memory conv)))))))
 
+(fiveam:test test-openai-chat-includes-preloaded-diary-history
+  (let ((captured-payload nil))
+    (let* ((*openai-api-key* "test-key")
+           (context (make-runtime-context
+                     :http-post-function
+                     (lambda (url &rest args)
+                       (declare (ignore url))
+                       (setf captured-payload (getf args :content))
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"content\": \"Hello OpenAI\"}}]}
+data: [DONE]")
+                               200))))
+           (conv (new-chat :backend :openai
+                           :system-instruction "Be helpful"
+                           :runtime-context context)))
+      (setf (conversation-persona-memory conv) "Stored persona memory.")
+      (setf (conversation-persona-diary-entries conv)
+            '(((:filename . "1.txt") (:content . "First diary entry."))
+              ((:filename . "2.txt") (:content . "Second diary entry."))))
+      (chat "First live turn" :conversation conv)
+      (let* ((payload (cl-json:decode-json-from-string captured-payload))
+             (messages (cdr (assoc :messages payload))))
+        (fiveam:is (= 6 (length messages)))
+        (fiveam:is (string= (format nil "[Diary: 1.txt]~%First diary entry.")
+                            (cdr (assoc :content (fourth messages)))))
+        (fiveam:is (string= (format nil "[Diary: 2.txt]~%Second diary entry.")
+                            (cdr (assoc :content (fifth messages)))))
+        (fiveam:is (string= "First live turn"
+                            (cdr (assoc :content (sixth messages)))))))))
+
 (fiveam:test test-lm-studio-api-key-resolution
   (let ((*lm-studio-api-key* "explicit-lm-key"))
     (fiveam:is (string= "explicit-lm-key" (lm-studio-api-key))))
@@ -233,3 +263,369 @@ data: [DONE]")
         (fiveam:is (string= "function" (cdr (assoc :type first-tool))))
         (fiveam:is (string= "echo_tool" (cdr (assoc :name function))))
         (fiveam:is (string= "Echo tool" (cdr (assoc :description function))))))))
+
+(fiveam:test test-openai-built-in-read-file-lines-tool-recursion
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "openai-filesystem-tool/" temp-dir))
+         (file-path (merge-pathnames "notes.txt" root)))
+    (ensure-directories-exist root)
+    (with-open-file (s file-path :direction :output :if-exists :supersede)
+      (write-line "Line one" s)
+      (write-line "Line two" s)
+      (write-line "Line three" s))
+    (unwind-protect
+         (let ((conv (new-chat :backend :openai :system-instruction "Be helpful"))
+               (captured-payloads nil)
+               (call-count 0))
+           (setf (chatbot-filesystem-tools-p (conversation-chatbot conv)) t)
+           (setf (chatbot-filesystem-root-directory (conversation-chatbot conv)) root)
+           (let ((*http-post-function*
+                   (lambda (url &rest args)
+                     (declare (ignore url))
+                     (incf call-count)
+                     (setf captured-payloads
+                           (append captured-payloads (list (getf args :content))))
+                     (if (= call-count 1)
+                         (values (make-string-input-stream
+                                  "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call-1\", \"function\": {\"name\": \"readFileLines\", \"arguments\": \"{\\\"filename\\\":\\\"notes.txt\\\",\\\"beginningLine\\\":2,\\\"endingLine\\\":100}\"}}]}}]}
+data: [DONE]")
+                                 200)
+                         (values (make-string-input-stream
+                                  "data: {\"choices\": [{\"delta\": {\"content\": \"Done\"}}]}
+data: [DONE]")
+                                 200))))
+                 (*openai-api-key* "test-key"))
+             (let ((res (chat "Read the file" :conversation conv)))
+               (fiveam:is (string= "Done" res))
+               (fiveam:is (= 2 (length captured-payloads)))
+               (let* ((second-payload (cl-json:decode-json-from-string (second captured-payloads)))
+                      (messages (cdr (assoc :messages second-payload))))
+                 (fiveam:is (string= (format nil "Line two~%Line three")
+                                     (cdr (assoc :content (fourth messages)))))))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-openai-request-prefixes-live-input-with-fresh-timestamp-only
+  (let (captured-payload)
+    (let* ((context (make-runtime-context
+                    :http-post-function
+                    (lambda (url &rest args)
+                      (declare (ignore url))
+                      (setf captured-payload (getf args :content))
+                      (values (make-string-input-stream
+                               "data: {\"choices\": [{\"delta\": {\"content\": \"Hello OpenAI\"}}]}
+data: [DONE]")
+                              200))))
+          (*openai-api-key* "test-key")
+          (*prompt-timestamp-function* (lambda () "[14:29 26-Jun-2026]"))
+          (conv (new-chat :backend :openai
+                          :model "gpt-4o"
+                          :include-timestamp-p t
+                          :runtime-context context)))
+      (setf (conversation-messages conv)
+           (list (list (cons "role" "user")
+                       (cons "content" "Earlier question"))
+                 (list (cons "role" "assistant")
+                       (cons "content" "Earlier answer"))))
+      (fiveam:is (string= "Hello OpenAI" (chat "What time is it?" :conversation conv)))
+      (let* ((payload (cl-json:decode-json-from-string captured-payload))
+            (messages (cdr (assoc :messages payload))))
+       (fiveam:is (= 3 (length messages)))
+       (fiveam:is (string= "Earlier question" (cdr (assoc :content (first messages)))))
+       (fiveam:is (string= "Earlier answer" (cdr (assoc :content (second messages)))))
+       (fiveam:is (string= "[14:29 26-Jun-2026] What time is it?"
+                           (cdr (assoc :content (third messages))))))
+      (let ((updated-messages (conversation-messages conv)))
+       (fiveam:is (= 4 (length updated-messages)))
+       (fiveam:is (string= "What time is it?"
+                           (cdr (assoc "content" (third updated-messages) :test #'string=))))))))
+
+(fiveam:test test-openai-request-prefixes-live-input-with-timestamp-and-model-only
+  (let (captured-payload)
+    (let* ((context (make-runtime-context
+                    :http-post-function
+                    (lambda (url &rest args)
+                      (declare (ignore url))
+                      (setf captured-payload (getf args :content))
+                      (values (make-string-input-stream
+                               "data: {\"choices\": [{\"delta\": {\"content\": \"Hello OpenAI\"}}]}
+data: [DONE]")
+                              200))))
+          (*openai-api-key* "test-key")
+          (*prompt-timestamp-function* (lambda () "[14:29 26-Jun-2026]"))
+          (conv (new-chat :backend :openai
+                          :model "gpt-4o"
+                          :include-timestamp-p t
+                          :include-model-p t
+                          :runtime-context context)))
+      (setf (conversation-messages conv)
+           (list (list (cons "role" "user")
+                       (cons "content" "Earlier question"))
+                 (list (cons "role" "assistant")
+                       (cons "content" "Earlier answer"))))
+      (fiveam:is (string= "Hello OpenAI" (chat "What time is it?" :conversation conv)))
+      (let* ((payload (cl-json:decode-json-from-string captured-payload))
+            (messages (cdr (assoc :messages payload))))
+       (fiveam:is (= 3 (length messages)))
+       (fiveam:is (string= "Earlier question" (cdr (assoc :content (first messages)))))
+       (fiveam:is (string= "Earlier answer" (cdr (assoc :content (second messages)))))
+       (fiveam:is (string= "[14:29 26-Jun-2026] [model: gpt-4o] What time is it?"
+                           (cdr (assoc :content (third messages))))))
+      (let ((updated-messages (conversation-messages conv)))
+       (fiveam:is (= 4 (length updated-messages)))
+       (fiveam:is (string= "What time is it?"
+                           (cdr (assoc "content" (third updated-messages) :test #'string=))))))))
+
+(fiveam:test test-openai-built-in-eval-tool-recursion
+  (let (captured-payloads)
+    (let ((*eval-approval-function* (lambda (&rest ignored)
+                                     (declare (ignore ignored))
+                                     t)))
+      (let* ((conv (new-chat :backend :openai :system-instruction "Be helpful" :enable-eval-p t))
+            (call-count 0))
+       (let ((*http-post-function*
+              (lambda (url &rest args)
+                (declare (ignore url))
+                (incf call-count)
+                (setf captured-payloads
+                      (append captured-payloads (list (getf args :content))))
+                (if (= call-count 1)
+                    (values (make-string-input-stream
+                             "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call-1\", \"function\": {\"name\": \"eval\", \"arguments\": \"{\\\"expression\\\":\\\"(progn (format t \\\\\\\"hello\\\\\\\") (format *error-output* \\\\\\\"oops\\\\\\\") (values 42 :done))\\\"}\"}}]}}]}
+data: [DONE]")
+                            200)
+                    (values (make-string-input-stream
+                             "data: {\"choices\": [{\"delta\": {\"content\": \"Done\"}}]}
+data: [DONE]")
+                            200))))
+             (*openai-api-key* "test-key"))
+         (let ((res (chat "Run the eval" :conversation conv)))
+           (fiveam:is (string= "Done" res))
+           (fiveam:is (= 2 (length captured-payloads)))
+           (let* ((second-payload (cl-json:decode-json-from-string (second captured-payloads)))
+                  (messages (cdr (assoc :messages second-payload)))
+                  (result (cl-json:decode-json-from-string
+                           (cdr (assoc :content (fourth messages))))))
+             (fiveam:is (equal '("42" ":DONE")
+                               (coerce (cdr (assoc :values result)) 'list)))
+             (fiveam:is (string= "hello" (cdr (assoc :stdout result))))
+             (fiveam:is (string= "oops" (cdr (assoc :stderr result)))))))))))
+
+(fiveam:test test-openai-built-in-web-search-tool-recursion
+  (let (captured-payloads)
+    (flet ((mock-response ()
+            (let ((response (make-hash-table :test #'eql))
+                  (search-info (make-hash-table :test #'eql))
+                  (item (make-hash-table :test #'eql)))
+              (setf (gethash :total-results search-info) "1")
+              (setf (gethash :search-information response) search-info)
+              (setf (gethash :title item) "Common Lisp")
+              (setf (gethash :link item) "https://lisp-lang.org/")
+              (setf (gethash :snippet item) "A programmable programming language.")
+              (setf (gethash :items response) (vector item))
+              response)))
+      (let ((*web-search-function* (lambda (query)
+                                    (fiveam:is (string= "common lisp" query))
+                                    (mock-response))))
+        (let* ((conv (new-chat :backend :openai :system-instruction "Be helpful" :web-tools-p t))
+              (call-count 0))
+          (let ((*http-post-function*
+                (lambda (url &rest args)
+                  (declare (ignore url))
+                  (incf call-count)
+                  (setf captured-payloads
+                        (append captured-payloads (list (getf args :content))))
+                  (if (= call-count 1)
+                      (values (make-string-input-stream
+                               "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call-1\", \"function\": {\"name\": \"webSearch\", \"arguments\": \"{\\\"query\\\":\\\"common lisp\\\"}\"}}]}}]}
+data: [DONE]")
+                              200)
+                      (values (make-string-input-stream
+                               "data: {\"choices\": [{\"delta\": {\"content\": \"Done\"}}]}
+data: [DONE]")
+                              200))))
+               (*openai-api-key* "test-key"))
+            (let ((res (chat "Run the search" :conversation conv)))
+             (fiveam:is (string= "Done" res))
+             (fiveam:is (= 2 (length captured-payloads)))
+             (let* ((second-payload (cl-json:decode-json-from-string (second captured-payloads)))
+                    (messages (cdr (assoc :messages second-payload))))
+               (fiveam:is (search "Web search query: common lisp"
+                                  (cdr (assoc :content (fourth messages)))))
+               (fiveam:is (search "https://lisp-lang.org/"
+                                  (cdr (assoc :content (fourth messages)))))))))))))
+
+(fiveam:test test-openai-built-in-directory-tool-recursion
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "openai-directory-tool/" temp-dir))
+        (docs-dir (merge-pathnames "docs/" root)))
+    (ensure-directories-exist docs-dir)
+    (with-open-file (s (merge-pathnames "alpha.txt" docs-dir) :direction :output :if-exists :supersede)
+      (write-line "Alpha" s))
+    (with-open-file (s (merge-pathnames "beta.txt" docs-dir) :direction :output :if-exists :supersede)
+      (write-line "Beta" s))
+    (with-open-file (s (merge-pathnames "notes.md" docs-dir) :direction :output :if-exists :supersede)
+      (write-line "Notes" s))
+    (unwind-protect
+        (let ((conv (new-chat :backend :openai :system-instruction "Be helpful"))
+              (captured-payloads nil)
+              (call-count 0))
+          (setf (chatbot-filesystem-tools-p (conversation-chatbot conv)) t)
+          (setf (chatbot-filesystem-root-directory (conversation-chatbot conv)) root)
+          (let ((*http-post-function*
+                 (lambda (url &rest args)
+                   (declare (ignore url))
+                   (incf call-count)
+                   (setf captured-payloads
+                         (append captured-payloads (list (getf args :content))))
+                   (if (= call-count 1)
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call-1\", \"function\": {\"name\": \"directory\", \"arguments\": \"{\\\"pathname\\\":\\\"docs\\\",\\\"pattern\\\":\\\"*.txt\\\"}\"}}]}}]}
+data: [DONE]")
+                               200)
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"content\": \"Done\"}}]}
+data: [DONE]")
+                               200))))
+                (*openai-api-key* "test-key"))
+            (let ((res (chat "List the directory" :conversation conv)))
+              (fiveam:is (string= "Done" res))
+              (fiveam:is (= 2 (length captured-payloads)))
+              (let* ((second-payload (cl-json:decode-json-from-string (second captured-payloads)))
+                     (messages (cdr (assoc :messages second-payload))))
+                (fiveam:is (equal '("docs/alpha.txt" "docs/beta.txt")
+                                  (coerce (cl-json:decode-json-from-string
+                                           (cdr (assoc :content (fourth messages))))
+                                          'list)))))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-openai-built-in-write-file-tool-recursion
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "openai-write-file-tool/" temp-dir))
+         (file-path (merge-pathnames "notes.txt" root)))
+    (ensure-directories-exist root)
+    (unwind-protect
+         (let ((conv (new-chat :backend :openai :system-instruction "Be helpful"))
+               (captured-payloads nil)
+               (call-count 0))
+           (setf (chatbot-filesystem-tools-p (conversation-chatbot conv)) t)
+           (setf (chatbot-filesystem-root-directory (conversation-chatbot conv)) root)
+           (let ((*http-post-function*
+                 (lambda (url &rest args)
+                   (declare (ignore url))
+                   (incf call-count)
+                   (setf captured-payloads
+                         (append captured-payloads (list (getf args :content))))
+                   (if (= call-count 1)
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call-1\", \"function\": {\"name\": \"writeFile\", \"arguments\": \"{\\\"pathname\\\":\\\"notes.txt\\\",\\\"useLfOnly\\\":true,\\\"endWithEol\\\":false,\\\"lines\\\":[\\\"Alpha\\\",\\\"Beta\\\"]}\"}}]}}]}
+data: [DONE]")
+                               200)
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"content\": \"Done\"}}]}
+data: [DONE]")
+                               200))))
+                (*openai-api-key* "test-key"))
+             (let ((res (chat "Write the file" :conversation conv)))
+               (fiveam:is (string= "Done" res))
+               (fiveam:is (= 2 (length captured-payloads)))
+               (let* ((second-payload (cl-json:decode-json-from-string (second captured-payloads)))
+                     (messages (cdr (assoc :messages second-payload))))
+                (fiveam:is (string= "Wrote file: notes.txt"
+                                    (cdr (assoc :content (fourth messages)))))
+                (fiveam:is (string= (format nil "Alpha~%Beta")
+                                    (read-test-file-octets-as-string file-path)))))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-openai-built-in-delete-file-tool-recursion
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "openai-delete-file-tool/" temp-dir))
+         (file-path (merge-pathnames "notes.txt" root)))
+    (ensure-directories-exist root)
+    (with-open-file (s file-path :direction :output :if-exists :supersede)
+      (write-line "Delete me" s))
+    (unwind-protect
+         (let ((conv (new-chat :backend :openai :system-instruction "Be helpful"))
+               (captured-payloads nil)
+               (call-count 0))
+           (setf (chatbot-filesystem-tools-p (conversation-chatbot conv)) t)
+           (setf (chatbot-filesystem-root-directory (conversation-chatbot conv)) root)
+           (let ((*http-post-function*
+                 (lambda (url &rest args)
+                   (declare (ignore url))
+                   (incf call-count)
+                   (setf captured-payloads
+                         (append captured-payloads (list (getf args :content))))
+                   (if (= call-count 1)
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call-1\", \"function\": {\"name\": \"deleteFile\", \"arguments\": \"{\\\"pathname\\\":\\\"notes.txt\\\"}\"}}]}}]}
+data: [DONE]")
+                               200)
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"content\": \"Done\"}}]}
+data: [DONE]")
+                               200))))
+                (*openai-api-key* "test-key"))
+             (let ((res (chat "Delete the file" :conversation conv)))
+               (fiveam:is (string= "Done" res))
+               (fiveam:is (= 2 (length captured-payloads)))
+               (let* ((second-payload (cl-json:decode-json-from-string (second captured-payloads)))
+                      (messages (cdr (assoc :messages second-payload))))
+                 (fiveam:is (string= "Deleted file: notes.txt"
+                                     (cdr (assoc :content (fourth messages)))))
+                 (fiveam:is-false (probe-file file-path))))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-openai-filesystem-tool-recursion-prompts-and-persists-approval
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "openai-allowlist-root/" temp-dir))
+         (outside-dir (merge-pathnames "approved-openai/" temp-dir))
+         (file-path (merge-pathnames "notes.txt" outside-dir))
+         (allowlist-path (merge-pathnames "filesystem-allowlist.lisp" root))
+         (prompted-directory nil))
+    (ensure-directories-exist root)
+    (ensure-directories-exist outside-dir)
+    (with-open-file (s file-path :direction :output :if-exists :supersede)
+      (write-line "Line one" s)
+      (write-line "Line two" s))
+    (unwind-protect
+         (let ((conv (new-chat :backend :openai :system-instruction "Be helpful"))
+               (captured-payloads nil)
+               (call-count 0))
+           (setf (chatbot-filesystem-tools-p (conversation-chatbot conv)) t)
+           (setf (chatbot-filesystem-root-directory (conversation-chatbot conv)) root)
+           (setf (chatbot-filesystem-allowlist-path (conversation-chatbot conv)) allowlist-path)
+           (let ((*filesystem-access-approval-function*
+                 (lambda (ignored-bot directory tool-name)
+                   (declare (ignore ignored-bot))
+                   (setf prompted-directory (list (namestring directory) tool-name))
+                   t))
+                 (*http-post-function*
+                 (lambda (url &rest args)
+                   (declare (ignore url))
+                   (incf call-count)
+                   (setf captured-payloads
+                         (append captured-payloads (list (getf args :content))))
+                   (if (= call-count 1)
+                       (values (make-string-input-stream
+                                (format nil
+                                        "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call-1\", \"function\": {\"name\": \"readFileLines\", \"arguments\": \"{\\\"filename\\\":\\\"~A\\\",\\\"beginningLine\\\":1,\\\"endingLine\\\":10}\"}}]}}]}~%data: [DONE]"
+                                        (namestring file-path)))
+                               200)
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"content\": \"Done\"}}]}
+data: [DONE]")
+                               200))))
+                 (*openai-api-key* "test-key"))
+             (let ((res (chat "Read approved file" :conversation conv)))
+               (fiveam:is (string= "Done" res))
+               (fiveam:is (equal (list (namestring (uiop:ensure-directory-pathname (truename outside-dir)))
+                                      "readFileLines")
+                                prompted-directory))
+               (fiveam:is (equal (list (namestring (uiop:ensure-directory-pathname (truename outside-dir))))
+                                (read-test-lisp-form allowlist-path)))
+               (let* ((second-payload (cl-json:decode-json-from-string (second captured-payloads)))
+                     (messages (cdr (assoc :messages second-payload))))
+                 (fiveam:is (string= (format nil "Line one~%Line two")
+                                    (cdr (assoc :content (fourth messages)))))))))
+      (uiop:delete-directory-tree outside-dir :validate t)
+      (uiop:delete-directory-tree root :validate t))))

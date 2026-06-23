@@ -31,7 +31,6 @@
   "Logs and sends an outbound HTTP POST request."
   (let ((connect-timeout (current-http-connect-timeout))
         (read-timeout (current-http-read-timeout)))
-    (declare (ignore content))
     (log-message :info "HTTP POST request"
                  :context `(("url" . ,(sanitize-url-for-log url))
                             ("headers" . ,(cl-json:encode-json-to-string

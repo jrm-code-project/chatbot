@@ -19,6 +19,32 @@
 (defvar *gemini-api-key-function* #'google:gemini-api-key
   "Function used to resolve the Gemini API key.")
 
+(defvar *web-search-function* #'google:web-search
+  "Function used by the built-in web grounding search tool.")
+
+(defvar *hyperspec-search-function* #'google:hyperspec-search
+  "Function used by the built-in HyperSpec grounding search tool.")
+
+(defun default-filesystem-access-approval-function (bot directory tool-name)
+  "Prompts the user to approve BOT access to DIRECTORY for TOOL-NAME."
+  (declare (ignore bot))
+  (y-or-n-p "~&Allow ~A to access directory ~A and remember it for this persona? "
+            tool-name
+            (namestring directory)))
+
+(defvar *filesystem-access-approval-function* #'default-filesystem-access-approval-function
+  "Function used to approve persona filesystem access outside the current allowlist.")
+
+(defun default-eval-approval-function (bot source tool-name)
+  "Prompts the user to approve evaluating SOURCE for TOOL-NAME."
+  (declare (ignore bot))
+  (y-or-n-p "~&Allow ~A to evaluate this expression?~%~A~% "
+            tool-name
+            source))
+
+(defvar *eval-approval-function* #'default-eval-approval-function
+  "Function used to approve evaluation of a specific expression for the eval tool.")
+
 (defvar *user-homedir-pathname-function* #'user-homedir-pathname
   "Function used to resolve the current user's home directory pathname.")
 
@@ -51,6 +77,9 @@
 
 (defvar *execute-mcp-tool-function* nil
   "Optional test seam for executing an MCP tool and returning text content.")
+
+(defvar *global-token-grand-totals* nil
+  "Process-wide cumulative token totals shared across unrelated chats.")
 
 (defun require-non-empty-string (value context)
   "Returns VALUE when it is a non-empty string, otherwise signals an error for CONTEXT."
@@ -130,7 +159,9 @@ runtime globals are used to override the default runtime context.")
     (*log-level* . "MAKE-RUNTIME-CONTEXT with :LOG-LEVEL")
     (*log-stream* . "MAKE-RUNTIME-CONTEXT with :LOG-STREAM")
     (*http-connect-timeout* . "MAKE-RUNTIME-CONTEXT with :HTTP-CONNECT-TIMEOUT")
-    (*http-read-timeout* . "MAKE-RUNTIME-CONTEXT with :HTTP-READ-TIMEOUT"))
+    (*http-read-timeout* . "MAKE-RUNTIME-CONTEXT with :HTTP-READ-TIMEOUT")
+    (*filesystem-access-approval-function* . "MAKE-RUNTIME-CONTEXT with :FILESYSTEM-ACCESS-APPROVAL-FUNCTION")
+    (*eval-approval-function* . "MAKE-RUNTIME-CONTEXT with :EVAL-APPROVAL-FUNCTION"))
   "Compatibility-only ambient globals mapped to their preferred replacements.")
 
 (defvar *http-post-function* #'dexador:post
@@ -201,6 +232,8 @@ Prefer passing :CONVERSATION explicitly or using a runtime context.")
                                   (getenv-function *getenv-function*)
                                   (http-post-function *http-post-function*)
                                   (gemini-api-key-function *gemini-api-key-function*)
+                                  (filesystem-access-approval-function *filesystem-access-approval-function*)
+                                  (eval-approval-function *eval-approval-function*)
                                   default-conversation)
   "Constructs the preferred public container for shared Chatbot runtime state.
 Use this with explicit :RUNTIME-CONTEXT arguments instead of mutating the
@@ -217,6 +250,8 @@ compatibility-only ambient special variables."
                  :getenv-function getenv-function
                  :http-post-function http-post-function
                  :gemini-api-key-function gemini-api-key-function
+                 :filesystem-access-approval-function filesystem-access-approval-function
+                 :eval-approval-function eval-approval-function
                  :default-conversation default-conversation))
 
 (defun sync-runtime-context-from-legacy-globals (context)
@@ -257,7 +292,13 @@ compatibility-only ambient special variables."
                                             (runtime-context-http-connect-timeout context))
     (maybe-warn-legacy-runtime-global-usage '*http-read-timeout*
                                             *http-read-timeout*
-                                            (runtime-context-http-read-timeout context)))
+                                            (runtime-context-http-read-timeout context))
+    (maybe-warn-legacy-runtime-global-usage '*filesystem-access-approval-function*
+                                            *filesystem-access-approval-function*
+                                            (runtime-context-filesystem-access-approval-function context))
+    (maybe-warn-legacy-runtime-global-usage '*eval-approval-function*
+                                            *eval-approval-function*
+                                            (runtime-context-eval-approval-function context)))
   (setf (runtime-context-mcp-config-path context) *mcp-config-path*)
   (setf (runtime-context-startup-chatbot context) *startup-chatbot*)
   (setf (runtime-context-auto-initialize-startup-mcp-servers-p context) *auto-initialize-startup-mcp-servers-p*)
@@ -269,6 +310,8 @@ compatibility-only ambient special variables."
   (setf (runtime-context-getenv-function context) *getenv-function*)
   (setf (runtime-context-http-post-function context) *http-post-function*)
   (setf (runtime-context-gemini-api-key-function context) *gemini-api-key-function*)
+  (setf (runtime-context-filesystem-access-approval-function context) *filesystem-access-approval-function*)
+  (setf (runtime-context-eval-approval-function context) *eval-approval-function*)
   (setf (runtime-context-default-conversation context) *default-conversation*)
   context)
 
@@ -285,6 +328,8 @@ compatibility-only ambient special variables."
   (setf *getenv-function* (runtime-context-getenv-function context))
   (setf *http-post-function* (runtime-context-http-post-function context))
   (setf *gemini-api-key-function* (runtime-context-gemini-api-key-function context))
+  (setf *filesystem-access-approval-function* (runtime-context-filesystem-access-approval-function context))
+  (setf *eval-approval-function* (runtime-context-eval-approval-function context))
   (setf *default-conversation* (runtime-context-default-conversation context))
   context)
 
@@ -474,6 +519,42 @@ compatibility-only ambient special variables."
       (maybe-sync-legacy-globals-from-default-runtime-context resolved-context))
     value))
 
+(defun current-filesystem-access-approval-function (&optional context)
+  "Returns the current filesystem access approval function for CONTEXT."
+  (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
+    (and resolved-context
+         (if (active-runtime-context-p resolved-context)
+             *filesystem-access-approval-function*
+             (runtime-context-filesystem-access-approval-function resolved-context)))))
+
+(defun (setf current-filesystem-access-approval-function) (value &optional context)
+  "Sets the current filesystem access approval function for CONTEXT."
+  (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
+    (when resolved-context
+      (setf (runtime-context-filesystem-access-approval-function resolved-context) value)
+      (when (active-runtime-context-p resolved-context)
+        (setf *filesystem-access-approval-function* value))
+      (maybe-sync-legacy-globals-from-default-runtime-context resolved-context))
+    value))
+
+(defun current-eval-approval-function (&optional context)
+  "Returns the current eval approval function for CONTEXT."
+  (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
+    (and resolved-context
+         (if (active-runtime-context-p resolved-context)
+             *eval-approval-function*
+             (runtime-context-eval-approval-function resolved-context)))))
+
+(defun (setf current-eval-approval-function) (value &optional context)
+  "Sets the current eval approval function for CONTEXT."
+  (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
+    (when resolved-context
+      (setf (runtime-context-eval-approval-function resolved-context) value)
+      (when (active-runtime-context-p resolved-context)
+        (setf *eval-approval-function* value))
+      (maybe-sync-legacy-globals-from-default-runtime-context resolved-context))
+    value))
+
 (defun call-with-runtime-context (context thunk)
   "Calls THUNK with legacy special variables rebound from CONTEXT when CONTEXT is non-nil."
   (let* ((resolved-context (resolve-runtime-context context :sync-from-globals-p t))
@@ -496,6 +577,8 @@ compatibility-only ambient special variables."
                          (*getenv-function* (runtime-context-getenv-function resolved-context))
                          (*http-post-function* (runtime-context-http-post-function resolved-context))
                          (*gemini-api-key-function* (runtime-context-gemini-api-key-function resolved-context))
+                         (*filesystem-access-approval-function* (runtime-context-filesystem-access-approval-function resolved-context))
+                         (*eval-approval-function* (runtime-context-eval-approval-function resolved-context))
                          (*default-conversation* (runtime-context-default-conversation resolved-context)))
                      (unwind-protect
                           (funcall thunk)
@@ -510,6 +593,8 @@ compatibility-only ambient special variables."
                        (setf (runtime-context-getenv-function resolved-context) *getenv-function*)
                        (setf (runtime-context-http-post-function resolved-context) *http-post-function*)
                        (setf (runtime-context-gemini-api-key-function resolved-context) *gemini-api-key-function*)
+                       (setf (runtime-context-filesystem-access-approval-function resolved-context) *filesystem-access-approval-function*)
+                       (setf (runtime-context-eval-approval-function resolved-context) *eval-approval-function*)
                        (setf (runtime-context-default-conversation resolved-context) *default-conversation*))))
               (when default-context-p
                 (maybe-sync-legacy-globals-from-default-runtime-context resolved-context))

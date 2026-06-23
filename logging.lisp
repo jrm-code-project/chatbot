@@ -64,6 +64,77 @@
                                          (string-downcase (symbol-name key)))
                                        keys)))))
 
+(defun normalize-token-count (value)
+  "Returns VALUE as an integer token count when possible."
+  (typecase value
+    (null nil)
+    (integer value)
+    (real (truncate value))
+    (string (parse-integer value :junk-allowed t))
+    (t nil)))
+
+(defun canonical-usage-token-totals (usage)
+  "Returns a canonical plist of token totals extracted from USAGE."
+  (let* ((prompt (normalize-token-count
+                  (usage-token-count usage
+                                     '(:prompt-token-count
+                                       :total-input-tokens
+                                       :total--input--tokens
+                                       :total_input_tokens))))
+         (completion (normalize-token-count
+                      (usage-token-count usage
+                                        '(:candidates-token-count
+                                          :total-output-tokens
+                                          :total--output--tokens
+                                          :total_output_tokens))))
+         (thought (normalize-token-count
+                   (usage-token-count usage
+                                      '(:thoughts-token-count
+                                       :total-thought-tokens
+                                       :total--thought--tokens
+                                       :total_thought_tokens))))
+         (explicit-total (normalize-token-count
+                          (usage-token-count usage
+                                            '(:total-token-count
+                                              :total-tokens
+                                              :total--tokens
+                                              :total_tokens))))
+         (derived-total (when (or prompt completion thought)
+                          (+ (or prompt 0)
+                             (or completion 0)
+                             (or thought 0)))))
+    (list :prompt prompt
+          :completion completion
+          :thought thought
+          :total (or explicit-total derived-total))))
+
+(defun current-global-token-grand-totals ()
+  "Returns the process-wide cumulative token totals plist."
+  (or *global-token-grand-totals*
+      (setf *global-token-grand-totals*
+            (list :prompt 0
+                  :completion 0
+                  :thought 0
+                  :total 0))))
+
+(defun reset-global-token-grand-totals ()
+  "Resets the process-wide cumulative token totals."
+  (setf *global-token-grand-totals*
+        (list :prompt 0
+              :completion 0
+              :thought 0
+              :total 0)))
+
+(defun accumulate-global-token-grand-totals (usage)
+  "Accumulates USAGE into the process-wide cumulative token totals."
+  (let* ((canonical (canonical-usage-token-totals usage))
+         (totals (current-global-token-grand-totals)))
+    (incf (getf totals :prompt) (or (getf canonical :prompt) 0))
+    (incf (getf totals :completion) (or (getf canonical :completion) 0))
+    (incf (getf totals :thought) (or (getf canonical :thought) 0))
+    (incf (getf totals :total) (or (getf canonical :total) 0))
+    totals))
+
 (defun maybe-log-context-entry (context label value)
   "Appends a log context entry when VALUE is non-nil."
   (if value
@@ -72,7 +143,8 @@
 
 (defun backend-response-stats-context (backend &key http-status response-id model interaction-id finish-reason usage)
   "Builds the formatted context list used for backend response stats."
-  (let* ((context `(("backend" . ,(string-downcase (symbol-name backend)))))
+  (let* ((token-totals (canonical-usage-token-totals usage))
+         (context `(("backend" . ,(string-downcase (symbol-name backend)))))
          (context (maybe-log-context-entry context "http-status" http-status))
          (context (maybe-log-context-entry context "response-id" response-id))
          (context (maybe-log-context-entry context "interaction-id" interaction-id))
@@ -80,32 +152,16 @@
          (context (maybe-log-context-entry context "finish-reason" finish-reason))
          (context (maybe-log-context-entry context
                                            "prompt-tokens"
-                                           (usage-token-count usage
-                                                              '(:prompt-token-count
-                                                                :total-input-tokens
-                                                                :total--input--tokens
-                                                                :total_input_tokens))))
+                                           (getf token-totals :prompt)))
          (context (maybe-log-context-entry context
                                            "completion-tokens"
-                                           (usage-token-count usage
-                                                              '(:candidates-token-count
-                                                                :total-output-tokens
-                                                                :total--output--tokens
-                                                                :total_output_tokens))))
+                                           (getf token-totals :completion)))
          (context (maybe-log-context-entry context
                                            "thought-tokens"
-                                           (usage-token-count usage
-                                                              '(:thoughts-token-count
-                                                                :total-thought-tokens
-                                                                :total--thought--tokens
-                                                                :total_thought_tokens))))
+                                           (getf token-totals :thought)))
          (context (maybe-log-context-entry context
                                            "total-tokens"
-                                           (usage-token-count usage
-                                                              '(:total-token-count
-                                                                :total-tokens
-                                                                :total--tokens
-                                                                :total_tokens)))))
+                                           (getf token-totals :total))))
     context))
 
 (defun log-backend-response-stats (backend &key http-status response-id model interaction-id finish-reason usage)
@@ -122,30 +178,22 @@
 
 (defun write-turn-token-summary (usage &key (stream *standard-output*))
   "Writes a concise token summary after a completed assistant turn."
-  (let ((prompt (usage-token-count usage
-                                   '(:prompt-token-count
-                                     :total-input-tokens
-                                     :total--input--tokens
-                                     :total_input_tokens)))
-        (completion (usage-token-count usage
-                                       '(:candidates-token-count
-                                         :total-output-tokens
-                                         :total--output--tokens
-                                         :total_output_tokens)))
-        (thought (usage-token-count usage
-                                    '(:thoughts-token-count
-                                      :total-thought-tokens
-                                      :total--thought--tokens
-                                      :total_thought_tokens)))
-        (total (usage-token-count usage
-                                  '(:total-token-count
-                                    :total-tokens
-                                    :total--tokens
-                                    :total_tokens))))
+  (let* ((turn-totals (canonical-usage-token-totals usage))
+         (prompt (getf turn-totals :prompt))
+         (completion (getf turn-totals :completion))
+         (thought (getf turn-totals :thought))
+         (total (getf turn-totals :total)))
     (when (or prompt completion thought total)
+      (let ((grand-totals (accumulate-global-token-grand-totals usage)))
       (format stream "[Tokens] prompt: ~A completion: ~A thought: ~A total: ~A~%"
               (or prompt "-")
               (or completion "-")
               (or thought "-")
               (or total "-"))
+      (format stream "[Tokens Total] prompt: ~A completion: ~A thought: ~A total: ~A~%"
+              (getf grand-totals :prompt)
+              (getf grand-totals :completion)
+              (getf grand-totals :thought)
+              (getf grand-totals :total))
+      )
       (force-output stream))))

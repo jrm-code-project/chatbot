@@ -3,6 +3,39 @@
 (in-package "CHATBOT")
 (fiveam:in-suite chatbot-suite)
 
+(defun read-test-file-octets-as-string (path)
+  "Reads PATH as octets and returns an ASCII string for newline-sensitive assertions."
+  (with-open-file (stream path :direction :input :element-type '(unsigned-byte 8))
+    (let ((octets nil)
+          (eof-marker (gensym "EOF")))
+      (loop for octet = (read-byte stream nil eof-marker)
+            until (eq octet eof-marker)
+            do (push octet octets))
+      (coerce (mapcar #'code-char (nreverse octets)) 'string))))
+
+(defun read-test-lisp-form (path)
+  "Reads the first Lisp form stored at PATH."
+  (with-open-file (stream path :direction :input)
+    (read stream nil nil)))
+
+(defun make-grounding-search-response (&key total-results items)
+  "Builds a mock GOOGLE search response hash table."
+  (let ((response (make-hash-table :test #'eql))
+        (search-info (make-hash-table :test #'eql)))
+    (setf (gethash :total-results search-info) (or total-results "0"))
+    (setf (gethash :search-information response) search-info)
+    (setf (gethash :items response)
+          (coerce
+           (mapcar (lambda (item)
+                     (let ((entry (make-hash-table :test #'eql)))
+                       (setf (gethash :title entry) (getf item :title))
+                       (setf (gethash :link entry) (getf item :link))
+                       (setf (gethash :snippet entry) (getf item :snippet))
+                       entry))
+                   items)
+           'vector))
+    response))
+
 (fiveam:test test-mcp-config-resolution
   (let ((*mcp-config-path* "test-mcp-config.lisp"))
     (fiveam:is (string= "test-mcp-config.lisp" (get-mcp-config-path)))))
@@ -66,9 +99,525 @@
                         ("HOME" . "C:\\Users\\bitdi"))
                       merged))))
 
+(fiveam:test test-execute-chatbot-tool-read-file-lines
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "filesystem-tool-root/" temp-dir))
+         (file-path (merge-pathnames "notes.txt" root))
+         (bot (make-instance 'chatbot
+                             :filesystem-tools-p t
+                             :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (with-open-file (s file-path :direction :output :if-exists :supersede)
+      (write-line "Line one" s)
+      (write-line "Line two" s)
+      (write-line "Line three" s))
+    (unwind-protect
+         (fiveam:is (string= (format nil "Line two~%Line three")
+                             (execute-chatbot-tool bot
+                                                   :built-in
+                                                   "readFileLines"
+                                                   '(("filename" . "notes.txt")
+                                                     ("beginningLine" . 2)
+                                                     ("endingLine" . 3)))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-read-file-lines-rejects-invalid-range
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "filesystem-tool-root-invalid/" temp-dir))
+         (file-path (merge-pathnames "notes.txt" root))
+         (bot (make-instance 'chatbot
+                             :filesystem-tools-p t
+                             :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (with-open-file (s file-path :direction :output :if-exists :supersede)
+      (write-line "Line one" s))
+    (unwind-protect
+         (fiveam:signals mcp-tool-execution-error
+           (execute-chatbot-tool bot
+                                 :built-in
+                                 "readFileLines"
+                                 '(("filename" . "notes.txt")
+                                   ("beginningLine" . 2)
+                                   ("endingLine" . 1))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-read-file-lines-truncates-ending-line-past-eof
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "filesystem-tool-root-truncated/" temp-dir))
+         (file-path (merge-pathnames "notes.txt" root))
+         (bot (make-instance 'chatbot
+                            :filesystem-tools-p t
+                            :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (with-open-file (s file-path :direction :output :if-exists :supersede)
+      (write-line "Line one" s)
+      (write-line "Line two" s)
+      (write-line "Line three" s))
+    (unwind-protect
+         (fiveam:is (string= (format nil "Line two~%Line three")
+                            (execute-chatbot-tool bot
+                                                  :built-in
+                                                  "readFileLines"
+                                                  '(("filename" . "notes.txt")
+                                                    ("beginningLine" . 2)
+                                                    ("endingLine" . 100)))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-read-file-lines-rejects-out-of-scope-path
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "filesystem-tool-root-scope/" temp-dir))
+         (outside-file (merge-pathnames "outside.txt" temp-dir))
+         (bot (make-instance 'chatbot
+                             :filesystem-tools-p t
+                             :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (with-open-file (s outside-file :direction :output :if-exists :supersede)
+      (write-line "Outside" s))
+    (unwind-protect
+         (let ((*filesystem-access-approval-function* (lambda (&rest ignored)
+                                                       (declare (ignore ignored))
+                                                       nil)))
+           (fiveam:signals mcp-tool-execution-error
+             (execute-chatbot-tool bot
+                                  :built-in
+                                  "readFileLines"
+                                  `(("filename" . ,(namestring outside-file))
+                                    ("beginningLine" . 1)
+                                    ("endingLine" . 1)))))
+      (delete-file outside-file)
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-directory
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "filesystem-tool-directory-root/" temp-dir))
+        (nested (merge-pathnames "docs/" root))
+        (bot (make-instance 'chatbot
+                            :filesystem-tools-p t
+                            :filesystem-root-directory root)))
+    (ensure-directories-exist nested)
+    (with-open-file (s (merge-pathnames "alpha.txt" nested) :direction :output :if-exists :supersede)
+      (write-line "Alpha" s))
+    (with-open-file (s (merge-pathnames "beta.txt" nested) :direction :output :if-exists :supersede)
+      (write-line "Beta" s))
+    (with-open-file (s (merge-pathnames "notes.md" nested) :direction :output :if-exists :supersede)
+      (write-line "Notes" s))
+    (ensure-directories-exist (merge-pathnames "subdir/" nested))
+    (unwind-protect
+        (fiveam:is (equal '("docs/alpha.txt" "docs/beta.txt")
+                          (coerce (cl-json:decode-json-from-string
+                                   (execute-chatbot-tool bot
+                                                         :built-in
+                                                         "directory"
+                                                         '(("pathname" . "docs")
+                                                           ("pattern" . "*.txt"))))
+                                  'list)))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-directory-rejects-missing-directory
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "filesystem-tool-directory-missing/" temp-dir))
+        (bot (make-instance 'chatbot
+                            :filesystem-tools-p t
+                            :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (unwind-protect
+        (fiveam:signals mcp-tool-execution-error
+          (execute-chatbot-tool bot
+                                :built-in
+                                "directory"
+                                '(("pathname" . "docs")
+                                  ("pattern" . "*.txt"))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-directory-rejects-non-directory-target
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "filesystem-tool-directory-file-target/" temp-dir))
+        (file-path (merge-pathnames "notes.txt" root))
+        (bot (make-instance 'chatbot
+                            :filesystem-tools-p t
+                            :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (with-open-file (s file-path :direction :output :if-exists :supersede)
+      (write-line "Not a directory" s))
+    (unwind-protect
+        (fiveam:signals mcp-tool-execution-error
+          (execute-chatbot-tool bot
+                                :built-in
+                                "directory"
+                                '(("pathname" . "notes.txt")
+                                  ("pattern" . "*.txt"))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-directory-rejects-out-of-scope-path
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "filesystem-tool-directory-scope/" temp-dir))
+        (outside-dir (merge-pathnames "outside-dir/" temp-dir))
+        (bot (make-instance 'chatbot
+                            :filesystem-tools-p t
+                            :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (ensure-directories-exist outside-dir)
+    (unwind-protect
+        (let ((*filesystem-access-approval-function* (lambda (&rest ignored)
+                                                       (declare (ignore ignored))
+                                                       nil)))
+          (fiveam:signals mcp-tool-execution-error
+            (execute-chatbot-tool bot
+                                  :built-in
+                                  "directory"
+                                  `(("pathname" . ,(namestring outside-dir))
+                                    ("pattern" . "*.txt")))))
+      (uiop:delete-directory-tree outside-dir :validate t)
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-web-search
+  (let ((bot (make-instance 'chatbot
+                           :web-tools-p t)))
+    (let ((*web-search-function* (lambda (query)
+                                  (fiveam:is (string= "common lisp" query))
+                                  (make-grounding-search-response
+                                   :total-results "2"
+                                   :items '((:title "Common Lisp"
+                                             :link "https://lisp-lang.org/"
+                                             :snippet "A programmable programming language.")
+                                            (:title "CL Cookbook"
+                                             :link "https://lispcookbook.github.io/cl-cookbook/"
+                                             :snippet "Practical Common Lisp examples."))))))
+      (let ((result (execute-chatbot-tool bot
+                                         :built-in
+                                         "webSearch"
+                                         '(("query" . "common lisp")))))
+       (fiveam:is (search "Web search query: common lisp" result))
+       (fiveam:is (search "1. Common Lisp" result))
+       (fiveam:is (search "URL: https://lisp-lang.org/" result))
+       (fiveam:is (search "Snippet: A programmable programming language." result))))))
+
+(fiveam:test test-execute-chatbot-tool-hyperspec-search
+  (let ((bot (make-instance 'chatbot
+                           :web-tools-p t)))
+    (let ((*hyperspec-search-function* (lambda (query)
+                                        (fiveam:is (string= "format" query))
+                                        (make-grounding-search-response
+                                         :total-results "1"
+                                         :items '((:title "CLHS: Section 22.3"
+                                                   :link "https://www.lispworks.com/documentation/HyperSpec/Body/22_c.htm"
+                                                   :snippet "FORMAT Basic Output."))))))
+      (let ((result (execute-chatbot-tool bot
+                                         :built-in
+                                         "hyperspecSearch"
+                                         '(("query" . "format")))))
+       (fiveam:is (search "HyperSpec search query: format" result))
+       (fiveam:is (search "1. CLHS: Section 22.3" result))
+       (fiveam:is (search "URL: https://www.lispworks.com/documentation/HyperSpec/Body/22_c.htm" result))))))
+
+(fiveam:test test-execute-chatbot-tool-eval
+  (let ((bot (make-instance 'chatbot
+                           :enable-eval-p t))
+       (captured-expression nil))
+    (let ((*eval-approval-function* (lambda (approval-bot source tool-name)
+                                     (declare (ignore approval-bot tool-name))
+                                     (setf captured-expression source)
+                                     t)))
+      (let* ((result-json (execute-chatbot-tool bot
+                                               :built-in
+                                               "eval"
+                                               '(("expression" . "(progn (format t \"hello\") (format *error-output* \"oops\") (values 42 :done))"))))
+            (result (cl-json:decode-json-from-string result-json)))
+       (fiveam:is (string= "(progn (format t \"hello\") (format *error-output* \"oops\") (values 42 :done))"
+                           captured-expression))
+       (fiveam:is (equal '("42" ":DONE")
+                         (coerce (cdr (assoc :values result)) 'list)))
+       (fiveam:is (string= "hello" (cdr (assoc :stdout result))))
+       (fiveam:is (string= "oops" (cdr (assoc :stderr result))))))))
+
+(fiveam:test test-execute-chatbot-tool-eval-rejects-parse-failure
+  (let ((bot (make-instance 'chatbot
+                           :enable-eval-p t))
+       (approval-called-p nil))
+    (let ((*eval-approval-function* (lambda (&rest ignored)
+                                     (declare (ignore ignored))
+                                     (setf approval-called-p t)
+                                     t)))
+      (fiveam:signals mcp-tool-execution-error
+       (execute-chatbot-tool bot
+                             :built-in
+                             "eval"
+                             '(("expression" . "("))))
+      (fiveam:is-false approval-called-p))))
+
+(fiveam:test test-execute-chatbot-tool-eval-denies-without-evaluating
+  (let ((bot (make-instance 'chatbot
+                           :enable-eval-p t)))
+    (setf (get 'eval-tool-denied-sentinel :hit) nil)
+    (unwind-protect
+        (let ((*eval-approval-function* (lambda (&rest ignored)
+                                          (declare (ignore ignored))
+                                          nil)))
+          (fiveam:signals mcp-tool-execution-error
+            (execute-chatbot-tool bot
+                                  :built-in
+                                  "eval"
+                                  '(("expression" . "(setf (get 'eval-tool-denied-sentinel :hit) t)"))))
+          (fiveam:is-false (get 'eval-tool-denied-sentinel :hit)))
+      (remprop 'eval-tool-denied-sentinel :hit))))
+
+(fiveam:test test-execute-chatbot-tool-eval-times-out
+  (let ((bot (make-instance 'chatbot
+                           :enable-eval-p t)))
+    (let ((*eval-approval-function* (lambda (&rest ignored)
+                                     (declare (ignore ignored))
+                                     t))
+          (*eval-tool-timeout-seconds* 1))
+      (fiveam:signals mcp-tool-execution-error
+        (execute-chatbot-tool bot
+                             :built-in
+                             "eval"
+                             '(("expression" . "(sleep 2)")))))))
+
+(fiveam:test test-execute-chatbot-tool-write-file-lf-with-trailing-eol
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "filesystem-tool-write-file-lf/" temp-dir))
+         (file-path (merge-pathnames "notes.txt" root))
+         (bot (make-instance 'chatbot
+                             :filesystem-tools-p t
+                             :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (unwind-protect
+         (progn
+           (fiveam:is (string= "Wrote file: notes.txt"
+                               (execute-chatbot-tool bot
+                                                     :built-in
+                                                     "writeFile"
+                                                     `(("pathname" . "notes.txt")
+                                                       ("useLfOnly" . t)
+                                                       ("endWithEol" . t)
+                                                       ("lines" . ,#("Alpha" "Beta"))))))
+           (fiveam:is (string= (format nil "Alpha~%Beta~%")
+                               (read-test-file-octets-as-string file-path))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-write-file-crlf-without-trailing-eol
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "filesystem-tool-write-file-crlf/" temp-dir))
+         (file-path (merge-pathnames "notes.txt" root))
+         (bot (make-instance 'chatbot
+                             :filesystem-tools-p t
+                             :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (unwind-protect
+         (progn
+           (execute-chatbot-tool bot
+                                 :built-in
+                                 "writeFile"
+                                 `(("pathname" . "notes.txt")
+                                   ("useLfOnly" . :false)
+                                   ("endWithEol" . :false)
+                                   ("lines" . ,#("Alpha" "Beta"))))
+           (fiveam:is (string= (format nil "Alpha~C~CBeta" #\Return #\Linefeed)
+                               (read-test-file-octets-as-string file-path))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-write-file-empty-lines-produces-empty-file
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "filesystem-tool-write-file-empty/" temp-dir))
+         (file-path (merge-pathnames "notes.txt" root))
+         (bot (make-instance 'chatbot
+                             :filesystem-tools-p t
+                             :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (unwind-protect
+         (progn
+           (execute-chatbot-tool bot
+                                 :built-in
+                                 "writeFile"
+                                 `(("pathname" . "notes.txt")
+                                   ("useLfOnly" . t)
+                                   ("endWithEol" . t)
+                                   ("lines" . ,#())))
+           (fiveam:is (string= "" (read-test-file-octets-as-string file-path))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-write-file-rejects-invalid-lines
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "filesystem-tool-write-file-invalid/" temp-dir))
+         (bot (make-instance 'chatbot
+                             :filesystem-tools-p t
+                             :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (unwind-protect
+         (fiveam:signals mcp-tool-execution-error
+           (execute-chatbot-tool bot
+                                 :built-in
+                                 "writeFile"
+                                 `(("pathname" . "notes.txt")
+                                   ("useLfOnly" . t)
+                                   ("endWithEol" . t)
+                                   ("lines" . ,#("Alpha" 3)))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-write-file-rejects-out-of-scope-path
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "filesystem-tool-write-file-scope/" temp-dir))
+         (outside-file (merge-pathnames "outside.txt" temp-dir))
+         (bot (make-instance 'chatbot
+                             :filesystem-tools-p t
+                             :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (unwind-protect
+         (let ((*filesystem-access-approval-function* (lambda (&rest ignored)
+                                                        (declare (ignore ignored))
+                                                        nil)))
+           (fiveam:signals mcp-tool-execution-error
+             (execute-chatbot-tool bot
+                                   :built-in
+                                   "writeFile"
+                                   `(("pathname" . ,(namestring outside-file))
+                                     ("useLfOnly" . t)
+                                     ("endWithEol" . t)
+                                     ("lines" . ,#("Alpha"))))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-delete-file
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "filesystem-tool-delete-file/" temp-dir))
+        (file-path (merge-pathnames "notes.txt" root))
+        (bot (make-instance 'chatbot
+                            :filesystem-tools-p t
+                            :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (with-open-file (s file-path :direction :output :if-exists :supersede)
+      (write-line "Delete me" s))
+    (unwind-protect
+        (progn
+          (fiveam:is (string= "Deleted file: notes.txt"
+                              (execute-chatbot-tool bot
+                                                    :built-in
+                                                    "deleteFile"
+                                                    '(("pathname" . "notes.txt")))))
+          (fiveam:is-false (probe-file file-path)))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-delete-file-rejects-missing-file
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "filesystem-tool-delete-file-missing/" temp-dir))
+        (bot (make-instance 'chatbot
+                            :filesystem-tools-p t
+                            :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (unwind-protect
+        (fiveam:signals mcp-tool-execution-error
+          (execute-chatbot-tool bot
+                                :built-in
+                                "deleteFile"
+                                '(("pathname" . "notes.txt"))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-delete-file-rejects-directory-target
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "filesystem-tool-delete-file-directory/" temp-dir))
+        (dir-path (merge-pathnames "docs/" root))
+        (bot (make-instance 'chatbot
+                            :filesystem-tools-p t
+                            :filesystem-root-directory root)))
+    (ensure-directories-exist dir-path)
+    (unwind-protect
+        (fiveam:signals mcp-tool-execution-error
+          (execute-chatbot-tool bot
+                                :built-in
+                                "deleteFile"
+                                '(("pathname" . "docs"))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-delete-file-rejects-out-of-scope-path
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (root (merge-pathnames "filesystem-tool-delete-file-scope/" temp-dir))
+        (outside-file (merge-pathnames "outside.txt" temp-dir))
+        (bot (make-instance 'chatbot
+                            :filesystem-tools-p t
+                            :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (with-open-file (s outside-file :direction :output :if-exists :supersede)
+      (write-line "Outside" s))
+    (unwind-protect
+        (let ((*filesystem-access-approval-function* (lambda (&rest ignored)
+                                                       (declare (ignore ignored))
+                                                       nil)))
+          (fiveam:signals mcp-tool-execution-error
+            (execute-chatbot-tool bot
+                                  :built-in
+                                  "deleteFile"
+                                  `(("pathname" . ,(namestring outside-file))))))
+      (delete-file outside-file)
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-read-file-lines-prompts-and-persists-approved-directory
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (persona-root (merge-pathnames "filesystem-tool-allowlist-root/" temp-dir))
+        (outside-dir (merge-pathnames "approved-dir/" temp-dir))
+        (file-path (merge-pathnames "notes.txt" outside-dir))
+        (allowlist-path (merge-pathnames "filesystem-allowlist.lisp" persona-root))
+        (bot (make-instance 'chatbot
+                            :filesystem-tools-p t
+                            :filesystem-root-directory persona-root
+                            :filesystem-allowlist-path allowlist-path))
+        (prompted-directory nil))
+    (ensure-directories-exist persona-root)
+    (ensure-directories-exist outside-dir)
+    (with-open-file (s file-path :direction :output :if-exists :supersede)
+      (write-line "Alpha" s)
+      (write-line "Beta" s))
+    (unwind-protect
+        (let ((*filesystem-access-approval-function*
+                (lambda (ignored-bot directory tool-name)
+                  (declare (ignore ignored-bot))
+                  (setf prompted-directory (list (namestring directory) tool-name))
+                  t)))
+          (fiveam:is (string= (format nil "Alpha~%Beta")
+                              (execute-chatbot-tool bot
+                                                    :built-in
+                                                    "readFileLines"
+                                                    `(("filename" . ,(namestring file-path))
+                                                      ("beginningLine" . 1)
+                                                      ("endingLine" . 10)))))
+          (fiveam:is (equal (list (namestring (uiop:ensure-directory-pathname (truename outside-dir)))
+                                  "readFileLines")
+                            prompted-directory))
+          (fiveam:is (equal (list (namestring (uiop:ensure-directory-pathname (truename outside-dir))))
+                            (read-test-lisp-form allowlist-path)))
+          (fiveam:is (equal (list (uiop:ensure-directory-pathname (truename outside-dir)))
+                            (chatbot-filesystem-allowed-directories bot))))
+      (uiop:delete-directory-tree outside-dir :validate t)
+      (uiop:delete-directory-tree persona-root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-directory-allows-nested-approved-directory
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (persona-root (merge-pathnames "filesystem-tool-nested-root/" temp-dir))
+         (approved-dir (merge-pathnames "approved-parent/" temp-dir))
+         (nested-dir (merge-pathnames "child/" approved-dir))
+         (bot (make-instance 'chatbot
+                            :filesystem-tools-p t
+                            :filesystem-root-directory persona-root
+                            :filesystem-allowed-directories (list approved-dir))))
+    (ensure-directories-exist persona-root)
+    (ensure-directories-exist nested-dir)
+    (with-open-file (s (merge-pathnames "alpha.txt" nested-dir) :direction :output :if-exists :supersede)
+      (write-line "Alpha" s))
+    (unwind-protect
+         (fiveam:is (equal (list (enough-namestring (merge-pathnames "alpha.txt" nested-dir)
+                                                   (truename persona-root)))
+                          (coerce (cl-json:decode-json-from-string
+                                   (execute-chatbot-tool bot
+                                                         :built-in
+                                                         "directory"
+                                                         `(("pathname" . ,(namestring nested-dir))
+                                                           ("pattern" . "*.txt"))))
+                                  'list)))
+      (uiop:delete-directory-tree approved-dir :validate t)
+      (uiop:delete-directory-tree persona-root :validate t))))
+
 (fiveam:test test-mcp-tool-list-is-cached
   (let* ((server (make-instance 'mcp-server :name "cached-server"))
-         (call-count 0))
+        (call-count 0))
     (let ((*mcp-send-request-function*
             (lambda (srv method params &key timeout)
               (declare (ignore srv params timeout))
