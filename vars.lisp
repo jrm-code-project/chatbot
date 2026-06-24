@@ -81,6 +81,10 @@
 (defvar *global-token-grand-totals* nil
   "Process-wide cumulative token totals shared across unrelated chats.")
 
+(defvar *global-token-grand-totals-lock*
+  (sb-thread:make-mutex :name "global-token-grand-totals-lock")
+  "Mutex protecting process-wide token grand total updates.")
+
 (defun require-non-empty-string (value context)
   "Returns VALUE when it is a non-empty string, otherwise signals an error for CONTEXT."
   (unless (and (stringp value)

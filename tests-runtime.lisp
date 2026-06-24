@@ -805,6 +805,29 @@ Para two." :width 40 :stream s))))
     (fiveam:is (equal '(:prompt 17 :completion 9 :thought 4 :total 30)
                       (current-global-token-grand-totals)))))
 
+(fiveam:test test-accumulate-global-token-grand-totals-is-thread-safe
+  (reset-global-token-grand-totals)
+  (let* ((thread-count 8)
+         (iterations-per-thread 500)
+         (usage '((:prompt-token-count . 2)
+                  (:candidates-token-count . 3)
+                  (:thoughts-token-count . 1)
+                  (:total-token-count . 6)))
+         (threads
+           (loop repeat thread-count
+                 collect
+                 (sb-thread:make-thread
+                  (lambda ()
+                    (loop repeat iterations-per-thread
+                          do (accumulate-global-token-grand-totals usage)))))))
+    (dolist (thread threads)
+      (sb-thread:join-thread thread))
+    (fiveam:is (equal (list :prompt (* thread-count iterations-per-thread 2)
+                            :completion (* thread-count iterations-per-thread 3)
+                            :thought (* thread-count iterations-per-thread 1)
+                            :total (* thread-count iterations-per-thread 6))
+                      (current-global-token-grand-totals)))))
+
 (fiveam:test test-post-web-request-logging-redacts-secrets
   (let ((*logging-enabled-p* t)
         (*log-level* :info)

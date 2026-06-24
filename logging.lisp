@@ -110,30 +110,38 @@
 
 (defun current-global-token-grand-totals ()
   "Returns the process-wide cumulative token totals plist."
-  (or *global-token-grand-totals*
-      (setf *global-token-grand-totals*
-            (list :prompt 0
-                  :completion 0
-                  :thought 0
-                  :total 0))))
+  (sb-thread:with-mutex (*global-token-grand-totals-lock*)
+    (or *global-token-grand-totals*
+        (setf *global-token-grand-totals*
+              (list :prompt 0
+                    :completion 0
+                    :thought 0
+                    :total 0)))))
 
 (defun reset-global-token-grand-totals ()
   "Resets the process-wide cumulative token totals."
-  (setf *global-token-grand-totals*
-        (list :prompt 0
-              :completion 0
-              :thought 0
-              :total 0)))
+  (sb-thread:with-mutex (*global-token-grand-totals-lock*)
+    (setf *global-token-grand-totals*
+          (list :prompt 0
+                :completion 0
+                :thought 0
+                :total 0))))
 
 (defun accumulate-global-token-grand-totals (usage)
   "Accumulates USAGE into the process-wide cumulative token totals."
-  (let* ((canonical (canonical-usage-token-totals usage))
-         (totals (current-global-token-grand-totals)))
-    (incf (getf totals :prompt) (or (getf canonical :prompt) 0))
-    (incf (getf totals :completion) (or (getf canonical :completion) 0))
-    (incf (getf totals :thought) (or (getf canonical :thought) 0))
-    (incf (getf totals :total) (or (getf canonical :total) 0))
-    totals))
+  (let ((canonical (canonical-usage-token-totals usage)))
+    (sb-thread:with-mutex (*global-token-grand-totals-lock*)
+      (let ((totals (or *global-token-grand-totals*
+                        (setf *global-token-grand-totals*
+                              (list :prompt 0
+                                    :completion 0
+                                    :thought 0
+                                    :total 0)))))
+        (incf (getf totals :prompt) (or (getf canonical :prompt) 0))
+        (incf (getf totals :completion) (or (getf canonical :completion) 0))
+        (incf (getf totals :thought) (or (getf canonical :thought) 0))
+        (incf (getf totals :total) (or (getf canonical :total) 0))
+        totals))))
 
 (defun maybe-log-context-entry (context label value)
   "Appends a log context entry when VALUE is non-nil."
