@@ -7,7 +7,16 @@
   "Returns true when BOT should fall back to Google generateContent on Interactions 404 errors."
   (chatbot-gemini-fallback-to-google-p bot))
 
-(defun chat-gemini (bot input conversation callback &key file-attachments)
+(defun retry-gemini-turn-on-google-gemini-pro-latest (bot input conversation callback
+                                                           &key file-attachments)
+  "Resubmits a Gemini turn through the Google backend on gemini-pro-latest."
+  (retry-on-google-gemini-pro-latest bot
+                                     input
+                                     conversation
+                                     callback
+                                     :file-attachments file-attachments))
+
+(defun chat-gemini (bot input conversation callback &key file-attachments effective-model)
   "Sends user input to the active conversation using the Gemini Interactions API."
   (let ((api-key (gemini-api-key)))
     (unless (and api-key (string/= api-key ""))
@@ -20,6 +29,7 @@
                            :persona-diary-entries (conversation-persona-diary-entries conversation)
                            :previous-interaction-id (conversation-interaction-id conversation)
                            :file-attachments file-attachments
+                           :effective-model effective-model
                            :stream t))
            (payload-json (cl-json:encode-json-to-string payload-alist))
            (url (concatenate 'string *gemini-base-url* "/interactions?alt=sse"))
@@ -29,11 +39,13 @@
            (full-text (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t))
            (active-fn-call nil)
            (function-calls-to-run nil)
-           (completed-usage nil))
+           (completed-usage nil)
+           (completed-stop-reason nil)
+           (completed-interaction-p nil))
       (handler-case
           (multiple-value-bind (stream status)
-              (post-web-request url headers payload-json :want-stream t)
-            (if (= status 200)
+             (post-web-request url headers payload-json :want-stream t)
+           (if (= status 200)
                 (unwind-protect
                      (loop for line = (read-sse-line stream)
                            until (eq line :eof)
@@ -76,12 +88,15 @@
                                          (when id
                                            (setf (conversation-interaction-id conversation) id))
                                          (when (string= event-type "interaction.completed")
+                                           (setf completed-interaction-p t)
                                            (setf completed-usage (cdr (assoc :usage interaction)))
+                                           (setf completed-stop-reason (response-stop-reason interaction))
                                            (log-backend-response-stats
                                             :gemini
                                             :http-status status
                                             :interaction-id id
                                             :model (cdr (assoc :model interaction))
+                                            :finish-reason completed-stop-reason
                                             :usage completed-usage))))
                                       ((string= event-type "interaction.status_update")
                                        (let ((id (cdr (assoc :interaction--id event))))
@@ -96,7 +111,12 @@
                      (search "404" message)
                      (search "not found" message))
                 (return-from chat-gemini
-                  (chat-google bot input conversation callback :file-attachments file-attachments))
+                  (chat-google bot
+                               input
+                               conversation
+                               callback
+                               :file-attachments file-attachments
+                               :effective-model effective-model))
                 (error "Gemini Chat Error: ~A" e)))))
       (if function-calls-to-run
           (let ((results
@@ -120,8 +140,19 @@
                        ("call_id" . ,id)
                        ("result" . ,(list `(("type" . "text")
                                             ("text" . ,(chatbot-tool-error-text name condition))))))))))
-            (chat-gemini bot results conversation callback))
+            (chat-gemini bot results conversation callback :effective-model effective-model))
           (progn
+            (when (and (stringp input)
+                       completed-interaction-p
+                       (or (malformed-response-stop-reason-p completed-stop-reason)
+                          (= 0 (length full-text))))
+              (return-from chat-gemini
+                (retry-gemini-turn-on-google-gemini-pro-latest
+                 bot
+                 input
+                 conversation
+                 callback
+                 :file-attachments file-attachments)))
             (format-paragraphs full-text :width 80)
             (write-turn-token-summary completed-usage)
             (coerce full-text 'string))))))

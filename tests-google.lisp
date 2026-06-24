@@ -24,7 +24,8 @@
                                    (setf callback-called text)))))
         (fiveam:is (string= "Hello from Google non-streaming" res))
         (fiveam:is (string= "Hello from Google non-streaming" callback-called))
-        (fiveam:is (string= "https://example.test/gemini/models/gemini-3.5-flash:generateContent?key=mocked-google-api-key" captured-url))
+        (fiveam:is (string= "https://example.test/gemini/models/gemini-3.5-flash:generateContent" captured-url))
+        (fiveam:is (string= "mocked-google-api-key" (cdr (assoc "x-goog-api-key" captured-headers :test #'string=))))
         (fiveam:is (string= "application/json" (cdr (assoc "Content-Type" captured-headers :test #'string=))))
         (let* ((payload (cl-json:decode-json-from-string captured-content))
               (contents (cdr (assoc :contents payload)))
@@ -51,8 +52,44 @@
                              :runtime-context context)))
         (fiveam:is (string= "Hello from Google non-streaming"
                             (chat "Hi Google" :conversation conv)))
-        (fiveam:is (string= "https://example.test/gemini/models/gemini-prefixed-model:generateContent?key=mocked-google-api-key"
+        (fiveam:is (string= "https://example.test/gemini/models/gemini-prefixed-model:generateContent"
                             captured-url))))))
+
+(fiveam:test test-google-chat-dollar-prefix-overrides-model-for-one-turn
+  (let ((captured-urls nil)
+        (captured-payloads nil)
+        (call-count 0))
+    (let* ((*gemini-base-url* "https://example.test/gemini")
+          (context (make-runtime-context
+                   :gemini-api-key-function (lambda () "mocked-google-api-key")
+                   :http-post-function
+                   (lambda (url &rest args)
+                     (incf call-count)
+                     (push url captured-urls)
+                     (push (getf args :content) captured-payloads)
+                     (values
+                      (if (= call-count 1)
+                          "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"First reply\"}], \"role\": \"model\"}}]}"
+                          "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Second reply\"}], \"role\": \"model\"}}]}")
+                      200))))
+          (conv (new-chat :backend :google :runtime-context context)))
+      (fiveam:is (string= "First reply" (chat "$First turn" :conversation conv)))
+      (fiveam:is (string= "Second reply" (chat "Second turn" :conversation conv)))
+      (fiveam:is (equal '("https://example.test/gemini/models/gemini-pro-latest:generateContent"
+                         "https://example.test/gemini/models/gemini-3.5-flash:generateContent")
+                       (nreverse captured-urls)))
+      (let* ((first-payload (cl-json:decode-json-from-string (second captured-payloads)))
+            (first-contents (cdr (assoc :contents first-payload)))
+            (first-parts (cdr (assoc :parts (first first-contents))))
+            (second-payload (cl-json:decode-json-from-string (first captured-payloads)))
+            (second-contents (cdr (assoc :contents second-payload)))
+            (stored-history (conversation-messages conv)))
+        (fiveam:is (string= "First turn" (cdr (assoc :text (first first-parts)))))
+        (fiveam:is (string= "Second turn"
+                           (cdr (assoc :text (car (cdr (assoc :parts (third second-contents))))))))
+        (fiveam:is (string= "First turn"
+                           (cdr (assoc "content" (first stored-history) :test #'string=))))
+        (fiveam:is (string= "gemini-3.5-flash" (chatbot-model (conversation-chatbot conv))))))))
 
 (fiveam:test test-google-chat-preserves-preloaded-history-every-turn
   (let ((captured-payloads nil))
@@ -345,3 +382,77 @@
         (fiveam:is (search "\"response\":{\"type\":\"tool_error\",\"toolName\":\"get_current_time\",\"message\":\"Mock tool failure\"}"
                            captured-second-request))
         (fiveam:is (string= "Handled tool error" res))))))
+
+(fiveam:test test-google-chat-retries-malformed-response-on-gemini-pro-latest
+  (let* ((bot (make-instance 'chatbot
+                             :backend :google
+                             :model "gemini-3.5-flash"
+                             :include-timestamp-p t
+                             :include-model-p t))
+         (conv (make-instance 'conversation :chatbot bot))
+         (call-count 0)
+         (captured-urls nil)
+         (captured-payloads nil)
+         (prompt-count 0))
+    (let ((*prompt-timestamp-function*
+            (lambda ()
+              (incf prompt-count)
+              (if (= prompt-count 1)
+                  "[08:46 first]"
+                  "[08:46 retry]")))
+          (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+          (*http-post-function*
+            (lambda (url &rest args)
+              (incf call-count)
+              (push url captured-urls)
+              (push (getf args :content) captured-payloads)
+              (values
+               (if (= call-count 1)
+                   "{\"candidates\":[{\"finishReason\":\"MALFORMED_RESPONSE\",\"content\":{\"parts\":[{\"text\":\"Broken\"}],\"role\":\"model\"}}]}"
+                   "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Recovered on retry\"}],\"role\":\"model\"}}]}"
+                   )
+               200))))
+      (let ((res (chat-google bot "Retry me" conv nil)))
+        (fiveam:is (= 2 call-count))
+        (fiveam:is (string= "Recovered on retry" res))
+        (fiveam:is (equal '("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
+                            "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-latest:generateContent")
+                          (nreverse captured-urls)))
+        (let* ((first-payload (cl-json:decode-json-from-string (second captured-payloads)))
+               (first-contents (cdr (assoc :contents first-payload)))
+               (retry-payload (cl-json:decode-json-from-string (first captured-payloads)))
+               (retry-contents (cdr (assoc :contents retry-payload))))
+          (fiveam:is (string= "[08:46 first] [model: gemini-3.5-flash] Retry me"
+                              (cdr (assoc :text
+                                          (car (cdr (assoc :parts (first first-contents))))))))
+          (fiveam:is (string= "[08:46 retry] [model: gemini-pro-latest] Retry me"
+                              (cdr (assoc :text
+                                          (car (cdr (assoc :parts (first retry-contents))))))))
+          (fiveam:is-false
+           (search "[model: gemini-3.5-flash]"
+                   (cdr (assoc :text
+                               (car (cdr (assoc :parts (first retry-contents)))))))))))))
+
+(fiveam:test test-google-chat-retries-no-text-response-on-gemini-pro-latest
+  (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
+         (conv (make-instance 'conversation :chatbot bot))
+         (call-count 0)
+         (captured-urls nil))
+    (let ((*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+          (*http-post-function*
+            (lambda (url &rest args)
+              (declare (ignore args))
+              (incf call-count)
+              (push url captured-urls)
+              (values
+               (if (= call-count 1)
+                   "{\"candidates\":[{\"content\":{\"parts\":[{}],\"role\":\"model\"}}]}"
+                   "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Recovered after empty response\"}],\"role\":\"model\"}}]}"
+                   )
+               200))))
+      (let ((res (chat-google bot "Retry empty" conv nil)))
+        (fiveam:is (= 2 call-count))
+        (fiveam:is (string= "Recovered after empty response" res))
+        (fiveam:is (equal '("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
+                            "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-latest:generateContent")
+                          (nreverse captured-urls)))))))

@@ -56,10 +56,10 @@
                     (cons "content" (persona-diary-entry-message-text entry))))
             entries)))
 
-(defun build-request-history-messages (messages input &key chatbot persona-memory persona-diary-entries)
+(defun build-request-history-messages (messages input &key chatbot persona-memory persona-diary-entries effective-model)
   "Builds request history by prepending persona preload ahead of ordinary MESSAGES and INPUT."
   (append (persona-memory-messages persona-memory)
           (persona-diary-messages persona-diary-entries)
           (append-user-input-to-conversation-messages
            messages
-           (decorate-live-user-input chatbot input))))
+           (decorate-live-user-input chatbot input :effective-model effective-model))))

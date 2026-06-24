@@ -3,10 +3,11 @@
 
 (in-package "CHATBOT")
 
-(defun interaction-live-user-input-parts (chatbot input file-attachments)
+(defun interaction-live-user-input-parts (chatbot input file-attachments &key effective-model)
   "Builds the Interactions API content parts for the current live user turn."
   (let ((parts nil)
-        (decorated-input (decorate-live-user-input chatbot input)))
+        (decorated-input (decorate-live-user-input chatbot input
+                                                  :effective-model effective-model)))
     (when (and (stringp decorated-input)
                (string/= decorated-input ""))
       (push `(("type" . "text") ("text" . ,decorated-input)) parts))
@@ -14,11 +15,15 @@
       (push (make-interaction-file-part attachment) parts))
     (nreverse parts)))
 
-(defun interaction-live-user-input-value (chatbot input file-attachments)
+(defun interaction-live-user-input-value (chatbot input file-attachments &key effective-model)
   "Builds the Interactions API input value for the current live user turn."
   (if file-attachments
-      (coerce (interaction-live-user-input-parts chatbot input file-attachments) 'vector)
-      (decorate-live-user-input chatbot input)))
+      (coerce (interaction-live-user-input-parts chatbot
+                                                 input
+                                                 file-attachments
+                                                 :effective-model effective-model)
+              'vector)
+      (decorate-live-user-input chatbot input :effective-model effective-model)))
 
 (defun interaction-request-tools (chatbot)
   "Builds the Gemini Interactions tool list for CHATBOT, including built-in and MCP tools."
@@ -49,15 +54,18 @@
       `(("type" . ,(if (assistant-like-role-p role) "model_output" "user_input"))
         ("content" . ,(vector `(("type" . "text") ("text" . ,content))))))))
 
-(defun build-initial-interaction-input (messages input &key chatbot persona-memory persona-diary-entries file-attachments)
+(defun build-initial-interaction-input (messages input &key chatbot persona-memory persona-diary-entries file-attachments effective-model)
   "Builds the first-turn Interactions API input with any preloaded history."
   (let* ((history-messages (append (persona-memory-messages persona-memory)
                                    (persona-diary-messages persona-diary-entries)))
-         (request-input (interaction-live-user-input-parts chatbot input file-attachments)))
+         (request-input (interaction-live-user-input-parts chatbot
+                                                          input
+                                                          file-attachments
+                                                          :effective-model effective-model)))
     (if (and (null (append history-messages messages))
              (null file-attachments)
              (stringp input))
-        (decorate-live-user-input chatbot input)
+        (decorate-live-user-input chatbot input :effective-model effective-model)
         (if (or (append history-messages messages) request-input)
             (coerce
              (append
@@ -67,22 +75,27 @@
                 (list `(("type" . "user_input")
                         ("content" . ,(coerce request-input 'vector))))))
              'vector)
-            (decorate-live-user-input chatbot input)))))
+            (decorate-live-user-input chatbot input :effective-model effective-model)))))
 
-(defun make-interaction-payload (chatbot input &key previous-interaction-id (stream t) messages persona-memory persona-diary-entries file-attachments)
+(defun make-interaction-payload (chatbot input &key previous-interaction-id (stream t) messages persona-memory persona-diary-entries file-attachments effective-model)
   "Creates a JSON-serializable alist payload for the Gemini Interactions API."
-  (let ((payload (list (cons "model" (chatbot-model chatbot))
-                       (cons "input" (if previous-interaction-id
+  (let ((payload (list (cons "model" (or effective-model
+                                        (chatbot-model chatbot)))
+                      (cons "input" (if previous-interaction-id
                                          (if (and file-attachments
                                                   (stringp input))
-                                             (interaction-live-user-input-value chatbot input file-attachments)
-                                             (decorate-live-user-input chatbot input))
+                                             (interaction-live-user-input-value chatbot
+                                                                                input
+                                                                                file-attachments
+                                                                                :effective-model effective-model)
+                                             (decorate-live-user-input chatbot input :effective-model effective-model))
                                          (build-initial-interaction-input messages
                                                                           input
                                                                           :chatbot chatbot
                                                                           :persona-memory persona-memory
                                                                           :persona-diary-entries persona-diary-entries
-                                                                          :file-attachments file-attachments)))
+                                                                          :file-attachments file-attachments
+                                                                          :effective-model effective-model)))
                        (cons "stream" (if stream t :false))
                        (cons "store" t))))
     (when previous-interaction-id

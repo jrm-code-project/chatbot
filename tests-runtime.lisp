@@ -440,20 +440,25 @@
 
 (fiveam:test test-gemini-chat-falls-back-on-interactions-404
   (let ((conv (new-chat :backend :gemini :gemini-fallback-to-google-p t))
-        (calls '()))
+       (calls '())
+       (fallback-headers nil))
     (let ((*gemini-api-key-function* (lambda () "mocked-google-api-key"))
-          (*http-post-function*
+         (*http-post-function*
             (lambda (url &rest args)
-              (declare (ignore args))
               (push url calls)
               (if (search "/interactions?alt=sse" url)
                   (error "An HTTP request to \"~A\" returned 404 not found.~%~%{\"error\":{\"message\":\"Requested entity was not found.\",\"code\":\"not_found\"}}" url)
-                  (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from fallback\"}], \"role\": \"model\"}}]}" 200)))))
+                  (progn
+                    (setf fallback-headers (getf args :headers))
+                    (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from fallback\"}], \"role\": \"model\"}}]}" 200))))))
       (let ((res (chat "Hi fallback" :conversation conv)))
         (fiveam:is (string= "Hello from fallback" res))
         (fiveam:is (= 2 (length calls)))
         (fiveam:is (search "/interactions?alt=sse" (second calls)))
-        (fiveam:is (search ":generateContent?key=mocked-google-api-key" (first calls)))))))
+        (fiveam:is (search ":generateContent" (first calls)))
+        (fiveam:is-false (search "?key=" (first calls)))
+        (fiveam:is (string= "mocked-google-api-key"
+                            (cdr (assoc "x-goog-api-key" fallback-headers :test #'string=))))))))
 
 (fiveam:test test-gemini-chat-does-not-fall-back-by-default-on-interactions-404
   (let ((conv (new-chat :backend :gemini))
@@ -502,6 +507,113 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (fiveam:is (null (search "\"previous_interaction_id\"" first-payload)))
         (fiveam:is (search "\"input\":\"Second turn\"" second-payload))
         (fiveam:is (search "\"previous_interaction_id\":\"session-1\"" second-payload))))))
+
+(fiveam:test test-gemini-chat-dollar-prefix-overrides-model-for-one-turn
+  (let ((conv (new-chat :backend :gemini))
+        (captured-payloads nil)
+        (call-count 0))
+    (let* ((*get-all-mcp-tools-function* (lambda (bot)
+                                          (declare (ignore bot))
+                                          nil))
+           (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+           (*http-post-function*
+             (lambda (url &rest args)
+               (declare (ignore url))
+               (incf call-count)
+               (push (getf args :content) captured-payloads)
+               (values
+                (make-string-input-stream
+                 (if (= call-count 1)
+                     "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Hello one\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-pro-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}"
+                     "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Hello two\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-3.5-flash\",\"usage\":{\"total_input_tokens\":2,\"total_output_tokens\":1,\"total_tokens\":3}}}"))
+                200))))
+      (fiveam:is (string= "Hello one" (chat "$First turn" :conversation conv)))
+      (fiveam:is (string= "Hello two" (chat "Second turn" :conversation conv)))
+      (let ((first-payload (second captured-payloads))
+            (second-payload (first captured-payloads)))
+        (fiveam:is (search "\"model\":\"gemini-pro-latest\"" first-payload))
+        (fiveam:is (search "\"input\":\"First turn\"" first-payload))
+        (fiveam:is-false (search "\\$First turn" first-payload))
+        (fiveam:is (search "\"model\":\"gemini-3.5-flash\"" second-payload))
+        (fiveam:is (search "\"input\":\"Second turn\"" second-payload))
+        (fiveam:is (string= "gemini-3.5-flash" (chatbot-model (conversation-chatbot conv))))))))
+
+(fiveam:test test-gemini-chat-retries-malformed-response-on-google-gemini-pro-latest
+  (let ((conv (new-chat :backend :gemini :include-timestamp-p t :include-model-p t))
+        (captured-urls nil)
+        (captured-google-payload nil)
+        (captured-gemini-payload nil)
+        (call-count 0)
+        (prompt-count 0))
+    (let* ((*prompt-timestamp-function*
+             (lambda ()
+               (incf prompt-count)
+               (cond
+                 ((= prompt-count 1) "[08:46 seed]")
+                 ((= prompt-count 2) "[08:46 gemini]")
+                 (t "[08:46 retry]"))))
+           (*get-all-mcp-tools-function* (lambda (bot)
+                                          (declare (ignore bot))
+                                          nil))
+           (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+           (*http-post-function*
+             (lambda (url &rest args)
+               (incf call-count)
+               (push url captured-urls)
+               (if (search "/interactions?alt=sse" url)
+                   (progn
+                     (setf captured-gemini-payload (getf args :content))
+                     (values
+                      (make-string-input-stream
+                       "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-3.5-flash\",\"stopReason\":\"MALFORMED_RESPONSE\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
+                      200))
+                   (progn
+                     (setf captured-google-payload (getf args :content))
+                     (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Recovered from Gemini malformed response\"}], \"role\": \"model\"}}]}" 200))))))
+      (let ((res (chat "Retry this" :conversation conv)))
+        (fiveam:is (= 2 call-count))
+        (fiveam:is (string= "Recovered from Gemini malformed response" res))
+        (fiveam:is (search "/interactions?alt=sse" (second captured-urls)))
+        (fiveam:is (search "/models/gemini-pro-latest:generateContent" (first captured-urls)))
+        (fiveam:is (search "\"input\":\"[08:46 gemini] [model: gemini-3.5-flash] Retry this\""
+                           captured-gemini-payload))
+        (fiveam:is (search "\"text\":\"[08:46 retry] [model: gemini-pro-latest] Retry this\""
+                           captured-google-payload))
+        (fiveam:is-false (search "[model: gemini-3.5-flash] Retry this" captured-google-payload))))))
+
+(fiveam:test test-gemini-chat-retries-empty-response-on-google-gemini-pro-latest
+  (let ((conv (new-chat :backend :gemini))
+        (captured-urls nil)
+        (captured-google-payload nil)
+        (call-count 0))
+    (let* ((*get-all-mcp-tools-function* (lambda (bot)
+                                          (declare (ignore bot))
+                                          nil))
+           (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+           (*http-post-function*
+             (lambda (url &rest args)
+               (incf call-count)
+               (push url captured-urls)
+               (if (search "/interactions?alt=sse" url)
+                   (values
+                    (make-string-input-stream
+                     "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-3.5-flash\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":0,\"total_tokens\":1}}}")
+                    200)
+                   (progn
+                     (setf captured-google-payload (getf args :content))
+                     (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Recovered from Gemini empty response\"}], \"role\": \"model\"}}]}" 200))))))
+      (let ((res (chat "Retry empty" :conversation conv)))
+        (fiveam:is (= 2 call-count))
+        (fiveam:is (string= "Recovered from Gemini empty response" res))
+        (fiveam:is (search "/interactions?alt=sse" (second captured-urls)))
+        (fiveam:is (search "/models/gemini-pro-latest:generateContent" (first captured-urls)))
+        (fiveam:is (search "\"text\":\"Retry empty\"" captured-google-payload))))))
 
 (fiveam:test test-gemini-tool-call-errors-are-reported-back-to-the-model
   (let ((conv (new-chat :backend :gemini))

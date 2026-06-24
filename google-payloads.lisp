@@ -7,10 +7,11 @@
   "Normalizes a stored conversation ROLE for Google generateContent."
   (if (assistant-like-role-p role) "model" "user"))
 
-(defun generate-content-live-user-message (chatbot input file-attachments)
+(defun generate-content-live-user-message (chatbot input file-attachments &key effective-model)
   "Builds the transient current user message for generateContent requests."
   (let ((parts nil)
-        (decorated-input (decorate-live-user-input chatbot input)))
+        (decorated-input (decorate-live-user-input chatbot input
+                                                  :effective-model effective-model)))
     (when (and (stringp decorated-input)
                (string/= decorated-input ""))
       (push (list (cons "text" decorated-input)) parts))
@@ -21,14 +22,18 @@
               (cons "parts" (coerce (nreverse parts) 'vector)))
         nil)))
 
-(defun build-generate-content-request-contents (messages input &key chatbot persona-memory persona-diary-entries file-attachments)
+(defun build-generate-content-request-contents (messages input &key chatbot persona-memory persona-diary-entries file-attachments effective-model)
   "Builds the Google generateContent contents list for the current turn."
   (let ((history (build-request-history-messages messages
                                                  nil
                                                  :chatbot chatbot
                                                  :persona-memory persona-memory
-                                                 :persona-diary-entries persona-diary-entries))
-        (current-user-message (generate-content-live-user-message chatbot input file-attachments)))
+                                                 :persona-diary-entries persona-diary-entries
+                                                 :effective-model effective-model))
+        (current-user-message (generate-content-live-user-message chatbot
+                                                                 input
+                                                                 file-attachments
+                                                                 :effective-model effective-model)))
     (append
      (mapcar (lambda (msg)
                (let ((role (cdr (assoc "role" msg :test #'string=)))

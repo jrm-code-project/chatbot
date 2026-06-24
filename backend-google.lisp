@@ -10,8 +10,35 @@
       (subseq model (length "models/"))
       model))
 
+(defun malformed-response-stop-reason-p (stop-reason)
+  "Returns true when STOP-REASON indicates the provider malformed the response."
+  (and stop-reason
+       (string-equal (princ-to-string stop-reason) "MALFORMED_RESPONSE")))
+
+(defun response-stop-reason (value)
+  "Returns a stop or finish reason from VALUE when present."
+  (or (mcp-val :finish-reason value)
+      (mcp-val :finish_reason value)
+      (mcp-val "finishReason" value)
+      (mcp-val :stop-reason value)
+      (mcp-val :stop_reason value)
+      (mcp-val "stopReason" value)))
+
+(defun retry-on-google-gemini-pro-latest (bot input conversation callback
+                                             &key file-attachments request-contents history-messages)
+  "Resubmits the current turn through the Google backend on gemini-pro-latest."
+  (declare (ignore request-contents history-messages))
+  (chat-google bot
+               input
+               conversation
+               callback
+               :file-attachments file-attachments
+               :effective-model +google-gemini-model-override-model+
+               :malformed-response-fallback-attempted-p t))
+
 (defun chat-google (bot input conversation callback
-                   &key file-attachments request-contents history-messages)
+                   &key file-attachments request-contents history-messages effective-model
+                     malformed-response-fallback-attempted-p)
   "Sends user input to the active conversation using Google's non-streaming generateContent API."
   (let ((api-key (gemini-api-key)))
     (unless (and api-key (string/= api-key ""))
@@ -28,17 +55,19 @@
                                                                       :chatbot bot
                                                                       :persona-memory persona-memory
                                                                       :persona-diary-entries persona-diary-entries
-                                                                      :file-attachments file-attachments)))
+                                                                      :file-attachments file-attachments
+                                                                      :effective-model effective-model)))
            (contents (coerce contents-list 'vector))
            (gemini-tools (generate-content-request-tools bot))
            (payload-alist (list (cons "contents" contents)))
            (url (concatenate 'string
                              *gemini-base-url*
                              "/models/"
-                             (generate-content-model-name (chatbot-model bot))
-                             ":generateContent?key="
-                             api-key))
-           (headers (list (cons "Content-Type" "application/json"))))
+                             (generate-content-model-name (or effective-model
+                                                              (chatbot-model bot)))
+                             ":generateContent"))
+           (headers (list (cons "x-goog-api-key" api-key)
+                          (cons "Content-Type" "application/json"))))
       (when system-inst
         (setf payload-alist
               (append payload-alist
@@ -75,6 +104,19 @@
                      :finish-reason finish-reason
                      :usage usage)
                     (cond
+                      ((and (not malformed-response-fallback-attempted-p)
+                            (not (string-equal (or effective-model
+                                                   (chatbot-model bot))
+                                               +google-gemini-model-override-model+))
+                            (malformed-response-stop-reason-p finish-reason))
+                       (retry-on-google-gemini-pro-latest
+                        bot
+                        input
+                        conversation
+                        callback
+                        :file-attachments file-attachments
+                        :request-contents request-contents
+                        :history-messages history-messages))
                       (fn-call
                        (let* ((name (cdr (assoc :name fn-call)))
                               (raw-args (cdr (assoc :args fn-call)))
@@ -107,10 +149,26 @@
                                            callback
                                            :history-messages recursive-history
                                            :request-contents (append contents-list recursion-messages)
-                                           :file-attachments file-attachments))))))
+                                           :file-attachments file-attachments
+                                           :effective-model effective-model
+                                           :malformed-response-fallback-attempted-p malformed-response-fallback-attempted-p))))))
                       (t
-                       (unless final-str
-                         (error "No text returned from Gemini API response: ~A" response-body))
+                       (unless (and (stringp final-str)
+                                    (string/= final-str ""))
+                         (if (and (not malformed-response-fallback-attempted-p)
+                                  (not (string-equal (or effective-model
+                                                         (chatbot-model bot))
+                                                     +google-gemini-model-override-model+)))
+                             (return-from chat-google
+                               (retry-on-google-gemini-pro-latest
+                                bot
+                                input
+                                conversation
+                                callback
+                                :file-attachments file-attachments
+                                :request-contents request-contents
+                                :history-messages history-messages))
+                             (error "No text returned from Gemini API response: ~A" response-body)))
                        (format-paragraphs final-str :width 80)
                        (write-turn-token-summary usage)
                        (when callback

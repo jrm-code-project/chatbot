@@ -25,11 +25,30 @@
 (defvar *prompt-timestamp-function* #'default-prompt-timestamp-function
   "Function used to generate the current prompt timestamp string.")
 
+(defparameter +google-gemini-model-override-marker+ #\$
+  "Leading prompt marker that requests the Gemini Pro override model for one turn.")
+
+(defparameter +google-gemini-model-override-model+ "gemini-pro-latest"
+  "Temporary model used when a Google or Gemini prompt starts with the override marker.")
+
 (defun format-prompt-model-indicator (model)
   "Formats MODEL as a prompt prefix like [model: gemini-3-flash]."
   (format nil "[model: ~A]" model))
 
-(defun decorate-live-user-input (chatbot input)
+(defun resolve-prompt-model-override (chatbot input)
+  "Returns INPUT with any supported per-turn model override marker removed.
+
+When INPUT starts with the override marker for the Google or Gemini backends,
+also returns the effective model name to use for that turn."
+  (let ((backend (and chatbot (chatbot-backend chatbot))))
+    (if (and (stringp input)
+             (> (length input) 0)
+             (char= (char input 0) +google-gemini-model-override-marker+)
+             (member backend '(:gemini :google)))
+        (values (subseq input 1) +google-gemini-model-override-model+)
+        (values input nil))))
+
+(defun decorate-live-user-input (chatbot input &key effective-model)
   "Decorates string INPUT with transient prompt prefixes requested by CHATBOT."
   (if (and chatbot
            (stringp input))
@@ -37,7 +56,9 @@
         (when (chatbot-include-timestamp-p chatbot)
           (push (funcall *prompt-timestamp-function*) parts))
         (when (chatbot-include-model-p chatbot)
-          (push (format-prompt-model-indicator (chatbot-model chatbot)) parts))
+          (push (format-prompt-model-indicator (or effective-model
+                                                  (chatbot-model chatbot)))
+                parts))
         (if parts
             (format nil "~{~A~^ ~} ~A" (nreverse parts) input)
             input))

@@ -24,12 +24,26 @@ Returns the complete response text."
                                        (prepare-chat-file-attachments effective-files))))
        (case (chatbot-backend bot)
          (:gemini
-          (chat-gemini bot input conversation callback :file-attachments file-attachments))
+          (multiple-value-bind (effective-input effective-model)
+                (resolve-prompt-model-override bot input)
+            (chat-gemini bot
+                           effective-input
+                           conversation
+                           callback
+                           :file-attachments file-attachments
+                           :effective-model effective-model)))
          (:openai
           (chat-openai bot input conversation callback :file-attachments file-attachments))
          (:lm-studio
           (chat-openai bot input conversation callback :file-attachments file-attachments))
          (:google
-          (chat-google bot input conversation callback :file-attachments file-attachments))
+          (multiple-value-bind (effective-input effective-model)
+                (resolve-prompt-model-override bot input)
+            (chat-google bot
+                           effective-input
+                           conversation
+                           callback
+                           :file-attachments file-attachments
+                           :effective-model effective-model)))
          (t
           (error "Unknown chatbot backend: ~S" (chatbot-backend bot))))))))))

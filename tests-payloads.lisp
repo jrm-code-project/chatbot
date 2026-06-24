@@ -223,6 +223,23 @@
   (fiveam:is (string= "[model: gemini-3-flash]"
                       (format-prompt-model-indicator "gemini-3-flash"))))
 
+(fiveam:test test-resolve-prompt-model-override-only-for-google-and-gemini
+  (let ((gemini-bot (make-instance 'chatbot :backend :gemini :model "gemini-3.5-flash"))
+        (google-bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
+        (openai-bot (make-instance 'chatbot :backend :openai :model "gpt-4o")))
+    (multiple-value-bind (input effective-model)
+        (resolve-prompt-model-override gemini-bot "$Hello")
+      (fiveam:is (string= "Hello" input))
+      (fiveam:is (string= "gemini-pro-latest" effective-model)))
+    (multiple-value-bind (input effective-model)
+        (resolve-prompt-model-override google-bot "$Hello")
+      (fiveam:is (string= "Hello" input))
+      (fiveam:is (string= "gemini-pro-latest" effective-model)))
+    (multiple-value-bind (input effective-model)
+        (resolve-prompt-model-override openai-bot "$Hello")
+      (fiveam:is (string= "$Hello" input))
+      (fiveam:is (null effective-model)))))
+
 (fiveam:test test-request-history-prefixes-current-input-with-timestamp-only
   (let* ((bot (make-instance 'chatbot
                              :model "gemini-3.5-flash"
@@ -267,6 +284,17 @@
                         (cdr (assoc "content" (first stored-messages) :test #'string=))))
     (fiveam:is (string= "Earlier answer"
                         (cdr (assoc "content" (second stored-messages) :test #'string=))))))
+
+(fiveam:test test-request-history-prefixes-current-input-with-overridden-model
+  (let* ((bot (make-instance 'chatbot
+                            :model "gemini-3.5-flash"
+                            :include-model-p t))
+        (request-messages (build-request-history-messages nil
+                                                          "Hello"
+                                                          :chatbot bot
+                                                          :effective-model "gemini-pro-latest")))
+    (fiveam:is (string= "[model: gemini-pro-latest] Hello"
+                       (cdr (assoc "content" (first request-messages) :test #'string=))))))
 
 (fiveam:test test-initial-interaction-payload-includes-diary-preload
   (let ((bot (make-instance 'chatbot :model "gemini-3.5-flash")))
