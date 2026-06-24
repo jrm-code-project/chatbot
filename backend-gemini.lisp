@@ -12,16 +12,18 @@
   (setf (conversation-interaction-id conversation) original-interaction-id))
 
 (defun retry-gemini-turn-on-google-gemini-pro-latest (bot input conversation callback
-                                                           &key file-attachments)
+                                                           &key file-attachments (recursion-depth 0))
   "Resubmits a Gemini turn through the Google backend on gemini-pro-latest."
   (retry-on-google-gemini-pro-latest bot
                                      input
                                      conversation
                                      callback
-                                     :file-attachments file-attachments))
+                                     :file-attachments file-attachments
+                                     :recursion-depth recursion-depth))
 
-(defun chat-gemini (bot input conversation callback &key file-attachments effective-model)
+(defun chat-gemini (bot input conversation callback &key file-attachments effective-model (recursion-depth 0))
   "Sends user input to the active conversation using the Gemini Interactions API."
+  (ensure-chatbot-tool-recursion-depth :gemini recursion-depth)
   (let ((api-key (gemini-api-key)))
     (unless (and api-key (string/= api-key ""))
       (error "Gemini API Key is not set. Please ensure (gemini-api-key) is configured."))
@@ -49,69 +51,74 @@
            (completed-stop-reason nil)
            (completed-interaction-p nil))
       (handler-case
-          (multiple-value-bind (stream status)
-              (post-web-request url headers payload-json :want-stream t)
-            (if (= status 200)
-                (unwind-protect
-                     (loop for line = (read-sse-line stream
-                                                    :timeout-seconds stream-read-timeout
-                                                    :timeout-context "Gemini streaming response")
-                           until (eq line :eof)
-                           do (let ((event (parse-sse-event line)))
-                                (when event
-                                  (let ((event-type (cdr (assoc :event--type event))))
-                                    (cond
-                                      ((string= event-type "step.start")
-                                       (let* ((step (cdr (assoc :step event)))
-                                              (type (cdr (assoc :type step)))
-                                              (id (cdr (assoc :id step)))
-                                              (name (cdr (assoc :name step))))
-                                         (when (string= type "function_call")
-                                           (setf active-fn-call
-                                                 (list (cons :id id)
-                                                       (cons :name name)
-                                                       (cons :arguments (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t)))))))
-                                      ((string= event-type "step.delta")
-                                       (let* ((delta (cdr (assoc :delta event)))
-                                              (delta-type (cdr (assoc :type delta)))
-                                              (delta-text (cdr (assoc :text delta)))
-                                              (delta-args (cdr (assoc :arguments delta))))
-                                         (cond
-                                           ((and (string= delta-type "text") (stringp delta-text))
-                                            (loop for char across delta-text
-                                                  do (vector-push-extend char full-text))
-                                            (when callback
-                                              (funcall callback delta-text)))
-                                           ((and active-fn-call delta-args)
-                                            (loop for char across delta-args
-                                                  do (vector-push-extend char (cdr (assoc :arguments active-fn-call))))))))
-                                      ((string= event-type "step.stop")
-                                       (when active-fn-call
-                                         (push active-fn-call function-calls-to-run)
-                                         (setf active-fn-call nil)))
-                                      ((or (string= event-type "interaction.created")
-                                           (string= event-type "interaction.completed"))
-                                       (let* ((interaction (cdr (assoc :interaction event)))
-                                              (id (cdr (assoc :id interaction))))
-                                         (when id
-                                           (setf (conversation-interaction-id conversation) id))
-                                         (when (string= event-type "interaction.completed")
-                                           (setf completed-interaction-p t)
-                                           (setf completed-usage (cdr (assoc :usage interaction)))
-                                           (setf completed-stop-reason (response-stop-reason interaction))
-                                           (log-backend-response-stats
-                                            :gemini
-                                            :http-status status
-                                            :interaction-id id
-                                            :model (cdr (assoc :model interaction))
-                                            :finish-reason completed-stop-reason
-                                            :usage completed-usage))))
-                                      ((string= event-type "interaction.status_update")
-                                       (let ((id (cdr (assoc :interaction--id event))))
-                                         (when id
-                                           (setf (conversation-interaction-id conversation) id)))))))))
-                  (close stream))
-                (error "API responded with HTTP status ~A" status)))
+          (funcall
+           (lambda ()
+             (multiple-value-bind (stream status)
+                (post-web-request url headers payload-json :want-stream t)
+              (unless (= status 200)
+                (error "API responded with HTTP status ~A" status))
+              (unwind-protect
+                   (loop for line = (read-sse-line stream
+                                                  :timeout-seconds stream-read-timeout
+                                                  :timeout-context "Gemini streaming response")
+                         until (eq line :eof)
+                         do (let ((event (parse-sse-event line)))
+                              (when event
+                                (let ((event-type (cdr (assoc :event--type event))))
+                                  (cond
+                                    ((string= event-type "step.start")
+                                     (let* ((step (cdr (assoc :step event)))
+                                            (type (cdr (assoc :type step)))
+                                            (id (cdr (assoc :id step)))
+                                            (name (cdr (assoc :name step))))
+                                       (when (string= type "function_call")
+                                         (setf active-fn-call
+                                               (list (cons :id id)
+                                                     (cons :name name)
+                                                     (cons :arguments (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t)))))))
+                                    ((string= event-type "step.delta")
+                                     (let* ((delta (cdr (assoc :delta event)))
+                                            (delta-type (cdr (assoc :type delta)))
+                                            (delta-text (cdr (assoc :text delta)))
+                                            (delta-args (cdr (assoc :arguments delta))))
+                                       (cond
+                                         ((and (string= delta-type "text") (stringp delta-text))
+                                          (loop for char across delta-text
+                                                do (vector-push-extend char full-text))
+                                          (when callback
+                                            (funcall callback delta-text)))
+                                         ((and active-fn-call delta-args)
+                                          (loop for char across delta-args
+                                                do (vector-push-extend char (cdr (assoc :arguments active-fn-call))))))))
+                                    ((string= event-type "step.stop")
+                                     (when active-fn-call
+                                       (push active-fn-call function-calls-to-run)
+                                       (setf active-fn-call nil)))
+                                    ((or (string= event-type "interaction.created")
+                                         (string= event-type "interaction.completed"))
+                                     (let* ((interaction (cdr (assoc :interaction event)))
+                                            (id (cdr (assoc :id interaction))))
+                                       (when id
+                                         (setf (conversation-interaction-id conversation) id))
+                                       (when (string= event-type "interaction.completed")
+                                         (setf completed-interaction-p t)
+                                         (setf completed-usage (cdr (assoc :usage interaction)))
+                                         (setf completed-stop-reason (response-stop-reason interaction))
+                                         (log-backend-response-stats
+                                          :gemini
+                                          :http-status status
+                                          :interaction-id id
+                                          :model (cdr (assoc :model interaction))
+                                          :finish-reason completed-stop-reason
+                                          :usage completed-usage))))
+                                    ((string= event-type "interaction.status_update")
+                                     (let ((id (cdr (assoc :interaction--id event))))
+                                       (when id
+                                         (setf (conversation-interaction-id conversation) id)))))))))
+                (close stream)))))
+        (chatbot-tool-recursion-limit-error (e)
+          (restore-gemini-interaction-id conversation original-interaction-id)
+          (error e))
         (error (e)
           (let ((message (string-downcase (princ-to-string e))))
             (restore-gemini-interaction-id conversation original-interaction-id)
@@ -125,7 +132,8 @@
                                conversation
                                callback
                                :file-attachments file-attachments
-                               :effective-model effective-model))
+                               :effective-model effective-model
+                               :recursion-depth recursion-depth))
                 (error "Gemini Chat Error: ~A" e)))))
       (if function-calls-to-run
           (let ((results
@@ -149,7 +157,14 @@
                        ("call_id" . ,id)
                        ("result" . ,(list `(("type" . "text")
                                             ("text" . ,(chatbot-tool-error-text name condition))))))))))
-            (chat-gemini bot results conversation callback :effective-model effective-model))
+            (chat-gemini bot
+                         results
+                         conversation
+                         callback
+                         :effective-model effective-model
+                         :recursion-depth (next-chatbot-tool-recursion-depth
+                                           :gemini
+                                           recursion-depth)))
           (progn
             (when (and (stringp input)
                        completed-interaction-p
@@ -162,7 +177,8 @@
                  input
                  conversation
                  callback
-                 :file-attachments file-attachments)))
+                 :file-attachments file-attachments
+                 :recursion-depth recursion-depth)))
             (format-paragraphs full-text :width 80)
             (write-turn-token-summary completed-usage)
             (coerce full-text 'string))))))

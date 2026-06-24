@@ -3,6 +3,35 @@
 
 (in-package "CHATBOT")
 
+(defparameter +max-chatbot-tool-recursion-depth+ 16
+  "Maximum number of recursive tool-calling backend continuations allowed in one turn.")
+
+(define-condition chatbot-tool-recursion-limit-error (error)
+  ((backend :initarg :backend :reader chatbot-tool-recursion-limit-error-backend)
+   (depth :initarg :depth :reader chatbot-tool-recursion-limit-error-depth)
+   (max-depth :initarg :max-depth :reader chatbot-tool-recursion-limit-error-max-depth))
+  (:report (lambda (condition stream)
+             (format stream
+                     "Tool recursion depth limit exceeded for backend ~A at depth ~D (max ~D)."
+                     (chatbot-tool-recursion-limit-error-backend condition)
+                     (chatbot-tool-recursion-limit-error-depth condition)
+                     (chatbot-tool-recursion-limit-error-max-depth condition)))))
+
+(defun ensure-chatbot-tool-recursion-depth (backend recursion-depth
+                                            &optional (max-depth +max-chatbot-tool-recursion-depth+))
+  "Signals a clean condition when RECURSION-DEPTH has reached MAX-DEPTH."
+  (when (>= recursion-depth max-depth)
+    (error 'chatbot-tool-recursion-limit-error
+           :backend backend
+           :depth recursion-depth
+           :max-depth max-depth))
+  recursion-depth)
+
+(defun next-chatbot-tool-recursion-depth (backend recursion-depth
+                                          &optional (max-depth +max-chatbot-tool-recursion-depth+))
+  "Returns the next recursion depth after first enforcing MAX-DEPTH."
+  (1+ (ensure-chatbot-tool-recursion-depth backend recursion-depth max-depth)))
+
 (defun append-user-input-to-conversation-messages (messages input)
   "Returns MESSAGES with the current user INPUT appended when present."
   (if input

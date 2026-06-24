@@ -689,6 +689,41 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (fiveam:is (search "\\\"toolName\\\":\\\"echo_tool\\\"" second-payload))
         (fiveam:is (search "\\\"message\\\":\\\"Mock tool failure\\\"" second-payload))))))
 
+(fiveam:test test-gemini-tool-recursion-depth-is-capped
+  (let ((conv (new-chat :backend :gemini))
+        (call-count 0))
+    (let* ((*get-all-mcp-tools-function*
+           (lambda (bot)
+             (declare (ignore bot))
+             (list (cons :mock-server
+                         '((:name . "echo_tool")
+                           (:description . "Echo tool")
+                           (:input-schema . ((:type . "object"))))))))
+          (*find-mcp-server-and-tool-function*
+           (lambda (bot tool-name)
+             (declare (ignore bot))
+             (values :mock-server `((:name . ,tool-name)))))
+          (*execute-mcp-tool-function*
+           (lambda (server tool-name arguments)
+             (declare (ignore server tool-name arguments))
+             "loop result"))
+          (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+          (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore url args))
+             (incf call-count)
+             (values
+              (make-string-input-stream
+               "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.start\",\"step\":{\"id\":\"call-1\",\"type\":\"function_call\",\"name\":\"echo_tool\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"arguments\":\"{\\\"value\\\":\\\"payload\\\"}\"}}
+data: {\"event_type\":\"step.stop\"}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-3.5-flash\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
+              200))))
+      (fiveam:signals chatbot-tool-recursion-limit-error
+        (chat "Run tool loop" :conversation conv))
+      (fiveam:is (= +max-chatbot-tool-recursion-depth+ call-count)))))
+
 (fiveam:test test-text-formatting
   (let ((wrapped (wrap-text "This is a test of the line wrapping utility." :width 15)))
     (fiveam:is (every (lambda (line) (<= (length line) 15)) wrapped))

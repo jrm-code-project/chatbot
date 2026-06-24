@@ -950,3 +950,33 @@
              (fiveam:is (string= "text" (mcp-val :type first-item)))
              (fiveam:is (string= "Echo: Hello MCP world" (mcp-val :text first-item)))))
       (stop-mcp-server server))))
+
+(fiveam:test test-default-stop-mcp-server-closes-streams
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "mcp-stop-streams/" temp-dir))
+         (input-path (merge-pathnames "input.txt" root))
+         (output-path (merge-pathnames "output.txt" root)))
+    (when (probe-file root)
+      (uiop:delete-directory-tree root :validate t))
+    (ensure-directories-exist root)
+    (with-open-file (stream input-path :direction :output :if-exists :supersede)
+      (write-string "" stream))
+    (with-open-file (stream output-path :direction :output :if-exists :supersede)
+      (write-string "" stream))
+    (let ((input-stream (open input-path :direction :io :if-exists :overwrite))
+          (output-stream (open output-path :direction :input)))
+      (unwind-protect
+           (let ((server (make-instance 'mcp-server
+                                       :name "test-server"
+                                       :input-stream input-stream
+                                       :output-stream output-stream)))
+             (default-stop-mcp-server server)
+             (fiveam:is-false (open-stream-p input-stream))
+             (fiveam:is-false (open-stream-p output-stream))
+             (fiveam:is-false (mcp-server-input-stream server))
+             (fiveam:is-false (mcp-server-output-stream server)))
+        (when (open-stream-p input-stream)
+          (close input-stream))
+        (when (open-stream-p output-stream)
+          (close output-stream))
+        (uiop:delete-directory-tree root :validate t)))))

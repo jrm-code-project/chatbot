@@ -370,15 +370,28 @@
           (funcall *start-mcp-server-function* name command args))
       (default-start-mcp-server name command args environment)))
 
+(defun close-mcp-server-stream (stream)
+  "Closes STREAM when it is a live stream."
+  (when (and stream (open-stream-p stream))
+    (close stream)))
+
 (defun default-stop-mcp-server (server)
   "Stops the MCP server process and reader thread cleanly."
   (format t "[MCP INFO] Stopping server ~A~%" (mcp-server-name server))
   (let ((thread (mcp-server-reader-thread server))
-        (proc (mcp-server-process server)))
+        (proc (mcp-server-process server))
+        (input-stream (mcp-server-input-stream server))
+        (output-stream (mcp-server-output-stream server)))
     (when (and thread (sb-thread:thread-alive-p thread))
       (sb-thread:terminate-thread thread))
+    (close-mcp-server-stream input-stream)
+    (close-mcp-server-stream output-stream)
     (when proc
-      (uiop:terminate-process proc :urgent t))))
+      (uiop:terminate-process proc :urgent t))
+    (setf (mcp-server-reader-thread server) nil
+          (mcp-server-process server) nil
+          (mcp-server-input-stream server) nil
+          (mcp-server-output-stream server) nil)))
 
 (defun stop-mcp-server (server)
   "Stops an MCP server, honoring the configured test seam when present."

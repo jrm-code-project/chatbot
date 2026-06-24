@@ -383,9 +383,31 @@
                            captured-second-request))
         (fiveam:is (string= "Handled tool error" res))))))
 
+(fiveam:test test-google-chat-tool-recursion-depth-is-capped
+  (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
+        (conv (make-instance 'conversation :chatbot bot))
+        (call-count 0))
+    (let ((*find-mcp-server-and-tool-function*
+           (lambda (ignored-bot tool-name)
+             (declare (ignore ignored-bot))
+             (values :mock-server `((:name . ,tool-name)))))
+         (*execute-mcp-tool-function*
+           (lambda (server tool-name arguments)
+             (declare (ignore server tool-name arguments))
+             "loop result"))
+         (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore url args))
+             (incf call-count)
+             (values "{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"get_current_time\",\"args\":{\"timezone\":\"America/Los_Angeles\"},\"id\":\"bwvnqvbe\"}}],\"role\":\"model\"}}]}" 200))))
+      (fiveam:signals chatbot-tool-recursion-limit-error
+        (chat-google bot "What time is it now?" conv nil))
+      (fiveam:is (= +max-chatbot-tool-recursion-depth+ call-count)))))
+
 (fiveam:test test-google-chat-retries-malformed-response-on-gemini-pro-latest
   (let* ((bot (make-instance 'chatbot
-                             :backend :google
+                            :backend :google
                              :model "gemini-3.5-flash"
                              :include-timestamp-p t
                              :include-model-p t))

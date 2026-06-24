@@ -445,6 +445,37 @@ data: [DONE]")
          (fiveam:is (search "\"toolName\":\"echo_tool\"" tool-content))
          (fiveam:is (search "\"message\":\"Mock tool failure\"" tool-content)))))))
 
+(fiveam:test test-openai-tool-recursion-depth-is-capped
+  (let ((conv (new-chat :backend :openai :system-instruction "Be helpful"))
+        (call-count 0))
+    (let ((*get-all-mcp-tools-function*
+          (lambda (bot)
+            (declare (ignore bot))
+            (list (cons :mock-server
+                        '((:name . "echo_tool")
+                          (:description . "Echo tool")
+                          (:input-schema . ((:type . "object"))))))))
+         (*find-mcp-server-and-tool-function*
+          (lambda (bot tool-name)
+            (declare (ignore bot))
+            (values :mock-server `((:name . ,tool-name)))))
+         (*execute-mcp-tool-function*
+          (lambda (server tool-name arguments)
+            (declare (ignore server tool-name arguments))
+            "loop result"))
+         (*http-post-function*
+          (lambda (url &rest args)
+            (declare (ignore url args))
+            (incf call-count)
+            (values (make-string-input-stream
+                     "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call-1\", \"function\": {\"name\": \"echo_tool\", \"arguments\": \"{\\\"value\\\":\\\"payload\\\"}\"}}]}}]}
+data: [DONE]")
+                    200))))
+      (fiveam:signals chatbot-tool-recursion-limit-error
+        (let ((*openai-api-key* "test-key"))
+         (chat "Run tool loop" :conversation conv)))
+      (fiveam:is (= +max-chatbot-tool-recursion-depth+ call-count)))))
+
 (fiveam:test test-openai-built-in-read-file-lines-tool-recursion
   (let* ((temp-dir (uiop:default-temporary-directory))
         (root (merge-pathnames "openai-filesystem-tool/" temp-dir))
