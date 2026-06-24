@@ -95,6 +95,11 @@
     :accessor chatbot-google-search-p
     :initform nil
     :documentation "Flag to enable Google Search Grounding tool.")
+   (gemini-fallback-to-google-p
+    :initarg :gemini-fallback-to-google-p
+    :accessor chatbot-gemini-fallback-to-google-p
+    :initform t
+    :documentation "Compatibility flag allowing Gemini Interactions requests to fall back to Google generateContent on 404-style endpoint errors.")
    (web-tools-p
     :initarg :web-tools-p
     :accessor chatbot-web-tools-p

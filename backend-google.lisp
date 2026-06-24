@@ -21,7 +21,7 @@
            (persona-memory (conversation-persona-memory conversation))
            (persona-diary-entries (conversation-persona-diary-entries conversation))
            (history-messages (or history-messages
-                                (append-user-input-to-conversation-messages current-messages input)))
+                                (stateless-history-messages current-messages input)))
            (contents-list (or request-contents
                              (build-generate-content-request-contents current-messages
                                                                       input
@@ -77,31 +77,37 @@
                     (cond
                       (fn-call
                        (let* ((name (cdr (assoc :name fn-call)))
-                              (args (cdr (assoc :args fn-call)))
+                              (raw-args (cdr (assoc :args fn-call)))
+                              (payload-args (json-encodable-value raw-args))
                               (model-msg `(("role" . "model")
                                            ("parts" . ,(vector
                                                         (append
-                                                         `(("functionCall" . (("name" . ,name) ("args" . ,args))))
-                                                         (when thought-signature
-                                                           `(("thoughtSignature" . ,thought-signature)))))))))
-                         (multiple-value-bind (srv tool) (find-chatbot-tool bot name)
-                           (declare (ignore tool))
-                           (unless srv
-                             (error "Tool not found: ~A" name))
-                           (let* ((res-text (execute-chatbot-tool bot srv name args))
-                                  (resp-msg `(("role" . "user")
-                                              ("parts" . ,(vector `(("functionResponse" . (("name" . ,name) ("response" . (("result" . ,res-text)))))))))))
-                             (let ((recursive-history (append history-messages
-                                                              (list model-msg resp-msg))))
-                               (setf (conversation-messages conversation)
-                                     recursive-history)
-                               (chat-google bot
-                                            nil
-                                            conversation
-                                            callback
-                                            :history-messages recursive-history
-                                            :request-contents (append contents-list (list model-msg resp-msg))
-                                            :file-attachments file-attachments))))))
+                                                         `(("functionCall" . (("name" . ,name) ("args" . ,payload-args))))
+                                                          (when thought-signature
+                                                            `(("thoughtSignature" . ,thought-signature)))))))))
+                         (let* ((response-payload
+                                 (handler-case
+                                     `(("result" . ,(execute-chatbot-tool-by-name bot name raw-args)))
+                                   (error (condition)
+                                     (chatbot-tool-error-payload name condition))))
+                               (resp-msg `(("role" . "user")
+                                           ("parts" . ,(vector
+                                                        (list (cons "functionResponse"
+                                                                    `(("name" . ,name)
+                                                                      ("response" . ,response-payload))))))))
+                                (recursion-messages (list model-msg resp-msg)))
+                           (continue-stateless-tool-recursion
+                            conversation
+                            history-messages
+                            recursion-messages
+                            (lambda (recursive-history recursion-messages)
+                              (chat-google bot
+                                           nil
+                                           conversation
+                                           callback
+                                           :history-messages recursive-history
+                                           :request-contents (append contents-list recursion-messages)
+                                           :file-attachments file-attachments))))))
                       (t
                        (unless final-str
                          (error "No text returned from Gemini API response: ~A" response-body))
@@ -109,9 +115,10 @@
                        (write-turn-token-summary usage)
                        (when callback
                          (funcall callback final-str))
-                       (setf (conversation-messages conversation)
-                             (append history-messages
-                                     (list (list (cons "role" "model") (cons "content" final-str)))))
+                       (update-conversation-stateless-history
+                        conversation
+                        history-messages
+                        (list (cons "role" "model") (cons "content" final-str)))
                        final-str)))
                   (error "API responded with HTTP status ~A" status)))
           (error (e)

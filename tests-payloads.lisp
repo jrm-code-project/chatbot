@@ -65,6 +65,36 @@
                             resolved-names)))
       (uiop:delete-directory-tree root :validate t))))
 
+(fiveam:test test-resolve-chat-input-files-expands-home-relative-wildcards
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-chat-files/" temp-dir))
+         (shots-dir (merge-pathnames "Pictures/" mock-home))
+         (alpha (merge-pathnames "alpha.txt" shots-dir))
+         (beta (merge-pathnames "beta.txt" shots-dir)))
+    (ensure-directories-exist shots-dir)
+    (dolist (path (list alpha beta))
+      (with-open-file (stream path :direction :output :if-exists :supersede)
+        (write-line (file-namestring path) stream)))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let ((resolved (resolve-chat-input-files (list #p"~/Pictures/*.txt"))))
+            (fiveam:is (equal '("alpha.txt" "beta.txt")
+                              (mapcar #'file-namestring resolved)))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-json-encodable-value-preserves-array-of-objects
+  (let* ((value '((:observations ((:text . "first"))
+                                 ((:text . "second")))))
+         (encoded (json-encodable-value value))
+         (observations (gethash "observations" encoded)))
+    (fiveam:is (hash-table-p encoded))
+    (fiveam:is (listp observations))
+    (fiveam:is (= 2 (length observations)))
+    (fiveam:is (hash-table-p (first observations)))
+    (fiveam:is (string= "first" (gethash "text" (first observations))))
+    (fiveam:is (hash-table-p (second observations)))
+    (fiveam:is (string= "second" (gethash "text" (second observations))))))
+
 (fiveam:test test-openai-request-messages-include-text-file-attachments-as-text-parts
   (let* ((temp-dir (uiop:default-temporary-directory))
         (root (merge-pathnames "chat-files-openai-builder/" temp-dir))
@@ -127,6 +157,61 @@
           (fiveam:is (string= "text/plain"
                               (cdr (assoc "mime_type" (aref interaction-parts 1) :test #'string=)))))
       (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-attachment-content-type-info-centralizes-textual-and-interaction-policy
+  (let* ((json-path (make-pathname :name "memory" :type "json"))
+        (png-path (make-pathname :name "diagram" :type "png"))
+        (unknown-path (make-pathname :name "blob" :type "bin"))
+        (json-info (attachment-content-type-info :pathname json-path))
+        (png-info (attachment-content-type-info :pathname png-path))
+        (unknown-info (attachment-content-type-info :pathname unknown-path)))
+    (fiveam:is (string= "application/json" (getf json-info :mime-type)))
+    (fiveam:is-true (getf json-info :textual-p))
+    (fiveam:is (string= "document" (getf json-info :interaction-type)))
+    (fiveam:is (string= "image/png" (getf png-info :mime-type)))
+    (fiveam:is-false (getf png-info :textual-p))
+    (fiveam:is (string= "image" (getf png-info :interaction-type)))
+    (fiveam:is (string= "application/octet-stream" (getf unknown-info :mime-type)))
+    (fiveam:is-false (getf unknown-info :textual-p))
+    (fiveam:is (string= "document" (getf unknown-info :interaction-type)))))
+
+(fiveam:test test-pathname-content-type-rules-group-aliases-without-duplicates
+  (let* ((extensions (mapcar #'car +pathname-content-type-policies+))
+         (yaml-policy (pathname-content-type-policy (make-pathname :name "config" :type "yaml")))
+         (yml-policy (pathname-content-type-policy (make-pathname :name "config" :type "yml")))
+         (js-policy (pathname-content-type-policy (make-pathname :name "app" :type "js")))
+         (mjs-policy (pathname-content-type-policy (make-pathname :name "app" :type "mjs"))))
+    (fiveam:is (= (length extensions)
+                  (length (remove-duplicates extensions :test #'string=))))
+    (fiveam:is (equal yaml-policy yml-policy))
+    (fiveam:is (equal js-policy mjs-policy))
+    (fiveam:is (string= "application/yaml" (getf yaml-policy :mime-type)))
+    (fiveam:is-true (getf yaml-policy :textual-p))))
+
+(fiveam:test test-textual-mime-fallback-is-derived-from-grouped-rules
+  (let ((json-info (attachment-content-type-info :mime-type "application/json"))
+        (javascript-info (attachment-content-type-info :mime-type "application/javascript"))
+        (binary-info (attachment-content-type-info :mime-type "application/octet-stream")))
+    (fiveam:is (member "application/json" +textual-mime-types+ :test #'string=))
+    (fiveam:is (member "application/javascript" +textual-mime-types+ :test #'string=))
+    (fiveam:is-true (getf json-info :textual-p))
+    (fiveam:is-true (getf javascript-info :textual-p))
+    (fiveam:is-false (getf binary-info :textual-p))))
+
+(fiveam:test test-pathname-content-type-rule-validation-rejects-malformed-rules
+  (fiveam:signals error
+    (validate-pathname-content-type-rules
+     '((:mime-type "" :extensions ("txt")))))
+  (fiveam:signals error
+    (validate-pathname-content-type-rules
+     '((:mime-type "text/plain" :extensions ()))))
+  (fiveam:signals error
+    (validate-pathname-content-type-rules
+     '((:mime-type "text/plain" :extensions ("txt" "txt")))))
+  (fiveam:signals error
+    (validate-pathname-content-type-rules
+     '((:mime-type "text/plain" :extensions ("txt"))
+       (:mime-type "application/json" :extensions ("txt"))))))
 
 (fiveam:test test-format-prompt-timestamp
   (fiveam:is (string= "[14:29 26-Jun-2026]"

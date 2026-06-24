@@ -38,15 +38,16 @@
                             ("connect-timeout" . ,(princ-to-string connect-timeout))
                             ("read-timeout" . ,(princ-to-string read-timeout))
                             ("want-stream" . ,(if want-stream "true" "false"))))
-    (if want-stream
-        (funcall *http-post-function* url
+    (let ((http-post-function (current-http-post-function)))
+      (if want-stream
+        (funcall http-post-function url
                  :headers headers
                  :content content
                  :connect-timeout connect-timeout
                  :read-timeout read-timeout
                  :want-stream t)
-        (funcall *http-post-function* url
+        (funcall http-post-function url
                  :headers headers
                  :content content
                  :connect-timeout connect-timeout
-                 :read-timeout read-timeout))))
+                 :read-timeout read-timeout)))))

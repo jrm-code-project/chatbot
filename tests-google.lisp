@@ -310,4 +310,38 @@
         (fiveam:is (= 2 call-count))
         (fiveam:is (string= "America/Los_Angeles" (cdr (assoc :timezone captured-tool-args))))
         (fiveam:is (search "\"thoughtSignature\":\"sig\"" captured-second-request))
+        (fiveam:is (search "\"functionCall\":{\"name\":\"get_current_time\",\"args\":{\"timezone\":\"America\\/Los_Angeles\"}"
+                           captured-second-request))
         (fiveam:is (string= "It is 12:34 PM in Los Angeles." res))))))
+
+(fiveam:test test-google-chat-function-call-errors-are-reported-back-to-the-model
+  (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
+         (conv (make-instance 'conversation :chatbot bot))
+         (call-count 0)
+         (captured-second-request nil))
+    (let ((*find-mcp-server-and-tool-function*
+            (lambda (ignored-bot tool-name)
+              (declare (ignore ignored-bot))
+              (values :mock-server `((:name . ,tool-name)))))
+          (*execute-mcp-tool-function*
+            (lambda (server tool-name arguments)
+              (declare (ignore server arguments))
+              (error 'mcp-tool-execution-error
+                     :tool-name tool-name
+                     :reason "Mock tool failure")))
+          (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+          (*http-post-function*
+            (lambda (url &rest args)
+              (declare (ignore url))
+              (incf call-count)
+              (if (= call-count 1)
+                  (values "{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"get_current_time\",\"args\":{\"timezone\":\"America/Los_Angeles\"},\"id\":\"bwvnqvbe\"},\"thoughtSignature\":\"sig\"}],\"role\":\"model\"}}]}" 200)
+                  (progn
+                    (setf captured-second-request (getf args :content))
+                    (values "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Handled tool error\"}],\"role\":\"model\"}}]}" 200))))))
+      (let ((res (chat-google bot "What time is it now?" conv nil)))
+        (fiveam:is (= 2 call-count))
+        (fiveam:is (search "\"thoughtSignature\":\"sig\"" captured-second-request))
+        (fiveam:is (search "\"response\":{\"type\":\"tool_error\",\"toolName\":\"get_current_time\",\"message\":\"Mock tool failure\"}"
+                           captured-second-request))
+        (fiveam:is (string= "Handled tool error" res))))))

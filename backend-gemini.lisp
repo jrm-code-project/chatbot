@@ -3,6 +3,10 @@
 
 (in-package "CHATBOT")
 
+(defun gemini-fallback-to-google-enabled-p (bot)
+  "Returns true when BOT should fall back to Google generateContent on Interactions 404 errors."
+  (chatbot-gemini-fallback-to-google-p bot))
+
 (defun chat-gemini (bot input conversation callback &key file-attachments)
   "Sends user input to the active conversation using the Gemini Interactions API."
   (let ((api-key (gemini-api-key)))
@@ -87,30 +91,36 @@
                 (error "API responded with HTTP status ~A" status)))
         (error (e)
           (let ((message (string-downcase (princ-to-string e))))
-            (if (and (search "/interactions?alt=sse" message)
+            (if (and (gemini-fallback-to-google-enabled-p bot)
+                     (search "/interactions?alt=sse" message)
                      (search "404" message)
                      (search "not found" message))
                 (return-from chat-gemini
                   (chat-google bot input conversation callback :file-attachments file-attachments))
                 (error "Gemini Chat Error: ~A" e)))))
       (if function-calls-to-run
-          (let ((results nil))
-            (dolist (fc (nreverse function-calls-to-run))
-              (let* ((id (cdr (assoc :id fc)))
-                     (name (cdr (assoc :name fc)))
-                     (args-str (coerce (cdr (assoc :arguments fc)) 'string))
-                     (args (parse-json-or-error args-str :context (format nil "Gemini tool arguments for ~A" name))))
-                (multiple-value-bind (srv tool) (find-chatbot-tool bot name)
-                  (declare (ignore tool))
-                  (unless srv
-                    (error "Tool not found: ~A" name))
-                  (let ((res-text (execute-chatbot-tool bot srv name args)))
-                    (push `(("type" . "function_result")
-                            ("name" . ,name)
-                            ("call_id" . ,id)
-                            ("result" . ,(list `(("type" . "text") ("text" . ,res-text)))))
-                          results)))))
-            (chat-gemini bot (nreverse results) conversation callback))
+          (let ((results
+                  (map-chatbot-json-tool-call-results
+                   bot
+                   (nreverse function-calls-to-run)
+                   (lambda (name tool-call)
+                     (declare (ignore tool-call))
+                     (format nil "Gemini tool arguments for ~A" name))
+                   (lambda (id name args-str res-text tool-call)
+                     (declare (ignore args-str tool-call))
+                     `(("type" . "function_result")
+                       ("name" . ,name)
+                       ("call_id" . ,id)
+                       ("result" . ,(list `(("type" . "text") ("text" . ,res-text))))))
+                   :error-builder
+                   (lambda (id name args-str condition tool-call)
+                     (declare (ignore args-str tool-call))
+                     `(("type" . "function_result")
+                       ("name" . ,name)
+                       ("call_id" . ,id)
+                       ("result" . ,(list `(("type" . "text")
+                                            ("text" . ,(chatbot-tool-error-text name condition))))))))))
+            (chat-gemini bot results conversation callback))
           (progn
             (format-paragraphs full-text :width 80)
             (write-turn-token-summary completed-usage)

@@ -196,6 +196,50 @@ data: [DONE]")
                                (second captured-payloads))))
       (uiop:delete-directory-tree root :validate t))))
 
+(fiveam:test test-send-latest-screenshot-uses-home-relative-matches-and-appends-prompt
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-screenshots/" temp-dir))
+        (shots-dir (merge-pathnames "OneDrive/Pictures/Screenshots 1/" mock-home))
+        (older (merge-pathnames "older.txt" shots-dir))
+        (newer (merge-pathnames "newer.txt" shots-dir))
+        (captured-payload nil))
+    (ensure-directories-exist shots-dir)
+    (with-open-file (stream older :direction :output :if-exists :supersede)
+      (write-string "Older screenshot text" stream))
+    (sleep 1)
+    (with-open-file (stream newer :direction :output :if-exists :supersede)
+      (write-string "Newest screenshot text" stream))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home))
+              (*screenshot-path* #p"~/Missing/*.txt")
+              (*screenshot-path-1* #p"~/OneDrive/Pictures/Screenshots 1/*.txt")
+              (*screenshot-prompt* "Describe the screenshot.")
+              (*openai-api-key* "test-key"))
+          (let* ((context (make-runtime-context
+                           :http-post-function
+                           (lambda (url &rest args)
+                             (declare (ignore url))
+                             (setf captured-payload (getf args :content))
+                             (values (make-string-input-stream
+                                      "data: {\"choices\": [{\"delta\": {\"content\": \"Hello OpenAI\"}}]}
+data: [DONE]")
+                                     200))))
+                 (conv (new-chat :backend :openai :runtime-context context)))
+            (fiveam:is (string= "Hello OpenAI"
+                                (send-latest-screenshot :n 1
+                                                        :prompt "Focus on the HUD."
+                                                        :conversation conv)))
+            (let* ((payload (cl-json:decode-json-from-string captured-payload))
+                   (messages (cdr (assoc :messages payload)))
+                   (content (cdr (assoc :content (first messages))))
+                   (attachment-text (cdr (assoc :text (second content)))))
+              (fiveam:is (= 2 (length content)))
+              (fiveam:is (string= "Describe the screenshot. Focus on the HUD."
+                                  (cdr (assoc :text (first content)))))
+              (fiveam:is (search "Newest screenshot text" attachment-text))
+              (fiveam:is-false (search "Older screenshot text" attachment-text)))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
 (fiveam:test test-openai-chat-includes-preloaded-diary-history
   (let ((captured-payload nil))
     (let* ((*openai-api-key* "test-key")
@@ -352,10 +396,59 @@ data: [DONE]")
         (fiveam:is (string= "echo_tool" (cdr (assoc :name function))))
         (fiveam:is (string= "Echo tool" (cdr (assoc :description function))))))))
 
+(fiveam:test test-openai-tool-call-errors-are-reported-back-to-the-model
+  (let ((conv (new-chat :backend :openai :system-instruction "Be helpful"))
+        (captured-payloads nil)
+        (call-count 0))
+    (let ((*get-all-mcp-tools-function*
+           (lambda (bot)
+             (declare (ignore bot))
+             (list (cons :mock-server
+                         '((:name . "echo_tool")
+                           (:description . "Echo tool")
+                           (:input-schema . ((:type . "object"))))))))
+         (*find-mcp-server-and-tool-function*
+           (lambda (bot tool-name)
+             (declare (ignore bot))
+             (values :mock-server `((:name . ,tool-name)))))
+         (*execute-mcp-tool-function*
+           (lambda (server tool-name arguments)
+             (declare (ignore server arguments))
+             (error 'mcp-tool-execution-error
+                    :tool-name tool-name
+                    :reason "Mock tool failure")))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore url))
+             (incf call-count)
+             (setf captured-payloads
+                   (append captured-payloads (list (getf args :content))))
+             (if (= call-count 1)
+                 (values (make-string-input-stream
+                          "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call-1\", \"function\": {\"name\": \"echo_tool\", \"arguments\": \"{\\\"value\\\":\\\"payload\\\"}\"}}]}}]}
+data: [DONE]")
+                         200)
+                 (values (make-string-input-stream
+                          "data: {\"choices\": [{\"delta\": {\"content\": \"Handled tool error\"}}]}
+data: [DONE]")
+                         200)))))
+      (let ((res (let ((*openai-api-key* "test-key"))
+                  (chat "Run tool" :conversation conv))))
+        (fiveam:is (string= "Handled tool error" res))
+        (fiveam:is (= 2 (length captured-payloads)))
+        (let* ((second-payload (cl-json:decode-json-from-string (second captured-payloads)))
+              (messages (cdr (assoc :messages second-payload)))
+              (tool-msg (fourth messages))
+              (tool-content (cdr (assoc :content tool-msg))))
+         (fiveam:is (string= "tool" (cdr (assoc :role tool-msg))))
+         (fiveam:is (search "\"type\":\"tool_error\"" tool-content))
+         (fiveam:is (search "\"toolName\":\"echo_tool\"" tool-content))
+         (fiveam:is (search "\"message\":\"Mock tool failure\"" tool-content)))))))
+
 (fiveam:test test-openai-built-in-read-file-lines-tool-recursion
   (let* ((temp-dir (uiop:default-temporary-directory))
-         (root (merge-pathnames "openai-filesystem-tool/" temp-dir))
-         (file-path (merge-pathnames "notes.txt" root)))
+        (root (merge-pathnames "openai-filesystem-tool/" temp-dir))
+        (file-path (merge-pathnames "notes.txt" root)))
     (ensure-directories-exist root)
     (with-open-file (s file-path :direction :output :if-exists :supersede)
       (write-line "Line one" s)

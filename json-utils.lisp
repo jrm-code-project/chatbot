@@ -56,7 +56,34 @@
 (defun json-object-alist-p (value)
   "Returns true when VALUE is an alist-style JSON object."
   (and (listp value)
-       (every #'consp value)))
+       (every (lambda (entry)
+                (and (consp entry)
+                     (not (consp (car entry)))
+                     (or (symbolp (car entry))
+                         (stringp (car entry)))))
+              value)))
+
+(defun json-encodable-value (value)
+  "Converts VALUE into a shape that cl-json will emit with JSON object semantics."
+  (cond
+    ((null value) nil)
+    ((stringp value) value)
+    ((vectorp value) (map 'vector #'json-encodable-value value))
+    ((hash-table-p value)
+     (let ((result (make-hash-table :test 'equal)))
+       (maphash (lambda (key nested-value)
+                  (setf (gethash (json-key-string key) result)
+                        (json-encodable-value nested-value)))
+                value)
+       result))
+    ((json-object-alist-p value)
+     (let ((result (make-hash-table :test 'equal)))
+       (dolist (entry value result)
+         (setf (gethash (json-key-string (car entry)) result)
+               (json-encodable-value (cdr entry))))))
+    ((listp value)
+     (mapcar #'json-encodable-value value))
+    (t value)))
 
 (defun sanitize-gemini-schema (schema)
   "Converts tool schemas into Gemini-compatible JSON objects."

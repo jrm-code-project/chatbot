@@ -394,9 +394,10 @@
                     (:id . ,id)
                     (:method . ,method)))
          (payload-json (cl-json:encode-json-to-string
-                        (if params
-                            (append payload `((:params . ,params)))
-                            payload))))
+                        (json-encodable-value
+                         (if params
+                             (append payload `((:params . ,params)))
+                             payload)))))
     (mcp-register-request server id mailbox)
     (format t "[MCP DEBUG] (~A) -> Request ID ~A: ~A~%" (mcp-server-name server) id method)
     (handler-case
@@ -425,9 +426,10 @@
   (let* ((payload `((:jsonrpc . "2.0")
                     (:method . ,method)))
          (payload-json (cl-json:encode-json-to-string
-                        (if params
-                            (append payload `((:params . ,params)))
-                            payload))))
+                        (json-encodable-value
+                         (if params
+                             (append payload `((:params . ,params)))
+                             payload)))))
     (format t "[MCP DEBUG] (~A) -> Notification: ~A~%" (mcp-server-name server) method)
     (handler-case
         (progn
@@ -894,6 +896,155 @@ Supports two formats:
         (values source tool)
         (find-mcp-server-and-tool bot tool-name))))
 
+(defun canonical-json-key-id (key)
+  "Returns a comparison identifier for a JSON object KEY."
+  (remove-if (lambda (char)
+               (or (char= char #\-)
+                   (char= char #\_)))
+             (json-key-name key)))
+
+(defun schema-field-value (schema key)
+  "Returns KEY from SCHEMA, supporting alists and hash tables."
+  (cond
+    ((hash-table-p schema)
+     (or (gethash (json-key-string key) schema)
+         (gethash (json-key-name key) schema)))
+    ((listp schema)
+     (mcp-val key schema))
+    (t nil)))
+
+(defun schema-property-entry (properties key)
+  "Returns the matching (key . schema) property entry for KEY from PROPERTIES."
+  (let ((target-id (canonical-json-key-id key)))
+    (cond
+      ((hash-table-p properties)
+       (let ((found nil))
+         (maphash (lambda (property-key property-schema)
+                    (when (and (null found)
+                               (string= target-id (canonical-json-key-id property-key)))
+                      (setf found (cons property-key property-schema))))
+                  properties)
+         found))
+      ((listp properties)
+       (find-if (lambda (entry)
+                  (string= target-id (canonical-json-key-id (car entry))))
+                properties))
+      (t nil))))
+
+(defun schema-object-entries (value)
+  "Returns VALUE as an object entry list when it represents a JSON object."
+  (cond
+    ((hash-table-p value)
+     (let ((entries nil))
+       (maphash (lambda (key nested-value)
+                  (push (cons key nested-value) entries))
+                value)
+       (nreverse entries)))
+    ((json-object-alist-p value) value)
+    (t nil)))
+
+(defun normalize-arguments-to-schema (value schema)
+  "Normalizes VALUE to use the property spelling and nested shape declared by SCHEMA."
+  (let* ((type (schema-field-value schema :type))
+         (type-name (and type (string-downcase (princ-to-string type)))))
+    (cond
+      ((and type-name (string= type-name "object"))
+       (let ((entries (schema-object-entries value))
+             (properties (schema-field-value schema :properties)))
+         (if entries
+             (mapcar (lambda (entry)
+                       (let* ((property-entry (schema-property-entry properties (car entry)))
+                              (normalized-key (if property-entry (car property-entry) (car entry)))
+                              (property-schema (and property-entry (cdr property-entry))))
+                         (cons normalized-key
+                               (if property-schema
+                                   (normalize-arguments-to-schema (cdr entry) property-schema)
+                                   (cdr entry)))))
+                     entries)
+             value)))
+      ((and type-name (string= type-name "array"))
+       (let ((item-schema (schema-field-value schema :items)))
+         (cond
+           ((vectorp value)
+            (map 'vector (lambda (item)
+                           (if item-schema
+                               (normalize-arguments-to-schema item item-schema)
+                               item))
+                 value))
+           ((listp value)
+            (mapcar (lambda (item)
+                      (if item-schema
+                          (normalize-arguments-to-schema item item-schema)
+                          item))
+                    value))
+           (t value))))
+      (t value))))
+
+(defun normalize-chatbot-tool-arguments (source tool arguments)
+  "Normalizes ARGUMENTS for TOOL before execution when needed."
+  (if (eq source :built-in)
+      arguments
+      (let ((input-schema (mcp-val :input-schema tool)))
+        (if input-schema
+            (normalize-arguments-to-schema arguments input-schema)
+            arguments))))
+
+(defun execute-chatbot-tool-by-name (bot tool-name arguments)
+  "Finds TOOL-NAME for BOT and executes it with ARGUMENTS."
+  (multiple-value-bind (source tool) (find-chatbot-tool bot tool-name)
+    (unless source
+      (error "Tool not found: ~A" tool-name))
+    (execute-chatbot-tool bot
+                          source
+                          tool-name
+                          (normalize-chatbot-tool-arguments source tool arguments))))
+
+(defun execute-chatbot-tool-by-name-json-arguments (bot tool-name arguments-json context)
+  "Parses ARGUMENTS-JSON for TOOL-NAME in CONTEXT and executes the tool for BOT."
+  (execute-chatbot-tool-by-name
+   bot
+   tool-name
+   (parse-json-or-error arguments-json :context context)))
+
+(defun chatbot-tool-error-message (condition)
+  "Returns the most useful human-readable message for CONDITION."
+  (if (typep condition 'mcp-tool-execution-error)
+      (mcp-tool-execution-error-reason condition)
+      (princ-to-string condition)))
+
+(defun chatbot-tool-error-payload (tool-name condition)
+  "Returns a JSON-serializable payload describing a tool execution failure."
+  `(("type" . "tool_error")
+    ("toolName" . ,tool-name)
+    ("message" . ,(chatbot-tool-error-message condition))))
+
+(defun chatbot-tool-error-text (tool-name condition)
+  "Returns a JSON string describing a tool execution failure for LLM-visible text fields."
+  (cl-json:encode-json-to-string (chatbot-tool-error-payload tool-name condition)))
+
+(defun map-chatbot-json-tool-call-results (bot tool-calls context-builder result-builder
+                                               &key error-builder)
+  "Executes JSON-argument TOOL-CALLS for BOT and returns builder outputs in order.
+
+When ERROR-BUILDER is provided, tool execution errors are converted into result
+entries instead of aborting the full turn."
+  (let ((results nil))
+    (dolist (tool-call tool-calls (nreverse results))
+      (let* ((id (cdr (assoc :id tool-call)))
+             (name (cdr (assoc :name tool-call)))
+             (arguments-json (coerce (cdr (assoc :arguments tool-call)) 'string)))
+        (handler-case
+            (let ((res-text (execute-chatbot-tool-by-name-json-arguments
+                             bot
+                             name
+                             arguments-json
+                             (funcall context-builder name tool-call))))
+              (push (funcall result-builder id name arguments-json res-text tool-call) results))
+          (error (condition)
+            (if error-builder
+                (push (funcall error-builder id name arguments-json condition tool-call) results)
+                (error condition))))))))
+
 (defun normalize-builtin-tool-integer-argument (value argument-name tool-name)
   "Normalizes VALUE to an integer argument or signals an execution error."
   (let ((normalized
@@ -1038,7 +1189,8 @@ Supports two formats:
 
 (defun approve-chatbot-filesystem-directory (bot directory tool-name)
   "Requests approval for DIRECTORY and persists it for BOT when granted."
-  (let ((approval-function *filesystem-access-approval-function*))
+  (let ((approval-function (current-filesystem-access-approval-function
+                            (chatbot-runtime-context bot))))
     (unless approval-function
       (error 'mcp-tool-execution-error
             :tool-name tool-name
@@ -1262,7 +1414,8 @@ Supports two formats:
 
 (defun approve-chatbot-eval-expression (bot expression tool-name)
   "Requests approval to evaluate EXPRESSION for BOT."
-  (let ((approval-function *eval-approval-function*))
+  (let ((approval-function (current-eval-approval-function
+                            (chatbot-runtime-context bot))))
     (unless approval-function
       (error 'mcp-tool-execution-error
              :tool-name tool-name
@@ -1520,26 +1673,73 @@ Supports two formats:
       (funcall *find-mcp-server-and-tool-function* bot tool-name)
       (default-find-mcp-server-and-tool bot tool-name)))
 
+(defun mcp-result-items (value)
+  "Returns VALUE as a proper list when it represents a JSON array."
+  (cond
+    ((null value) nil)
+    ((vectorp value) (coerce value 'list))
+    ((listp value) value)
+    (t (list value))))
+
+(defun mcp-structured-content (response)
+  "Returns structured tool result content when present on RESPONSE."
+  (or (mcp-val "structuredContent" response)
+      (mcp-val :structured-content response)
+      (mcp-val :structured_content response)))
+
+(defun mcp-jsonish-value->string (value)
+  "Renders VALUE as a textual tool result."
+  (typecase value
+    (null "null")
+    (string value)
+    (t (cl-json:encode-json-to-string value))))
+
+(defun mcp-tool-result-error-p (response)
+  "Returns true when RESPONSE reports a tool-level error."
+  (let ((flag (or (mcp-val "isError" response)
+                 (mcp-val :is-error response)
+                 (mcp-val :is_error response))))
+    (not (null flag))))
+
+(defun mcp-tool-result-fallback-payload (response)
+  "Returns the most useful non-text payload available on RESPONSE, or NIL."
+  (let ((structured-content (mcp-structured-content response))
+        (content (mcp-val :content response)))
+    (cond
+      (structured-content structured-content)
+      (content content)
+      ((or (mcp-val "result" response)
+           (mcp-val :result response))
+       (or (mcp-val "result" response)
+           (mcp-val :result response)))
+      (response response)
+      (t nil))))
+
 (defun default-execute-mcp-tool (server tool-name arguments)
   "Calls the tool on the given MCP server and returns the result content string."
   (handler-case
       (let* ((response (mcp-call-tool server tool-name arguments))
-             (content (mcp-val :content response))
-             (result-texts nil))
+            (content (mcp-result-items (mcp-val :content response)))
+            (result-texts nil))
+        (when (mcp-tool-result-error-p response)
+          (error 'mcp-tool-execution-error
+                :tool-name tool-name
+                :reason (mcp-jsonish-value->string response)))
         (dolist (item content)
           (let ((type (mcp-val :type item))
-                (text (mcp-val :text item)))
-            (when (and (string= type "text") text)
-              (push text result-texts))))
+               (text (mcp-val :text item)))
+           (when (and (string= type "text") text)
+             (push text result-texts))))
         (if result-texts
-            (format nil "~{~A~^~%~}" (nreverse result-texts))
-           (error 'mcp-tool-execution-error
-                  :tool-name tool-name
-                  :reason "Tool returned no text content.")))
+           (format nil "~{~A~^~%~}" (nreverse result-texts))
+           (let ((fallback (mcp-tool-result-fallback-payload response)))
+             (if fallback
+                 (mcp-jsonish-value->string fallback)
+                 "Tool completed successfully."))))
     (error (e)
       (error 'mcp-tool-execution-error
-             :tool-name tool-name
-             :reason (princ-to-string e)))))
+            :tool-name tool-name
+            :reason (princ-to-string e)))))
 
 (defun execute-mcp-tool (server tool-name arguments)
   "Executes an MCP tool, honoring the configured test seam when present."

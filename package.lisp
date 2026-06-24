@@ -6,6 +6,7 @@
   (:shadowing-import-from "SERIES" "DEFUN" "FUNCALL" "LET*" "MULTIPLE-VALUE-BIND")
   (:use "ALEXANDRIA" "CL" "FOLD" "FUNCTION" "JSONX" "NAMED-LET" "PROMISE" "SERIES" "TRIVIAL-TIMEOUT")
   (:export "CHAT"
+           "SEND-LATEST-SCREENSHOT"
            "MAKE-RUNTIME-CONTEXT"
            "NEW-CHAT"
            "NEW-CHAT-PERSONA"
@@ -35,4 +36,7 @@
            "*LM-STUDIO-BASE-URL*"
            "*LM-STUDIO-DEFAULT-API-KEY*"
            "*LM-STUDIO-API-KEY*"
-           "LM-STUDIO-API-KEY"))
+           "LM-STUDIO-API-KEY"
+           "*SCREENSHOT-PATH*"
+           "*SCREENSHOT-PATH-1*"
+           "*SCREENSHOT-PROMPT*"))

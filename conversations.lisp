@@ -27,7 +27,7 @@
     (error (e)
       (error "Invalid persona config in ~A: ~A" config-path e))))
 
-(defun new-chat (&key model system-instruction google-search-p web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context)
+(defun new-chat (&key model system-instruction google-search-p (gemini-fallback-to-google-p nil) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context)
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
@@ -44,6 +44,7 @@ configuration, instructions, or preloaded memory."
                                  :backend backend
                                  :system-instruction system-instruction
                                  :google-search-p google-search-p
+                                 :gemini-fallback-to-google-p gemini-fallback-to-google-p
                                  :web-tools-p web-tools-p
                                  :code-execution-p code-execution-p
                                  :include-timestamp-p include-timestamp-p
@@ -81,6 +82,7 @@ Use NEW-CHAT instead when no persona should be loaded."
            (model (safe-getf config :model))
            (googleapi (safe-getf config :googleapi))
            (google-search-p (safe-getf config :google-search-p))
+           (gemini-fallback-to-google-p (safe-getf config :gemini-fallback-to-google-p))
            (web-tools-p (safe-getf config :enable-web-tools))
            (code-execution-p (safe-getf config :code-execution-p))
            (include-timestamp-p (safe-getf config :include-timestamp))
@@ -97,6 +99,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                           :model model
                           :system-instruction system-instruction
                           :google-search-p google-search-p
+                          :gemini-fallback-to-google-p gemini-fallback-to-google-p
                           :web-tools-p web-tools-p
                           :code-execution-p code-execution-p
                           :include-timestamp-p include-timestamp-p

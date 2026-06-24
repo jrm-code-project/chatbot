@@ -99,6 +99,21 @@
                         ("HOME" . "C:\\Users\\bitdi"))
                       merged))))
 
+(fiveam:test test-mcp-request-json-encodes-tool-arguments-as-records
+  (let* ((payload `((:jsonrpc . "2.0")
+                    (:id . 1)
+                    (:method . "tools/call")
+                    (:params . ((:name . "add_observations")
+                                (:arguments . ((:observations ((:entityName . "Boss")
+                                                               (:contents "watching")))))))))
+         (json (cl-json:encode-json-to-string (json-encodable-value payload))))
+    (fiveam:is (search "\"arguments\":{\"observations\":[{"
+                       json))
+    (fiveam:is (search "\"contents\":[\"watching\"]"
+                       json))
+    (fiveam:is-false (search "\"arguments\":["
+                             json))))
+
 (fiveam:test test-execute-chatbot-tool-read-file-lines
   (let* ((temp-dir (uiop:default-temporary-directory))
          (root (merge-pathnames "filesystem-tool-root/" temp-dir))
@@ -121,9 +136,168 @@
                                                      ("endingLine" . 3)))))
       (uiop:delete-directory-tree root :validate t))))
 
+(fiveam:test test-execute-chatbot-tool-by-name-dispatches-mcp-tools
+  (let ((*find-mcp-server-and-tool-function*
+         (lambda (bot tool-name)
+           (declare (ignore bot))
+           (values :mock-server `((:name . ,tool-name)))))
+       (*execute-mcp-tool-function*
+         (lambda (server tool-name arguments)
+           (declare (ignore server))
+           (fiveam:is (string= "echo_tool" tool-name))
+           (fiveam:is (string= "payload" (cdr (assoc :value arguments))))
+           "tool result")))
+    (let ((bot (conversation-chatbot (new-chat :backend :openai))))
+      (fiveam:is (string= "tool result"
+                         (execute-chatbot-tool-by-name bot
+                                                       "echo_tool"
+                                                       '((:value . "payload"))))))))
+
+(fiveam:test test-execute-chatbot-tool-by-name-errors-when-tool-is-missing
+  (let ((*find-mcp-server-and-tool-function*
+         (lambda (bot tool-name)
+           (declare (ignore bot tool-name))
+           (values nil nil))))
+    (let ((bot (conversation-chatbot (new-chat :backend :openai))))
+      (fiveam:signals error
+       (execute-chatbot-tool-by-name bot
+                                     "missing_tool"
+                                     '())))))
+
+(fiveam:test test-execute-chatbot-tool-by-name-json-arguments-parses-before-execution
+  (let ((*find-mcp-server-and-tool-function*
+         (lambda (bot tool-name)
+           (declare (ignore bot))
+           (values :mock-server `((:name . ,tool-name)))))
+       (*execute-mcp-tool-function*
+         (lambda (server tool-name arguments)
+           (declare (ignore server))
+           (fiveam:is (string= "echo_tool" tool-name))
+           (fiveam:is (string= "payload" (cdr (assoc :value arguments))))
+           "json tool result")))
+    (let ((bot (conversation-chatbot (new-chat :backend :openai))))
+      (fiveam:is (string= "json tool result"
+                         (execute-chatbot-tool-by-name-json-arguments
+                          bot
+                          "echo_tool"
+                          "{\"value\":\"payload\"}"
+                          "MCP helper test"))))))
+
+(fiveam:test test-execute-chatbot-tool-by-name-normalizes-mcp-argument-keys-from-schema
+  (let ((*find-mcp-server-and-tool-function*
+        (lambda (bot tool-name)
+          (declare (ignore bot))
+          (values :mock-server
+                  `((:name . ,tool-name)
+                    (:input-schema . ((:type . "object")
+                                      (:properties . (("observations" . ((:type . "array")
+                                                                         (:items . ((:type . "object")
+                                                                                    (:properties . (("entityName" . ((:type . "string")))
+                                                                                                    ("contents" . ((:type . "array")
+                                                                                                                   (:items . ((:type . "string")))))))))))))))))))
+       (*execute-mcp-tool-function*
+        (lambda (server tool-name arguments)
+          (declare (ignore server))
+          (fiveam:is (string= "add_observations" tool-name))
+          (let* ((observations (mcp-val "observations" arguments))
+                 (first-observation (first observations)))
+            (fiveam:is (string= "Boss" (mcp-val "entityName" first-observation)))
+            (fiveam:is (equal '("watching") (mcp-val "contents" first-observation))))
+          "normalized")))
+    (let ((bot (conversation-chatbot (new-chat :backend :openai))))
+      (fiveam:is (string= "normalized"
+                        (execute-chatbot-tool-by-name
+                         bot
+                         "add_observations"
+                         '((:observations . (((:entityname . "Boss")
+                                              (:contents . ("watching"))))))))))))
+
+(fiveam:test test-map-chatbot-json-tool-call-results-preserves-order
+  (let* ((executions nil)
+        (*find-mcp-server-and-tool-function*
+         (lambda (bot tool-name)
+           (declare (ignore bot))
+           (values :mock-server `((:name . ,tool-name)))))
+        (*execute-mcp-tool-function*
+         (lambda (server tool-name arguments)
+           (declare (ignore server))
+           (push (list tool-name (cdr (assoc :value arguments))) executions)
+           (format nil "~A=>~A" tool-name (cdr (assoc :value arguments))))))
+    (let* ((bot (conversation-chatbot (new-chat :backend :openai)))
+          (tool-calls
+            (list (list (cons :id "call-1")
+                        (cons :name "first_tool")
+                        (cons :arguments "{\"value\":\"alpha\"}"))
+                  (list (cons :id "call-2")
+                        (cons :name "second_tool")
+                        (cons :arguments "{\"value\":\"beta\"}"))))
+          (results
+            (map-chatbot-json-tool-call-results
+             bot
+             tool-calls
+             (lambda (name tool-call)
+               (declare (ignore tool-call))
+               (format nil "Tool arguments for ~A" name))
+             (lambda (id name arguments-json res-text tool-call)
+               (declare (ignore tool-call))
+               (list id name arguments-json res-text)))))
+      (fiveam:is (equal '(("call-1" "first_tool" "{\"value\":\"alpha\"}" "first_tool=>alpha")
+                         ("call-2" "second_tool" "{\"value\":\"beta\"}" "second_tool=>beta"))
+                       results))
+      (fiveam:is (equal '(("first_tool" "alpha")
+                         ("second_tool" "beta"))
+                       (nreverse executions))))))
+
+(fiveam:test test-map-chatbot-json-tool-call-results-can-report-errors
+  (let* ((executions nil)
+        (*find-mcp-server-and-tool-function*
+         (lambda (bot tool-name)
+           (declare (ignore bot))
+           (values :mock-server `((:name . ,tool-name)))))
+        (*execute-mcp-tool-function*
+         (lambda (server tool-name arguments)
+           (declare (ignore server))
+           (push (list tool-name (cdr (assoc :value arguments))) executions)
+           (if (string= tool-name "first_tool")
+               (error 'mcp-tool-execution-error
+                      :tool-name tool-name
+                      :reason "mock failure")
+               (format nil "~A=>~A" tool-name (cdr (assoc :value arguments)))))))
+    (let* ((bot (conversation-chatbot (new-chat :backend :openai)))
+           (tool-calls
+             (list (list (cons :id "call-1")
+                         (cons :name "first_tool")
+                         (cons :arguments "{\"value\":\"alpha\"}"))
+                   (list (cons :id "call-2")
+                         (cons :name "second_tool")
+                         (cons :arguments "{\"value\":\"beta\"}"))))
+           (results
+             (map-chatbot-json-tool-call-results
+              bot
+              tool-calls
+              (lambda (name tool-call)
+                (declare (ignore tool-call))
+                (format nil "Tool arguments for ~A" name))
+              (lambda (id name arguments-json res-text tool-call)
+                (declare (ignore tool-call))
+                (list id name arguments-json res-text))
+              :error-builder
+              (lambda (id name arguments-json condition tool-call)
+                (declare (ignore tool-call))
+                (list id name arguments-json (chatbot-tool-error-payload name condition))))))
+      (fiveam:is (equal '(("call-1" "first_tool" "{\"value\":\"alpha\"}"
+                          (("type" . "tool_error")
+                           ("toolName" . "first_tool")
+                           ("message" . "mock failure")))
+                         ("call-2" "second_tool" "{\"value\":\"beta\"}" "second_tool=>beta"))
+                       results))
+      (fiveam:is (equal '(("first_tool" "alpha")
+                         ("second_tool" "beta"))
+                       (nreverse executions))))))
+
 (fiveam:test test-execute-chatbot-tool-read-file-lines-rejects-invalid-range
   (let* ((temp-dir (uiop:default-temporary-directory))
-         (root (merge-pathnames "filesystem-tool-root-invalid/" temp-dir))
+        (root (merge-pathnames "filesystem-tool-root-invalid/" temp-dir))
          (file-path (merge-pathnames "notes.txt" root))
          (bot (make-instance 'chatbot
                              :filesystem-tools-p t
@@ -676,15 +850,34 @@
       (fiveam:signals mcp-tool-execution-error
         (execute-mcp-tool server "cached_tool" nil)))))
 
-(fiveam:test test-execute-mcp-tool-signals-missing-text-content
+(fiveam:test test-execute-mcp-tool-falls-back-to-nontext-content
   (let* ((server (make-instance 'mcp-server :name "cached-server"))
          )
     (let ((*mcp-call-tool-function*
             (lambda (srv name arguments)
               (declare (ignore srv name arguments))
               '((:content . (((:type . "image"))))))))
-      (fiveam:signals mcp-tool-execution-error
-        (execute-mcp-tool server "cached_tool" nil)))))
+      (fiveam:is (string= "[{\"type\":\"image\"}]"
+                          (execute-mcp-tool server "cached_tool" nil))))))
+
+(fiveam:test test-execute-mcp-tool-falls-back-to-structured-content
+  (let* ((server (make-instance 'mcp-server :name "cached-server")))
+    (let ((*mcp-call-tool-function*
+            (lambda (srv name arguments)
+              (declare (ignore srv name arguments))
+              '(("structuredContent" . ((:entities . #(((:name . "alpha"))))
+                                        (:relations . #())))))))
+      (fiveam:is (string= "{\"entities\":[{\"name\":\"alpha\"}],\"relations\":[]}"
+                          (execute-mcp-tool server "read_graph" nil))))))
+
+(fiveam:test test-execute-mcp-tool-falls-back-to-success-message-when-payload-is-empty
+  (let* ((server (make-instance 'mcp-server :name "cached-server")))
+    (let ((*mcp-call-tool-function*
+            (lambda (srv name arguments)
+              (declare (ignore srv name arguments))
+              '())))
+      (fiveam:is (string= "Tool completed successfully."
+                          (execute-mcp-tool server "add_observations" nil))))))
 
 (fiveam:test test-initialize-mcp-servers-records-partial-failure-status
   (let* ((bot (make-instance 'chatbot))

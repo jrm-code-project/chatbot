@@ -20,7 +20,7 @@
            (persona-memory (conversation-persona-memory conversation))
            (persona-diary-entries (conversation-persona-diary-entries conversation))
           (history-messages (or history-messages
-                                (append-user-input-to-conversation-messages current-messages input)))
+                                (stateless-history-messages current-messages input)))
           (request-messages (or request-messages
                                 (build-openai-request-messages system-inst current-messages input
                                                                :chatbot bot
@@ -103,41 +103,46 @@
                        (assistant-msg `(("role" . "assistant")
                                         ("content" . nil)
                                         ("tool_calls" . ,assistant-tool-calls)))
-                       (tool-responses nil))
-                  (dolist (tc tcs)
-                    (let* ((id (cdr (assoc :id tc)))
-                           (name (cdr (assoc :name tc)))
-                           (args-str (coerce (cdr (assoc :arguments tc)) 'string))
-                           (args (parse-json-or-error args-str :context (format nil "OpenAI tool arguments for ~A" name))))
-                      (multiple-value-bind (srv tool) (find-chatbot-tool bot name)
-                        (declare (ignore tool))
-                        (unless srv
-                          (error "Tool not found: ~A" name))
-                        (let ((res-text (execute-chatbot-tool bot srv name args)))
-                          (push `(("role" . "tool")
-                                  ("tool_call_id" . ,id)
-                                  ("name" . ,name)
-                                  ("content" . ,res-text))
-                                tool-responses)))))
-                  (let ((ordered-tool-responses (nreverse tool-responses)))
-                    (let ((recursive-history (append history-messages
-                                                     (list assistant-msg)
-                                                     ordered-tool-responses)))
-                      (setf (conversation-messages conversation)
-                            recursive-history)
-                    (chat-openai bot
-                                 nil
-                                 conversation
-                                 callback
-                                 :history-messages recursive-history
-                                 :request-messages (append request-messages
-                                                           (list assistant-msg)
-                                                           ordered-tool-responses)
-                                 :file-attachments file-attachments))))
+                       (ordered-tool-responses
+                         (map-chatbot-json-tool-call-results
+                          bot
+                          tcs
+                          (lambda (name tool-call)
+                            (declare (ignore tool-call))
+                            (format nil "OpenAI tool arguments for ~A" name))
+                          (lambda (id name args-str res-text tool-call)
+                            (declare (ignore args-str tool-call))
+                            `(("role" . "tool")
+                              ("tool_call_id" . ,id)
+                              ("name" . ,name)
+                              ("content" . ,res-text)))
+                          :error-builder
+                          (lambda (id name args-str condition tool-call)
+                            (declare (ignore args-str tool-call))
+                            `(("role" . "tool")
+                              ("tool_call_id" . ,id)
+                              ("name" . ,name)
+                              ("content" . ,(chatbot-tool-error-text name condition)))))))
+                    (let ((recursion-messages (append (list assistant-msg)
+                                                       ordered-tool-responses)))
+                      (continue-stateless-tool-recursion
+                       conversation
+                       history-messages
+                       recursion-messages
+                       (lambda (recursive-history recursion-messages)
+                         (chat-openai bot
+                                       nil
+                                       conversation
+                                       callback
+                                       :history-messages recursive-history
+                                       :request-messages (append request-messages
+                                                                 recursion-messages)
+                                       :file-attachments file-attachments)))))
                 (let ((final-str (coerce full-text 'string)))
-                  (setf (conversation-messages conversation)
-                        (append history-messages
-                                (list (list (cons "role" "assistant")
-                                            (cons "content" final-str)))))
+                  (update-conversation-stateless-history
+                   conversation
+                   history-messages
+                   (list (cons "role" "assistant")
+                         (cons "content" final-str)))
                   (format-paragraphs final-str :width 80)
                   final-str))))))))

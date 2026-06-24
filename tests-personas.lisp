@@ -260,6 +260,23 @@
             (fiveam:is-true (chatbot-web-tools-p bot))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
+(fiveam:test test-persona-config-can-enable-gemini-google-fallback
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-gemini-fallback/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "persona-gemini-fallback/" personas-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                    :direction :output
+                    :if-exists :supersede)
+      (write-line "(:model \"gemini-3.5-flash\" :gemini-fallback-to-google-p t)" s))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+           (let* ((conv (new-chat-persona "persona-gemini-fallback"))
+                 (bot (conversation-chatbot conv)))
+            (fiveam:is-true (chatbot-gemini-fallback-to-google-p bot))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
 (fiveam:test test-persona-config-enables-eval-tool
   (let* ((temp-dir (uiop:default-temporary-directory))
          (mock-home (merge-pathnames "mock-home-eval-tool/" temp-dir))
