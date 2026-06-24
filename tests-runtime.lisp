@@ -584,7 +584,14 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                            captured-gemini-payload))
         (fiveam:is (search "\"text\":\"[08:46 retry] [model: gemini-pro-latest] Retry this\""
                            captured-google-payload))
-        (fiveam:is-false (search "[model: gemini-3.5-flash] Retry this" captured-google-payload))))))
+        (fiveam:is-false (search "[model: gemini-3.5-flash] Retry this" captured-google-payload))
+        (fiveam:is (null (conversation-interaction-id conv)))
+        (let ((stored-history (conversation-messages conv)))
+          (fiveam:is (= 2 (length stored-history)))
+          (fiveam:is (string= "Retry this"
+                              (cdr (assoc "content" (first stored-history) :test #'string=))))
+          (fiveam:is (string= "Recovered from Gemini malformed response"
+                              (cdr (assoc "content" (second stored-history) :test #'string=)))))))))
 
 (fiveam:test test-gemini-chat-retries-empty-response-on-google-gemini-pro-latest
   (let ((conv (new-chat :backend :gemini))
@@ -613,7 +620,14 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (fiveam:is (string= "Recovered from Gemini empty response" res))
         (fiveam:is (search "/interactions?alt=sse" (second captured-urls)))
         (fiveam:is (search "/models/gemini-pro-latest:generateContent" (first captured-urls)))
-        (fiveam:is (search "\"text\":\"Retry empty\"" captured-google-payload))))))
+        (fiveam:is (search "\"text\":\"Retry empty\"" captured-google-payload))
+        (fiveam:is (null (conversation-interaction-id conv)))
+        (let ((stored-history (conversation-messages conv)))
+          (fiveam:is (= 2 (length stored-history)))
+          (fiveam:is (string= "Retry empty"
+                              (cdr (assoc "content" (first stored-history) :test #'string=))))
+          (fiveam:is (string= "Recovered from Gemini empty response"
+                              (cdr (assoc "content" (second stored-history) :test #'string=)))))))))
 
 (fiveam:test test-gemini-tool-call-errors-are-reported-back-to-the-model
   (let ((conv (new-chat :backend :gemini))

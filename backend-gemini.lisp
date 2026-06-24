@@ -7,6 +7,10 @@
   "Returns true when BOT should fall back to Google generateContent on Interactions 404 errors."
   (chatbot-gemini-fallback-to-google-p bot))
 
+(defun restore-gemini-interaction-id (conversation original-interaction-id)
+  "Restores CONVERSATION's Gemini interaction state to ORIGINAL-INTERACTION-ID."
+  (setf (conversation-interaction-id conversation) original-interaction-id))
+
 (defun retry-gemini-turn-on-google-gemini-pro-latest (bot input conversation callback
                                                            &key file-attachments)
   "Resubmits a Gemini turn through the Google backend on gemini-pro-latest."
@@ -21,13 +25,14 @@
   (let ((api-key (gemini-api-key)))
     (unless (and api-key (string/= api-key ""))
       (error "Gemini API Key is not set. Please ensure (gemini-api-key) is configured."))
-    (let* ((payload-alist (make-interaction-payload
+    (let* ((original-interaction-id (conversation-interaction-id conversation))
+           (payload-alist (make-interaction-payload
                            bot
                            input
                            :messages (conversation-messages conversation)
                            :persona-memory (conversation-persona-memory conversation)
                            :persona-diary-entries (conversation-persona-diary-entries conversation)
-                           :previous-interaction-id (conversation-interaction-id conversation)
+                           :previous-interaction-id original-interaction-id
                            :file-attachments file-attachments
                            :effective-model effective-model
                            :stream t))
@@ -44,8 +49,8 @@
            (completed-interaction-p nil))
       (handler-case
           (multiple-value-bind (stream status)
-             (post-web-request url headers payload-json :want-stream t)
-           (if (= status 200)
+              (post-web-request url headers payload-json :want-stream t)
+            (if (= status 200)
                 (unwind-protect
                      (loop for line = (read-sse-line stream)
                            until (eq line :eof)
@@ -106,6 +111,7 @@
                 (error "API responded with HTTP status ~A" status)))
         (error (e)
           (let ((message (string-downcase (princ-to-string e))))
+            (restore-gemini-interaction-id conversation original-interaction-id)
             (if (and (gemini-fallback-to-google-enabled-p bot)
                      (search "/interactions?alt=sse" message)
                      (search "404" message)
@@ -145,7 +151,8 @@
             (when (and (stringp input)
                        completed-interaction-p
                        (or (malformed-response-stop-reason-p completed-stop-reason)
-                          (= 0 (length full-text))))
+                           (= 0 (length full-text))))
+              (restore-gemini-interaction-id conversation original-interaction-id)
               (return-from chat-gemini
                 (retry-gemini-turn-on-google-gemini-pro-latest
                  bot

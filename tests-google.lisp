@@ -421,7 +421,8 @@
         (let* ((first-payload (cl-json:decode-json-from-string (second captured-payloads)))
                (first-contents (cdr (assoc :contents first-payload)))
                (retry-payload (cl-json:decode-json-from-string (first captured-payloads)))
-               (retry-contents (cdr (assoc :contents retry-payload))))
+               (retry-contents (cdr (assoc :contents retry-payload)))
+               (stored-history (conversation-messages conv)))
           (fiveam:is (string= "[08:46 first] [model: gemini-3.5-flash] Retry me"
                               (cdr (assoc :text
                                           (car (cdr (assoc :parts (first first-contents))))))))
@@ -431,7 +432,12 @@
           (fiveam:is-false
            (search "[model: gemini-3.5-flash]"
                    (cdr (assoc :text
-                               (car (cdr (assoc :parts (first retry-contents)))))))))))))
+                              (car (cdr (assoc :parts (first retry-contents))))))))
+          (fiveam:is (= 2 (length stored-history)))
+          (fiveam:is (string= "Retry me"
+                              (cdr (assoc "content" (first stored-history) :test #'string=))))
+          (fiveam:is (string= "Recovered on retry"
+                              (cdr (assoc "content" (second stored-history) :test #'string=)))))))))
 
 (fiveam:test test-google-chat-retries-no-text-response-on-gemini-pro-latest
   (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
