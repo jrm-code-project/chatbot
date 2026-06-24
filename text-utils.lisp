@@ -3,10 +3,27 @@
 
 (in-package "CHATBOT")
 
-(defun read-sse-line (stream)
+(defun call-with-stream-read-timeout (thunk &key timeout-seconds (timeout-context "streamed response"))
+  "Calls THUNK, applying a hard timeout when TIMEOUT-SECONDS is a positive number."
+  (handler-case
+      (if (and timeout-seconds
+               (> timeout-seconds 0))
+          (trivial-timeout:with-timeout (timeout-seconds)
+            (funcall thunk))
+          (funcall thunk))
+    (trivial-timeout:timeout-error ()
+      (error "Timed out waiting ~A seconds for ~A."
+             timeout-seconds
+             timeout-context))))
+
+(defun read-sse-line (stream &key timeout-seconds (timeout-context "streamed response"))
   "Reads a single line from the stream, stripping any trailing carriage returns."
   (handler-case
-      (let ((line (read-line stream nil :eof)))
+      (let ((line (call-with-stream-read-timeout
+                   (lambda ()
+                     (read-line stream nil :eof))
+                   :timeout-seconds timeout-seconds
+                   :timeout-context timeout-context)))
         (if (eq line :eof)
             :eof
             (string-right-trim '(#\Return) line)))

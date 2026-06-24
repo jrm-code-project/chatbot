@@ -28,6 +28,7 @@
                                                                :persona-diary-entries persona-diary-entries
                                                                :file-attachments file-attachments))))
       (let* ((openai-tools (openai-request-tools bot))
+             (stream-read-timeout (current-http-read-timeout))
             (payload-alist (list (cons "model" (chatbot-model bot))
                                  (cons "messages" request-messages)
                                  (cons "stream" t))))
@@ -44,7 +45,9 @@
                   (post-web-request url headers payload-json :want-stream t)
                 (if (= status 200)
                     (unwind-protect
-                         (loop for line = (read-sse-line stream)
+                         (loop for line = (read-sse-line stream
+                                                         :timeout-seconds stream-read-timeout
+                                                         :timeout-context "OpenAI streaming response")
                                until (or (eq line :eof)
                                          (and (stringp line)
                                               (alexandria:starts-with-subseq "data: [DONE]" line)))

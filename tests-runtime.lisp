@@ -45,6 +45,18 @@
     (fiveam:is (= 7 captured-connect-timeout))
     (fiveam:is (= 33 captured-read-timeout))))
 
+(fiveam:test test-call-with-stream-read-timeout-signals-on-stall
+  (let ((start (get-internal-real-time))
+       (units internal-time-units-per-second))
+    (fiveam:signals error
+     (call-with-stream-read-timeout
+      (lambda ()
+        (sleep 2)
+        "never reached")
+      :timeout-seconds 1
+      :timeout-context "test stream"))
+    (fiveam:is (< (/ (- (get-internal-real-time) start) units) 2.0))))
+
 (fiveam:test test-legacy-timeout-globals-sync-through-default-runtime-context
   (let* ((conv (new-chat :backend :google))
          (captured-connect-timeout nil)

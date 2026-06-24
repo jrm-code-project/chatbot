@@ -41,6 +41,7 @@
            (headers (list (cons "x-goog-api-key" api-key)
                           (cons "Api-Revision" (gemini-api-revision))
                           (cons "Content-Type" "application/json")))
+           (stream-read-timeout (current-http-read-timeout))
            (full-text (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t))
            (active-fn-call nil)
            (function-calls-to-run nil)
@@ -52,7 +53,9 @@
               (post-web-request url headers payload-json :want-stream t)
             (if (= status 200)
                 (unwind-protect
-                     (loop for line = (read-sse-line stream)
+                     (loop for line = (read-sse-line stream
+                                                    :timeout-seconds stream-read-timeout
+                                                    :timeout-context "Gemini streaming response")
                            until (eq line :eof)
                            do (let ((event (parse-sse-event line)))
                                 (when event
