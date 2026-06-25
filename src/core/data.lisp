@@ -79,6 +79,9 @@
     :initform nil
     :documentation "Default conversation associated with this runtime context.")))
 
+(defparameter +default-gemini-fallback-to-google-p+ nil
+  "Authoritative default for the Gemini Interactions compatibility fallback.")
+
 (defclass chatbot ()
   ((model
     :initarg :model
@@ -123,7 +126,7 @@
    (gemini-fallback-to-google-p
     :initarg :gemini-fallback-to-google-p
     :accessor chatbot-gemini-fallback-to-google-p
-    :initform t
+    :initform +default-gemini-fallback-to-google-p+
     :documentation "Compatibility flag allowing Gemini Interactions requests to fall back to Google generateContent on 404-style endpoint errors.")
    (web-tools-p
     :initarg :web-tools-p

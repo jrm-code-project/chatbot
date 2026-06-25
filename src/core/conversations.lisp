@@ -47,7 +47,7 @@
       :paragraph-file
       :markdown-file))
 
-(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p nil) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context)
+(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context)
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific

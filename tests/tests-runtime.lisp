@@ -444,11 +444,14 @@
 
 (fiveam:test test-new-chat-without-persona-starts-empty
   (let* ((conv (new-chat))
-        (bot (conversation-chatbot conv)))
+         (bot (conversation-chatbot conv))
+         (default-bot (make-instance 'chatbot)))
     (fiveam:is (typep conv 'conversation))
     (fiveam:is (typep bot 'chatbot))
     (fiveam:is (null (conversation-messages conv)))
-    (fiveam:is (null (conversation-interaction-id conv)))))
+    (fiveam:is (null (conversation-interaction-id conv)))
+    (fiveam:is-false (chatbot-gemini-fallback-to-google-p bot))
+    (fiveam:is-false (chatbot-gemini-fallback-to-google-p default-bot))))
 
 (fiveam:test test-gemini-chat-falls-back-on-interactions-404
   (let ((conv (new-chat :backend :gemini :gemini-fallback-to-google-p t))
@@ -772,7 +775,27 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
 
 Para two." :width 40 :stream s))))
     (fiveam:is (search "  Para one." output))
-    (fiveam:is (search (format nil "  Para one.~%~%  Para two." ) output))))
+    (fiveam:is (search (format nil "  Para one.~%~%  Para two." ) output)))
+  (let* ((fenced-text "Before fence.
+
+```java
+public class Example {
+    public static void main(String[] args) {}
+}
+```
+
+After fence.")
+         (output (with-output-to-string (s)
+                   (format-paragraphs fenced-text :width 20 :stream s))))
+    (fiveam:is (search "  Before fence." output))
+    (fiveam:is (search "```java" output))
+    (fiveam:is (search "public class Example {" output))
+    (fiveam:is (search "    public static void main(String[] args) {}" output))
+    (fiveam:is (search "}" output))
+    (fiveam:is (search "```" output))
+    (fiveam:is (search "  After fence." output))
+    (fiveam:is-false (search "public class~%Example" output))
+    (fiveam:is-false (search "static void~%main" output))))
 
 (fiveam:test test-log-message-level-filtering
   (let ((*logging-enabled-p* t)
