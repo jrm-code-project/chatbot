@@ -9,6 +9,8 @@ The main public entry points are:
 | `CHATBOT:NEW-CHAT` | Start a plain conversation with a selected backend/model |
 | `CHATBOT:NEW-CHAT-PERSONA` | Start a conversation from a persona directory in `~/.Personas/` |
 | `CHATBOT:CHAT` | Send one turn to a conversation |
+| `CHATBOT:SEND-LATEST-SCREENSHOT` | Send the newest configured screenshot files as transient attachments |
+| `CHATBOT:LISP-NEWS` | Ask for recent Lisp and Scheme news using the configured feed URLs |
 | `CHATBOT:SPAWN-PERSONA` | Create a sandbox persona in the active registry |
 | `CHATBOT:QUERY-ALL` | Ask several sandbox personas the same question independently |
 | `CHATBOT:RUN-ARENA` | Run a debate/forum where personas answer each other in sequence |
@@ -160,6 +162,48 @@ Another example:
    :conversation conversation
    :file #p"d:/path/to/file.txt"))
 ```
+
+### Lisp news helper
+
+`CHATBOT:LISP-NEWS` is a convenience wrapper around `CHAT` that asks for recent
+Lisp and Scheme news and attaches the configured feed URLs as transient files for
+that turn.
+
+```lisp
+(let ((conversation (chatbot:new-chat)))
+  (chatbot:lisp-news :conversation conversation))
+```
+
+The default feed list is configured internally by the library and can be changed
+in code if you want different feed sources.
+
+### Screenshot helper
+
+The screenshot helper is `CHATBOT:SEND-LATEST-SCREENSHOT`.
+
+It finds the newest files matching the configured screenshot wildcard pathnames,
+attaches them to one chat turn, and asks the model to analyze them.
+
+```lisp
+(let ((conversation (chatbot:new-chat)))
+  (chatbot:send-latest-screenshot :conversation conversation))
+```
+
+You can request more than one screenshot and append extra prompt text:
+
+```lisp
+(let ((conversation (chatbot:new-chat)))
+  (chatbot:send-latest-screenshot
+   :conversation conversation
+   :n 2
+   :prompt "Focus on the HUD and any visible error messages."))
+```
+
+The configured wildcard pathnames and base prompt are:
+
+- `CHATBOT:*SCREENSHOT-PATH*`
+- `CHATBOT:*SCREENSHOT-PATH-1*`
+- `CHATBOT:*SCREENSHOT-PROMPT*`
 
 ## Multi-agent usage
 
