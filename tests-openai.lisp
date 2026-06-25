@@ -62,6 +62,55 @@ data: [DONE]")
         (fiveam:is (string= "assistant" (cdr (assoc "role" (fourth stored-history) :test #'string=))))
         (fiveam:is (string= "Hello OpenAI" (cdr (assoc "content" (fourth stored-history) :test #'string=))))))))
 
+(fiveam:test test-openai-chat-joins-system-instruction-paragraph-vectors
+  (let ((captured-payload nil))
+    (let* ((*openai-api-key* "test-key")
+           (context (make-runtime-context
+                     :http-post-function
+                     (lambda (url &rest args)
+                       (declare (ignore url))
+                       (setf captured-payload (getf args :content))
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"content\": \"Hello OpenAI\"}}]}
+data: [DONE]")
+                               200))))
+           (conv (new-chat :backend :openai
+                           :system-instruction #("First paragraph." "Second paragraph.")
+                           :runtime-context context)))
+      (fiveam:is (string= "Hello OpenAI" (chat "Hi there" :conversation conv)))
+      (let* ((payload (cl-json:decode-json-from-string captured-payload))
+             (messages (cdr (assoc :messages payload)))
+             (expected (format nil "First paragraph.~%~%Second paragraph.")))
+        (fiveam:is (string= expected
+                            (cdr (assoc :content (first messages)))))))))
+
+(fiveam:test test-openai-chat-includes-effective-sampling-parameters
+  (let ((captured-payload nil))
+    (let* ((*openai-api-key* "test-key")
+           (context (make-runtime-context
+                     :http-post-function
+                     (lambda (url &rest args)
+                       (declare (ignore url))
+                       (setf captured-payload (getf args :content))
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"content\": \"Hello OpenAI\"}}]}
+data: [DONE]")
+                               200))))
+           (conv (new-chat :backend :openai
+                           :temperature 0.3d0
+                           :top-p 0.4d0
+                           :runtime-context context)))
+      (fiveam:is (string= "Hello OpenAI"
+                          (chat "Hi there"
+                                :conversation conv
+                                :temperature 0.8d0
+                                :top-p 0.95d0)))
+      (fiveam:is (search "\"temperature\":0.8" captured-payload))
+      (fiveam:is (search "\"top_p\":0.95" captured-payload))
+      (let ((parameters (sampling-parameters conv)))
+        (fiveam:is (= 0.3d0 (getf parameters :temperature)))
+        (fiveam:is (= 0.4d0 (getf parameters :top-p)))))))
+
 (fiveam:test test-openai-chat-preserves-preloaded-history-every-turn
   (let ((captured-payloads nil))
     (let* ((*openai-api-key* "test-key")
@@ -389,10 +438,13 @@ data: [DONE]")
       (fiveam:is (string= "Hello OpenAI" (chat "Hi there" :conversation conv)))
       (let* ((payload (cl-json:decode-json-from-string captured-payload))
             (tools (cdr (assoc :tools payload)))
-            (first-tool (car tools))
-            (function (cdr (assoc :function first-tool))))
-        (fiveam:is (= 1 (length tools)))
-        (fiveam:is (string= "function" (cdr (assoc :type first-tool))))
+            (echo-tool (find "echo_tool"
+                             tools
+                             :test #'string=
+                             :key (lambda (tool)
+                                    (cdr (assoc :name (cdr (assoc :function tool)))))))
+            (function (cdr (assoc :function echo-tool))))
+        (fiveam:is (string= "function" (cdr (assoc :type echo-tool))))
         (fiveam:is (string= "echo_tool" (cdr (assoc :name function))))
         (fiveam:is (string= "Echo tool" (cdr (assoc :description function))))))))
 

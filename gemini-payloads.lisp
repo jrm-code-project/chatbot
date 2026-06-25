@@ -77,7 +77,7 @@
              'vector)
             (decorate-live-user-input chatbot input :effective-model effective-model)))))
 
-(defun make-interaction-payload (chatbot input &key previous-interaction-id (stream t) messages persona-memory persona-diary-entries file-attachments effective-model)
+(defun make-interaction-payload (chatbot input &key previous-interaction-id (stream t) messages persona-memory persona-diary-entries file-attachments effective-model effective-generation-config)
   "Creates a JSON-serializable alist payload for the Gemini Interactions API."
   (let ((payload (list (cons "model" (or effective-model
                                         (chatbot-model chatbot)))
@@ -101,7 +101,18 @@
     (when previous-interaction-id
       (push (cons "previous_interaction_id" previous-interaction-id) payload))
     (when (chatbot-system-instruction chatbot)
-      (push (cons "system_instruction" (chatbot-system-instruction chatbot)) payload))
+      (push (cons "system_instruction"
+                  (system-instruction-text (chatbot-system-instruction chatbot)))
+            payload))
+    (when (or (getf effective-generation-config :temperature)
+              (getf effective-generation-config :top-p))
+      (push (cons "generation_config"
+                  (remove nil
+                          (list (when (getf effective-generation-config :temperature)
+                                  (cons "temperature" (getf effective-generation-config :temperature)))
+                                (when (getf effective-generation-config :top-p)
+                                  (cons "top_p" (getf effective-generation-config :top-p))))))
+            payload))
     (let ((tools (interaction-request-tools chatbot)))
       (when tools
         (push (cons "tools" tools) payload)))

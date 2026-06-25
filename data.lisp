@@ -89,7 +89,27 @@
     :initarg :system-instruction
     :accessor chatbot-system-instruction
     :initform nil
-    :documentation "Optional system instructions directing the chatbot behavior.")
+    :documentation "Optional system instructions directing the chatbot behavior, stored as either a string or a vector of paragraph strings.")
+   (system-instruction-path
+    :initarg :system-instruction-path
+    :accessor chatbot-system-instruction-path
+    :initform nil
+    :documentation "Optional backing file pathname for system instructions.")
+   (system-instruction-storage-kind
+    :initarg :system-instruction-storage-kind
+    :accessor chatbot-system-instruction-storage-kind
+    :initform :transient
+    :documentation "Persistence kind for system instructions (:transient, :markdown-file, or :paragraph-file).")
+   (temperature
+    :initarg :temperature
+    :accessor chatbot-temperature
+    :initform nil
+    :documentation "Optional default sampling temperature for this chatbot. NIL uses the provider default.")
+   (top-p
+    :initarg :top-p
+    :accessor chatbot-top-p
+    :initform nil
+    :documentation "Optional default nucleus sampling top-p for this chatbot. NIL uses the provider default.")
    (google-search-p
     :initarg :google-search-p
     :accessor chatbot-google-search-p
@@ -186,3 +206,221 @@
     :accessor conversation-messages
     :initform nil
     :documentation "Accumulated conversation messages for stateless backends (like OpenAI).")))
+
+(defun split-system-instruction-into-paragraphs (text)
+  "Splits TEXT into a vector of trimmed paragraphs."
+  (let* ((normalized (remove #\Return text))
+        (paragraphs (remove ""
+                            (mapcar (lambda (paragraph)
+                                      (string-trim '(#\Space #\Tab #\Return #\Linefeed)
+                                                   paragraph))
+                                    (cl-ppcre:split "(?:\\n[ \\t]*){2,}" normalized))
+                            :test #'string=)))
+    (coerce paragraphs 'vector)))
+
+(defun system-instruction-paragraphs (system-instruction)
+  "Returns SYSTEM-INSTRUCTION as a vector of paragraphs."
+  (cond
+    ((null system-instruction) nil)
+    ((stringp system-instruction) (vector system-instruction))
+    ((vectorp system-instruction) system-instruction)
+    ((listp system-instruction) (coerce system-instruction 'vector))
+    (t (vector system-instruction))))
+
+(defun system-instruction-text (system-instruction)
+  "Returns SYSTEM-INSTRUCTION as a single string separated by blank lines."
+  (let ((paragraphs (system-instruction-paragraphs system-instruction)))
+    (when (and paragraphs (> (length paragraphs) 0))
+     (format nil "~{~A~^~%~%~}" (coerce paragraphs 'list)))))
+
+(defun system-instruction-text-parts (system-instruction)
+  "Returns SYSTEM-INSTRUCTION as a vector of provider text parts."
+  (let ((paragraphs (system-instruction-paragraphs system-instruction)))
+    (when (and paragraphs (> (length paragraphs) 0))
+     (coerce (loop for paragraph across paragraphs
+                   collect (list (cons "text" paragraph)))
+             'vector))))
+
+(defun system-instruction-owner (target)
+  "Returns the chatbot owning TARGET's system instructions."
+  (cond
+    ((typep target 'chatbot) target)
+    ((typep target 'conversation) (conversation-chatbot target))
+    (t (error "System instruction target must be a chatbot or conversation: ~S" target))))
+
+(defun sampling-parameter-owner (target)
+  "Returns the chatbot owning TARGET's sampling parameters."
+  (cond
+    ((typep target 'chatbot) target)
+    ((typep target 'conversation) (conversation-chatbot target))
+    (t (error "Sampling parameter target must be a chatbot or conversation: ~S" target))))
+
+(defun normalize-chatbot-temperature (temperature &key allow-nil-p)
+  "Returns TEMPERATURE normalized for chatbot storage."
+  (when (null temperature)
+    (if allow-nil-p
+        (return-from normalize-chatbot-temperature nil)
+        (error "Temperature must not be NIL.")))
+  (unless (realp temperature)
+    (error "Temperature must be a real number: ~S" temperature))
+  (let ((normalized (float temperature 1.0d0)))
+    (unless (<= 0.0d0 normalized 2.0d0)
+      (error "Temperature must be between 0.0 and 2.0 inclusive: ~S" temperature))
+    normalized))
+
+(defun normalize-chatbot-top-p (top-p &key allow-nil-p)
+  "Returns TOP-P normalized for chatbot storage."
+  (when (null top-p)
+    (if allow-nil-p
+        (return-from normalize-chatbot-top-p nil)
+        (error "Top-p must not be NIL.")))
+  (unless (realp top-p)
+    (error "Top-p must be a real number: ~S" top-p))
+  (let ((normalized (float top-p 1.0d0)))
+    (unless (and (> normalized 0.0d0)
+                 (<= normalized 1.0d0))
+      (error "Top-p must be greater than 0.0 and at most 1.0: ~S" top-p))
+    normalized))
+
+(defun sampling-parameters (target)
+  "Returns TARGET's current sampling parameters as a plist."
+  (let ((owner (sampling-parameter-owner target)))
+    (list :temperature (chatbot-temperature owner)
+          :top-p (chatbot-top-p owner))))
+
+(defun set-sampling-parameters (target &key (temperature nil temperaturep) (top-p nil top-pp))
+  "Updates TARGET's chatbot sampling defaults and returns the current plist."
+  (unless (or temperaturep top-pp)
+    (error "At least one of :temperature or :top-p must be provided."))
+  (let ((owner (sampling-parameter-owner target)))
+    (when temperaturep
+      (setf (chatbot-temperature owner)
+            (normalize-chatbot-temperature temperature :allow-nil-p t)))
+    (when top-pp
+      (setf (chatbot-top-p owner)
+            (normalize-chatbot-top-p top-p :allow-nil-p t)))
+    (sampling-parameters owner)))
+
+(defun reset-sampling-parameters (target)
+  "Clears TARGET's chatbot sampling defaults and returns the current plist."
+  (let ((owner (sampling-parameter-owner target)))
+    (setf (chatbot-temperature owner) nil)
+    (setf (chatbot-top-p owner) nil)
+    (sampling-parameters owner)))
+
+(defun normalize-system-instruction-paragraph (paragraph)
+  "Returns PARAGRAPH normalized for system instruction storage."
+  (unless (stringp paragraph)
+    (error "System instruction paragraphs must be strings: ~S" paragraph))
+  (let ((trimmed (string-trim '(#\Space #\Tab #\Return #\Linefeed) paragraph)))
+    (unless (string/= trimmed "")
+     (error "System instruction paragraphs must not be empty."))
+    trimmed))
+
+(defun normalize-system-instruction-paragraph-sequence (paragraphs)
+  "Returns PARAGRAPHS as a normalized vector of paragraph strings."
+  (let ((paragraph-vector (or (system-instruction-paragraphs paragraphs)
+                             #())))
+    (coerce (loop for paragraph across paragraph-vector
+                 collect (normalize-system-instruction-paragraph paragraph))
+           'vector)))
+
+(defun current-system-instruction-paragraphs (target)
+  "Returns TARGET's current system instructions as a paragraph vector."
+  (let ((raw (chatbot-system-instruction (system-instruction-owner target))))
+    (cond
+     ((null raw) #())
+     ((stringp raw) (split-system-instruction-into-paragraphs raw))
+     (t (or (system-instruction-paragraphs raw) #())))))
+
+(defun %set-system-instruction-paragraphs (target paragraphs)
+  "Stores PARAGRAPHS on TARGET's owning chatbot and returns the stored vector."
+  (let* ((owner (system-instruction-owner target))
+        (normalized (normalize-system-instruction-paragraph-sequence paragraphs)))
+    (setf (chatbot-system-instruction owner) normalized)
+    normalized))
+
+(defun system-instruction-paragraph-count (target)
+  "Returns the number of system instruction paragraphs stored on TARGET."
+  (length (current-system-instruction-paragraphs target)))
+
+(defun system-instruction-paragraphs-copy (target)
+  "Returns a copy of TARGET's system instruction paragraph vector."
+  (copy-seq (current-system-instruction-paragraphs target)))
+
+(defun checked-system-instruction-index (target index &key allow-end-p)
+  "Validates INDEX for TARGET and returns it."
+  (unless (and (integerp index) (<= 0 index))
+    (error "System instruction index must be a non-negative integer: ~S" index))
+  (let ((count (system-instruction-paragraph-count target)))
+    (unless (if allow-end-p
+               (<= index count)
+               (< index count))
+     (error "System instruction index ~A is out of bounds for ~A paragraphs."
+            index
+            count))
+    index))
+
+(defun system-instruction-paragraph (target index)
+  "Returns the paragraph at INDEX from TARGET's system instructions."
+  (let ((paragraphs (current-system-instruction-paragraphs target)))
+    (aref paragraphs
+         (checked-system-instruction-index target index))))
+
+(defun insert-system-instruction-paragraph (target paragraph &key index)
+  "Inserts PARAGRAPH into TARGET's system instructions and returns the updated vector."
+  (let* ((paragraphs (current-system-instruction-paragraphs target))
+        (insert-index (if index
+                          (checked-system-instruction-index target index :allow-end-p t)
+                          (length paragraphs)))
+        (normalized (normalize-system-instruction-paragraph paragraph)))
+    (%set-system-instruction-paragraphs
+     target
+     (append (subseq (coerce paragraphs 'list) 0 insert-index)
+            (list normalized)
+            (subseq (coerce paragraphs 'list) insert-index)))))
+
+(defun update-system-instruction-paragraph (target index paragraph)
+  "Replaces the paragraph at INDEX on TARGET and returns the updated vector."
+  (let* ((paragraphs (system-instruction-paragraphs-copy target))
+        (resolved-index (checked-system-instruction-index target index))
+        (normalized (normalize-system-instruction-paragraph paragraph)))
+    (setf (aref paragraphs resolved-index) normalized)
+    (%set-system-instruction-paragraphs target paragraphs)))
+
+(defun delete-system-instruction-paragraph (target index)
+  "Deletes the paragraph at INDEX from TARGET and returns the updated vector."
+  (let* ((paragraphs (current-system-instruction-paragraphs target))
+        (resolved-index (checked-system-instruction-index target index))
+        (paragraph-list (coerce paragraphs 'list)))
+    (%set-system-instruction-paragraphs
+     target
+     (append (subseq paragraph-list 0 resolved-index)
+            (subseq paragraph-list (1+ resolved-index))))))
+
+(defun clear-system-instruction-paragraphs (target)
+  "Clears all system instruction paragraphs from TARGET."
+  (%set-system-instruction-paragraphs target #()))
+
+(defun replace-system-instruction-paragraphs (target paragraphs)
+  "Replaces TARGET's system instruction paragraphs with PARAGRAPHS."
+  (%set-system-instruction-paragraphs target paragraphs))
+
+(defun save-system-instructions (target)
+  "Persists TARGET's paragraph-vector system instructions back to its backing file."
+  (let* ((owner (system-instruction-owner target))
+        (path (chatbot-system-instruction-path owner))
+        (storage-kind (chatbot-system-instruction-storage-kind owner))
+        (contents (or (system-instruction-text (chatbot-system-instruction owner))
+                      "")))
+    (unless path
+     (error "System instructions do not have a backing file to save."))
+    (unless (member storage-kind '(:paragraph-file :markdown-file))
+     (error "System instructions backed by ~A cannot be saved with SAVE-SYSTEM-INSTRUCTIONS; migrate to a system-instructions file first."
+            storage-kind))
+    (with-open-file (stream path
+                           :direction :output
+                           :if-exists :supersede
+                           :if-does-not-exist :create)
+     (write-string contents stream))
+    path))

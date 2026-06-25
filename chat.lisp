@@ -3,7 +3,7 @@
 
 (in-package "CHATBOT")
 
-(defun chat (input &key conversation callback file files)
+(defun chat (input &key conversation callback file files (temperature nil temperaturep) (top-p nil top-pp))
   "Sends user input to the active conversation using the appropriate backend API.
 If a callback is provided, each text token is passed to it in real-time.
 Returns the complete response text."
@@ -21,7 +21,14 @@ Returns the complete response text."
                                           (list file))
                                          files))
                 (file-attachments (and effective-files
-                                       (prepare-chat-file-attachments effective-files))))
+                                       (prepare-chat-file-attachments effective-files)))
+                (effective-generation-config
+                  (apply #'resolve-effective-generation-config
+                         bot
+                         (append (when temperaturep
+                                   (list :temperature temperature))
+                                 (when top-pp
+                                   (list :top-p top-p))))))
        (case (chatbot-backend bot)
          (:gemini
           (multiple-value-bind (effective-input effective-model)
@@ -31,11 +38,16 @@ Returns the complete response text."
                            conversation
                            callback
                            :file-attachments file-attachments
-                           :effective-model effective-model)))
+                           :effective-model effective-model
+                           :effective-generation-config effective-generation-config)))
          (:openai
-          (chat-openai bot input conversation callback :file-attachments file-attachments))
+          (chat-openai bot input conversation callback
+                       :file-attachments file-attachments
+                       :effective-generation-config effective-generation-config))
          (:lm-studio
-          (chat-openai bot input conversation callback :file-attachments file-attachments))
+          (chat-openai bot input conversation callback
+                       :file-attachments file-attachments
+                       :effective-generation-config effective-generation-config))
          (:google
           (multiple-value-bind (effective-input effective-model)
                 (resolve-prompt-model-override bot input)
@@ -44,6 +56,7 @@ Returns the complete response text."
                            conversation
                            callback
                            :file-attachments file-attachments
-                           :effective-model effective-model)))
+                           :effective-model effective-model
+                           :effective-generation-config effective-generation-config)))
          (t
           (error "Unknown chatbot backend: ~S" (chatbot-backend bot))))))))))

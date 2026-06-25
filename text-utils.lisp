@@ -33,7 +33,9 @@
   "Parses a single SSE line starting with 'data: ' and returns decoded JSON as an alist."
   (when (and (stringp line)
              (alexandria:starts-with-subseq "data: " line))
-    (parse-json-or-error (subseq line 6) :context "SSE event")))
+    (let ((payload (subseq line 6)))
+      (unless (string= payload "[DONE]")
+        (parse-json-or-error payload :context "SSE event")))))
 
 (defun wrap-text (text &key (width 80))
   "Wraps a single paragraph string to the specified width."

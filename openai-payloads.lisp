@@ -42,7 +42,7 @@
         (current-user-message (openai-live-user-message chatbot input file-attachments)))
     (if system-inst
         (append (list (list (cons "role" "system")
-                            (cons "content" system-inst)))
+                            (cons "content" (system-instruction-text system-inst))))
                 history
                 (when current-user-message
                   (list current-user-message)))

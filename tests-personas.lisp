@@ -114,6 +114,195 @@
                                    (conversation-persona-memory conv))))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
+(fiveam:test test-persona-system-instructions-file-loads-paragraph-vector
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-system-instructions/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-system-instructions/" personas-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "(:model \"models/gemini-mock-model\" :googleapi :google-api)" s))
+    (with-open-file (s (merge-pathnames "system-instructions" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-string "First instruction paragraph.
+
+Second instruction paragraph." s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let* ((conv (new-chat-persona "persona-system-instructions"))
+                 (bot (conversation-chatbot conv))
+                 (system-instruction (chatbot-system-instruction bot)))
+            (fiveam:is (vectorp system-instruction))
+            (fiveam:is (= 2 (length system-instruction)))
+            (fiveam:is (string= "First instruction paragraph." (aref system-instruction 0)))
+            (fiveam:is (string= "Second instruction paragraph." (aref system-instruction 1)))
+            (fiveam:is (= 2 (system-instruction-paragraph-count conv)))
+            (fiveam:is (string= "First instruction paragraph."
+                                (system-instruction-paragraph conv 0)))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-persona-config-loads-sampling-parameters
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-persona-sampling/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "persona-sampling/" personas-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "(:model \"models/gemini-mock-model\" :googleapi :google-api :temperature 0.7 :top-p 0.9)" s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let* ((conv (new-chat-persona "persona-sampling"))
+                (parameters (sampling-parameters conv)))
+            (fiveam:is (< (abs (- (getf parameters :temperature) 0.7d0)) 1d-5))
+            (fiveam:is (< (abs (- (getf parameters :top-p) 0.9d0)) 1d-5))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-system-instruction-crud-api-updates-paragraph-vectors
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-system-instruction-crud/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-system-instruction-crud/" personas-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "(:model \"models/gemini-mock-model\" :googleapi :google-api)" s))
+    (with-open-file (s (merge-pathnames "system-instructions" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-string "First paragraph.
+
+Second paragraph." s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+         (let ((conv (new-chat-persona "persona-system-instruction-crud")))
+           (fiveam:is (equal '("First paragraph." "Second paragraph.")
+                             (coerce (system-instruction-paragraphs-copy conv) 'list)))
+           (insert-system-instruction-paragraph conv "Inserted paragraph." :index 1)
+           (update-system-instruction-paragraph conv 0 "Updated first paragraph.")
+           (delete-system-instruction-paragraph conv 2)
+           (fiveam:is (equal '("Updated first paragraph." "Inserted paragraph.")
+                             (coerce (system-instruction-paragraphs-copy conv) 'list)))
+           (clear-system-instruction-paragraphs conv)
+           (fiveam:is (= 0 (system-instruction-paragraph-count conv)))
+           (replace-system-instruction-paragraphs conv '("Replacement one." "Replacement two."))
+           (fiveam:is (equal '("Replacement one." "Replacement two.")
+                             (coerce (system-instruction-paragraphs-copy conv) 'list)))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-save-system-instructions-persists-paragraph-file
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-save-system-instructions/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-save-system-instructions/" personas-dir))
+        (inst-path (merge-pathnames "system-instructions" test-persona-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "(:model \"models/gemini-mock-model\" :googleapi :google-api)" s))
+    (with-open-file (s inst-path
+                      :direction :output
+                      :if-exists :supersede)
+      (write-string "First paragraph.
+
+Second paragraph." s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+         (let ((conv (new-chat-persona "persona-save-system-instructions")))
+           (replace-system-instruction-paragraphs conv '("Saved one." "Saved two."))
+           (fiveam:is (equal inst-path (save-system-instructions conv)))
+           (fiveam:is (string= (format nil "Saved one.~%~%Saved two.")
+                               (uiop:read-file-string inst-path)))
+           (let ((reloaded (new-chat-persona "persona-save-system-instructions")))
+             (fiveam:is (equal '("Saved one." "Saved two.")
+                               (coerce (system-instruction-paragraphs-copy reloaded) 'list))))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-save-system-instructions-persists-markdown-backed-files
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-save-system-instructions-markdown/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-save-system-instructions-markdown/" personas-dir))
+        (inst-path (merge-pathnames "system-instructions.md" test-persona-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "(:model \"models/gemini-mock-model\" :googleapi :google-api)" s))
+    (with-open-file (s inst-path
+                      :direction :output
+                      :if-exists :supersede)
+      (write-string "Markdown paragraph one.
+
+Markdown paragraph two." s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+         (let ((conv (new-chat-persona "persona-save-system-instructions-markdown")))
+           (fiveam:is (equal '("Markdown paragraph one." "Markdown paragraph two.")
+                             (coerce (system-instruction-paragraphs-copy conv) 'list)))
+           (replace-system-instruction-paragraphs conv '("Converted paragraph one."
+                                                         "Converted paragraph two."))
+           (fiveam:is (equal inst-path (save-system-instructions conv)))
+           (fiveam:is (string= (format nil "Converted paragraph one.~%~%Converted paragraph two.")
+                               (uiop:read-file-string inst-path)))
+           (let ((reloaded (new-chat-persona "persona-save-system-instructions-markdown")))
+             (fiveam:is (equal '("Converted paragraph one." "Converted paragraph two.")
+                               (coerce (system-instruction-paragraphs-copy reloaded) 'list))))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-system-instruction-tools-persist-markdown-backed-persona-files
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-system-instruction-tools/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-system-instruction-tools/" personas-dir))
+        (inst-path (merge-pathnames "system-instructions.md" test-persona-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "(:model \"models/gemini-mock-model\" :googleapi :google-api)" s))
+    (with-open-file (s inst-path
+                      :direction :output
+                      :if-exists :supersede)
+      (write-string "Paragraph one.
+
+Paragraph two." s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+         (let* ((conv (new-chat-persona "persona-system-instruction-tools"))
+                (bot (conversation-chatbot conv))
+                (tool-names (mapcar (lambda (entry)
+                                      (mcp-val :name (cdr entry)))
+                                    (default-get-all-builtin-tools bot)))
+                (read-payload (cl-json:decode-json-from-string
+                               (execute-chatbot-tool-by-name bot "readSystemInstructions" '()))))
+           (fiveam:is (member "readSystemInstructions" tool-names :test #'string=))
+           (fiveam:is (member "insertSystemInstructionParagraph" tool-names :test #'string=))
+           (fiveam:is (member "updateSystemInstructionParagraph" tool-names :test #'string=))
+           (fiveam:is (member "deleteSystemInstructionParagraph" tool-names :test #'string=))
+           (fiveam:is (member "replaceSystemInstructions" tool-names :test #'string=))
+           (fiveam:is (equal '("Paragraph one." "Paragraph two.")
+                             (coerce (cdr (assoc :paragraphs read-payload)) 'list)))
+           (execute-chatbot-tool-by-name bot
+                                         "replaceSystemInstructions"
+                                         '(("paragraphs" . #("Tool paragraph one."
+                                                             "Tool paragraph two."
+                                                             "Tool paragraph three."))))
+           (fiveam:is (string= (format nil "Tool paragraph one.~%~%Tool paragraph two.~%~%Tool paragraph three.")
+                               (uiop:read-file-string inst-path)))
+           (let ((reloaded (new-chat-persona "persona-system-instruction-tools")))
+             (fiveam:is (equal '("Tool paragraph one."
+                                 "Tool paragraph two."
+                                 "Tool paragraph three.")
+                               (coerce (system-instruction-paragraphs-copy reloaded) 'list))))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
 (fiveam:test test-persona-diary-loads-in-sorted-order-at-startup
   (let* ((temp-dir (uiop:default-temporary-directory))
         (mock-home (merge-pathnames "mock-home-diary-startup/" temp-dir))

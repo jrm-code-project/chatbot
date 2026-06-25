@@ -874,9 +874,84 @@ Supports two formats:
                                                   (:description . "The Common Lisp / HyperSpec search query.")))))
                       (:required . ("query"))))))
 
+(defun builtin-read-system-instructions-tool ()
+  "Returns the built-in readSystemInstructions tool definition."
+  '((:name . "readSystemInstructions")
+    (:description . "Reads the current persona system instructions as an ordered paragraph vector.")
+    (:input-schema . ((:type . "object")
+                      (:properties . nil)))))
+
+(defun builtin-insert-system-instruction-paragraph-tool ()
+  "Returns the built-in insertSystemInstructionParagraph tool definition."
+  '((:name . "insertSystemInstructionParagraph")
+    (:description . "Inserts one paragraph into the persona system instructions and saves the backing file.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("index" . ((:type . "integer")
+                                                  (:description . "Zero-based insertion index. Use the current paragraph count to append.")))
+                                      ("paragraph" . ((:type . "string")
+                                                      (:description . "The paragraph text to insert.")))))
+                      (:required . ("index" "paragraph"))))))
+
+(defun builtin-update-system-instruction-paragraph-tool ()
+  "Returns the built-in updateSystemInstructionParagraph tool definition."
+  '((:name . "updateSystemInstructionParagraph")
+    (:description . "Replaces one paragraph in the persona system instructions and saves the backing file.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("index" . ((:type . "integer")
+                                                  (:description . "Zero-based paragraph index to replace.")))
+                                      ("paragraph" . ((:type . "string")
+                                                      (:description . "The new paragraph text.")))))
+                      (:required . ("index" "paragraph"))))))
+
+(defun builtin-delete-system-instruction-paragraph-tool ()
+  "Returns the built-in deleteSystemInstructionParagraph tool definition."
+  '((:name . "deleteSystemInstructionParagraph")
+    (:description . "Deletes one paragraph from the persona system instructions and saves the backing file.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("index" . ((:type . "integer")
+                                                  (:description . "Zero-based paragraph index to delete.")))))
+                      (:required . ("index"))))))
+
+(defun builtin-replace-system-instructions-tool ()
+  "Returns the built-in replaceSystemInstructions tool definition."
+  '((:name . "replaceSystemInstructions")
+    (:description . "Replaces the entire persona system-instruction paragraph vector and saves the backing file.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("paragraphs" . ((:type . "array")
+                                                       (:items . ((:type . "string")))
+                                                       (:description . "Array of paragraphs to store in order.")))))
+                      (:required . ("paragraphs"))))))
+
+(defun builtin-read-sampling-parameters-tool ()
+  "Returns the built-in readSamplingParameters tool definition."
+  '((:name . "readSamplingParameters")
+    (:description . "Reads the current runtime temperature and top-p sampling defaults.")
+    (:input-schema . ((:type . "object")
+                      (:properties . nil)))))
+
+(defun builtin-set-sampling-parameters-tool ()
+  "Returns the built-in setSamplingParameters tool definition."
+  '((:name . "setSamplingParameters")
+    (:description . "Updates the runtime temperature and/or top-p sampling defaults for this conversation.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("temperature" . ((:type . "number")
+                                                        (:description . "Sampling temperature between 0.0 and 2.0 inclusive.")))
+                                      ("topP" . ((:type . "number")
+                                                 (:description . "Nucleus sampling top-p greater than 0.0 and at most 1.0.")))))))))
+
+(defun builtin-reset-sampling-parameters-tool ()
+  "Returns the built-in resetSamplingParameters tool definition."
+  '((:name . "resetSamplingParameters")
+    (:description . "Clears the runtime temperature and top-p defaults so provider defaults apply again.")
+    (:input-schema . ((:type . "object")
+                      (:properties . nil)))))
+
 (defun default-get-all-builtin-tools (bot)
   "Returns all built-in tools enabled for BOT as (source . tool) pairs."
   (let ((tools nil))
+    (push (cons :built-in (builtin-reset-sampling-parameters-tool)) tools)
+    (push (cons :built-in (builtin-set-sampling-parameters-tool)) tools)
+    (push (cons :built-in (builtin-read-sampling-parameters-tool)) tools)
     (when (chatbot-web-tools-p bot)
       (push (cons :built-in (builtin-hyperspec-search-tool)) tools)
       (push (cons :built-in (builtin-web-search-tool)) tools))
@@ -887,6 +962,12 @@ Supports two formats:
       (push (cons :built-in (builtin-write-file-tool)) tools)
       (push (cons :built-in (builtin-directory-tool)) tools)
       (push (cons :built-in (builtin-read-file-lines-tool)) tools))
+    (when (chatbot-system-instruction-path bot)
+      (push (cons :built-in (builtin-replace-system-instructions-tool)) tools)
+      (push (cons :built-in (builtin-delete-system-instruction-paragraph-tool)) tools)
+      (push (cons :built-in (builtin-update-system-instruction-paragraph-tool)) tools)
+      (push (cons :built-in (builtin-insert-system-instruction-paragraph-tool)) tools)
+      (push (cons :built-in (builtin-read-system-instructions-tool)) tools))
     (nreverse tools)))
 
 (defun get-all-chatbot-tools (bot)
@@ -1017,7 +1098,10 @@ Supports two formats:
   (execute-chatbot-tool-by-name
    bot
    tool-name
-   (parse-json-or-error arguments-json :context context)))
+   (if (or (null arguments-json)
+           (string= (string-trim '(#\Space #\Tab #\Return #\Linefeed) arguments-json) ""))
+       (empty-json-object)
+       (parse-json-or-error arguments-json :context context))))
 
 (defun chatbot-tool-error-message (condition)
   "Returns the most useful human-readable message for CONDITION."
@@ -1079,6 +1163,36 @@ entries instead of aborting the full turn."
            :tool-name tool-name
            :reason (format nil "~A must be a non-empty string." argument-name)))
   value)
+
+(defun normalize-builtin-tool-real-argument (value argument-name tool-name &key allow-nil-p)
+  "Normalizes VALUE to a real argument or signals an execution error."
+  (when (null value)
+    (if allow-nil-p
+        (return-from normalize-builtin-tool-real-argument nil)
+        (error 'mcp-tool-execution-error
+               :tool-name tool-name
+               :reason (format nil "~A is required." argument-name))))
+  (let ((normalized
+          (typecase value
+            (real (float value 1.0d0))
+            (string
+             (let* ((*read-eval* nil)
+                    (trimmed (string-trim '(#\Space #\Tab #\Return #\Linefeed) value)))
+               (handler-case
+                   (multiple-value-bind (parsed position)
+                       (read-from-string trimmed nil nil)
+                     (if (and parsed
+                              (realp parsed)
+                              (= position (length trimmed)))
+                         (float parsed 1.0d0)
+                         nil))
+                 (error () nil))))
+            (t nil))))
+    (unless normalized
+      (error 'mcp-tool-execution-error
+             :tool-name tool-name
+             :reason (format nil "~A must be a real number." argument-name)))
+    normalized))
 
 (defun builtin-tool-argument (arguments &rest keys)
   "Looks up the first present argument among KEYS in ARGUMENTS."
@@ -1149,6 +1263,46 @@ entries instead of aborting the full turn."
              :tool-name tool-name
              :reason (format nil "~A must contain only strings." argument-name)))
     elements))
+
+(defun ensure-system-instruction-tool-path (bot tool-name)
+  "Returns BOT's system-instruction path or signals an execution error."
+  (or (chatbot-system-instruction-path bot)
+      (error 'mcp-tool-execution-error
+             :tool-name tool-name
+             :reason "System-instruction tools require a persona-backed system instruction file.")))
+
+(defun system-instruction-storage-kind-name (storage-kind)
+  "Returns a lowercase string name for STORAGE-KIND."
+  (string-downcase (string storage-kind)))
+
+(defun system-instruction-tool-result (bot &key saved)
+  "Returns the current system-instruction paragraph state as JSON text."
+  (let ((payload `(("paragraphs" . ,(current-system-instruction-paragraphs bot))
+                   ("count" . ,(system-instruction-paragraph-count bot))
+                   ("storageKind" . ,(system-instruction-storage-kind-name
+                                      (chatbot-system-instruction-storage-kind bot)))
+                   ("path" . ,(namestring (chatbot-system-instruction-path bot)))
+                   ,@(when saved '(("saved" . t))))))
+    (cl-json:encode-json-to-string payload)))
+
+(defun sampling-parameters-tool-result (bot &key saved)
+  "Returns the current runtime sampling parameters as JSON text."
+  (let ((parameters (sampling-parameters bot)))
+    (cl-json:encode-json-to-string
+     `(("temperature" . ,(or (getf parameters :temperature) :null))
+       ("topP" . ,(or (getf parameters :top-p) :null))
+       ,@(when saved '(("saved" . t)))))))
+
+(defun save-system-instructions-or-tool-error (bot tool-name)
+  "Saves BOT's system instructions, mapping failures to tool errors."
+  (handler-case
+      (save-system-instructions bot)
+    (mcp-tool-execution-error (e)
+      (error e))
+    (error (e)
+      (error 'mcp-tool-execution-error
+             :tool-name tool-name
+             :reason (princ-to-string e)))))
 
 (defun chatbot-filesystem-root-truename (bot tool-name)
   "Returns the validated filesystem root directory for BOT."
@@ -1586,11 +1740,40 @@ entries instead of aborting the full turn."
             (form (read-eval-tool-form expression tool-name)))
        (approve-chatbot-eval-expression bot expression tool-name)
        (execute-approved-eval-expression expression form tool-name)))
+    ((string= tool-name "readSamplingParameters")
+     (sampling-parameters-tool-result bot))
+    ((string= tool-name "setSamplingParameters")
+     (multiple-value-bind (temperature-foundp temperature-value)
+        (builtin-tool-argument arguments "temperature" :temperature)
+       (multiple-value-bind (top-p-foundp top-p-value)
+          (builtin-tool-argument arguments "topP" :top-p :top_p)
+        (unless (or temperature-foundp top-p-foundp)
+          (error 'mcp-tool-execution-error
+                 :tool-name tool-name
+                 :reason "At least one of temperature or topP is required."))
+        (handler-case
+            (progn
+              (apply #'set-sampling-parameters
+                     bot
+                     (append (when temperature-foundp
+                               (list :temperature
+                                     (normalize-builtin-tool-real-argument temperature-value "temperature" tool-name :allow-nil-p t)))
+                             (when top-p-foundp
+                               (list :top-p
+                                     (normalize-builtin-tool-real-argument top-p-value "topP" tool-name :allow-nil-p t)))))
+              (sampling-parameters-tool-result bot :saved t))
+          (error (e)
+            (error 'mcp-tool-execution-error
+                   :tool-name tool-name
+                   :reason (princ-to-string e)))))))
+    ((string= tool-name "resetSamplingParameters")
+     (reset-sampling-parameters bot)
+     (sampling-parameters-tool-result bot :saved t))
     ((string= tool-name "readFileLines")
      (let* ((filename (mcp-val :filename arguments))
-            (beginning-line (normalize-builtin-tool-integer-argument
-                             (or (mcp-val "beginningLine" arguments)
-                                 (mcp-val :beginning-line arguments))
+           (beginning-line (normalize-builtin-tool-integer-argument
+                            (or (mcp-val "beginningLine" arguments)
+                                (mcp-val :beginning-line arguments))
                              "beginningLine"
                              tool-name))
             (ending-line (normalize-builtin-tool-integer-argument
@@ -1600,9 +1783,68 @@ entries instead of aborting the full turn."
                           tool-name))
             (path (resolve-filesystem-tool-path bot filename tool-name)))
        (read-file-lines-subset path beginning-line ending-line tool-name)))
+    ((string= tool-name "readSystemInstructions")
+     (ensure-system-instruction-tool-path bot tool-name)
+     (system-instruction-tool-result bot))
+    ((string= tool-name "insertSystemInstructionParagraph")
+     (ensure-system-instruction-tool-path bot tool-name)
+     (insert-system-instruction-paragraph
+      bot
+      (normalize-builtin-tool-string-argument
+       (or (mcp-val "paragraph" arguments)
+          (mcp-val :paragraph arguments))
+       "paragraph"
+       tool-name)
+      :index (normalize-builtin-tool-integer-argument
+             (or (mcp-val "index" arguments)
+                 (mcp-val :index arguments))
+             "index"
+             tool-name))
+     (save-system-instructions-or-tool-error bot tool-name)
+     (system-instruction-tool-result bot :saved t))
+    ((string= tool-name "updateSystemInstructionParagraph")
+     (ensure-system-instruction-tool-path bot tool-name)
+     (update-system-instruction-paragraph
+      bot
+      (normalize-builtin-tool-integer-argument
+       (or (mcp-val "index" arguments)
+          (mcp-val :index arguments))
+       "index"
+       tool-name)
+      (normalize-builtin-tool-string-argument
+       (or (mcp-val "paragraph" arguments)
+          (mcp-val :paragraph arguments))
+       "paragraph"
+       tool-name))
+     (save-system-instructions-or-tool-error bot tool-name)
+     (system-instruction-tool-result bot :saved t))
+    ((string= tool-name "deleteSystemInstructionParagraph")
+     (ensure-system-instruction-tool-path bot tool-name)
+     (delete-system-instruction-paragraph
+      bot
+      (normalize-builtin-tool-integer-argument
+       (or (mcp-val "index" arguments)
+          (mcp-val :index arguments))
+       "index"
+       tool-name))
+     (save-system-instructions-or-tool-error bot tool-name)
+     (system-instruction-tool-result bot :saved t))
+    ((string= tool-name "replaceSystemInstructions")
+     (ensure-system-instruction-tool-path bot tool-name)
+     (multiple-value-bind (paragraphs-foundp paragraphs-value)
+        (builtin-tool-argument arguments "paragraphs" :paragraphs)
+       (replace-system-instruction-paragraphs
+       bot
+       (normalize-builtin-tool-string-sequence-argument
+        paragraphs-foundp
+        paragraphs-value
+        "paragraphs"
+        tool-name)))
+     (save-system-instructions-or-tool-error bot tool-name)
+     (system-instruction-tool-result bot :saved t))
     ((string= tool-name "directory")
      (multiple-value-bind (directory-path root)
-         (resolve-filesystem-tool-directory bot
+        (resolve-filesystem-tool-directory bot
                                            (or (mcp-val "pathname" arguments)
                                                (mcp-val :pathname arguments))
                                            tool-name)

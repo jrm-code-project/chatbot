@@ -37,6 +37,48 @@
           (fiveam:is (string= "Hi Google" (cdr (assoc :text (car parts)))))
           (fiveam:is (string= "Be concise" (cdr (assoc :text (car (cdr (assoc :parts sys-inst))))))))))))
 
+(fiveam:test test-google-chat-preserves-system-instruction-paragraph-vectors
+  (let ((captured-content nil))
+    (let* ((*gemini-base-url* "https://example.test/gemini")
+          (context (make-runtime-context
+                    :gemini-api-key-function (lambda () "mocked-google-api-key")
+                    :http-post-function
+                    (lambda (url &rest args)
+                      (declare (ignore url))
+                      (setf captured-content (getf args :content))
+                      (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}" 200))))
+          (conv (new-chat :backend :google
+                          :system-instruction #("First paragraph." "Second paragraph.")
+                          :runtime-context context)))
+      (fiveam:is (string= "Hello from Google non-streaming"
+                         (chat "Hi Google" :conversation conv)))
+      (let* ((payload (cl-json:decode-json-from-string captured-content))
+            (sys-inst (cdr (assoc :system-instruction payload)))
+            (parts (cdr (assoc :parts sys-inst))))
+        (fiveam:is (= 2 (length parts)))
+        (fiveam:is (string= "First paragraph." (cdr (assoc :text (first parts)))))
+        (fiveam:is (string= "Second paragraph." (cdr (assoc :text (second parts)))))))))
+
+(fiveam:test test-google-chat-includes-generation-config
+  (let ((captured-content nil))
+    (let* ((*gemini-base-url* "https://example.test/gemini")
+           (context (make-runtime-context
+                     :gemini-api-key-function (lambda () "mocked-google-api-key")
+                     :http-post-function
+                     (lambda (url &rest args)
+                       (declare (ignore url))
+                       (setf captured-content (getf args :content))
+                       (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}" 200))))
+           (conv (new-chat :backend :google
+                           :temperature 0.6d0
+                           :top-p 0.85d0
+                           :runtime-context context)))
+      (fiveam:is (string= "Hello from Google non-streaming"
+                          (chat "Hi Google" :conversation conv)))
+      (fiveam:is (search "\"generationConfig\"" captured-content))
+      (fiveam:is (search "\"temperature\":0.6" captured-content))
+      (fiveam:is (search "\"topP\":0.85" captured-content)))))
+
 (fiveam:test test-google-chat-flow-supports-models-prefix
   (let ((captured-url nil))
     (let ((*gemini-base-url* "https://example.test/gemini"))
@@ -382,6 +424,32 @@
         (fiveam:is (search "\"response\":{\"type\":\"tool_error\",\"toolName\":\"get_current_time\",\"message\":\"Mock tool failure\"}"
                            captured-second-request))
         (fiveam:is (string= "Handled tool error" res))))))
+
+(fiveam:test test-google-chat-no-arg-function-call-uses-empty-args-object
+  (let* ((bot (make-instance 'chatbot
+                           :backend :google
+                           :model "gemini-3.5-flash"
+                           :temperature 0.2d0))
+        (conv (make-instance 'conversation :chatbot bot))
+        (call-count 0)
+        (captured-second-request nil))
+    (let ((*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore url))
+             (incf call-count)
+             (if (= call-count 1)
+                 (values "{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"readSamplingParameters\",\"id\":\"call-1\"}}],\"role\":\"model\"}}]}" 200)
+                 (progn
+                   (setf captured-second-request (getf args :content))
+                   (values "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Read sampling ok\"}],\"role\":\"model\"}}]}" 200))))))
+      (let ((res (chat-google bot "Inspect sampling" conv nil)))
+        (fiveam:is (= 2 call-count))
+        (fiveam:is (search "\"functionCall\":{\"name\":\"readSamplingParameters\",\"args\":{}"
+                          captured-second-request))
+        (fiveam:is (search "\"response\":{\"result\":\"{\\\"temperature\\\":0.2"
+                          captured-second-request))
+        (fiveam:is (string= "Read sampling ok" res))))))
 
 (fiveam:test test-google-chat-tool-recursion-depth-is-capped
   (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))

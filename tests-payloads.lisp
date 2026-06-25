@@ -16,8 +16,43 @@
       (fiveam:is (string= "session-123" (cdr (assoc "previous_interaction_id" payload :test #'string=))))
       (fiveam:is (string= "Be helpful" (cdr (assoc "system_instruction" payload :test #'string=))))
       (let ((tools (cdr (assoc "tools" payload :test #'string=))))
-        (fiveam:is (= 1 (length tools)))
-        (fiveam:is (string= "google_search" (cdr (assoc "type" (car tools) :test #'string=))))))))
+        (fiveam:is (find "google_search"
+                         tools
+                         :test #'string=
+                         :key (lambda (tool)
+                                (cdr (assoc "type" tool :test #'string=)))))))))
+
+(fiveam:test test-resolve-effective-generation-config-prefers-turn-overrides
+  (let ((bot (make-instance 'chatbot
+                           :model "gemini-3.5-flash"
+                           :temperature 0.4d0
+                           :top-p 0.8d0)))
+    (let ((config (resolve-effective-generation-config bot
+                                                       :temperature 0.9d0
+                                                       :top-p 0.6d0)))
+      (fiveam:is (= 0.9d0 (getf config :temperature)))
+      (fiveam:is (= 0.6d0 (getf config :top-p))))
+    (let ((config (resolve-effective-generation-config bot)))
+      (fiveam:is (= 0.4d0 (getf config :temperature)))
+      (fiveam:is (= 0.8d0 (getf config :top-p))))))
+
+(fiveam:test test-interaction-payload-includes-generation-config
+  (let* ((bot (make-instance 'chatbot :model "gemini-3.5-flash"))
+         (payload (make-interaction-payload bot
+                                            "Hello"
+                                            :effective-generation-config '(:temperature 0.7d0 :top-p 0.9d0)))
+         (generation-config (cdr (assoc "generation_config" payload :test #'string=))))
+    (fiveam:is (= 0.7d0 (cdr (assoc "temperature" generation-config :test #'string=))))
+    (fiveam:is (= 0.9d0 (cdr (assoc "top_p" generation-config :test #'string=))))))
+
+(fiveam:test test-interaction-payload-joins-system-instruction-paragraph-vectors
+  (let ((bot (make-instance 'chatbot
+                           :model "gemini-3.5-flash"
+                           :system-instruction #("First paragraph." "Second paragraph."))))
+    (let ((payload (make-interaction-payload bot "Hello" :previous-interaction-id "session-123" :stream t))
+          (expected (format nil "First paragraph.~%~%Second paragraph.")))
+      (fiveam:is (string= expected
+                         (cdr (assoc "system_instruction" payload :test #'string=)))))))
 
 (fiveam:test test-initial-interaction-payload-includes-preloaded-messages
   (let ((bot (make-instance 'chatbot :model "gemini-3.5-flash")))
@@ -357,6 +392,9 @@
   (fiveam:signals malformed-json-error
     (parse-sse-event "data: {not valid json}")))
 
+(fiveam:test test-sse-parsing-ignores-done-sentinel
+  (fiveam:is-false (parse-sse-event "data: [DONE]")))
+
 (fiveam:test test-gemini-tool-schema-sanitization
   (let* ((bot (make-instance 'chatbot :model "gemini-3.5-flash"))
          (tool '((:name . "lookup_time")
@@ -370,11 +408,16 @@
               (list (cons nil tool)))))
       (let* ((payload (make-interaction-payload bot "Hello"))
              (tools (cdr (assoc "tools" payload :test #'string=)))
-             (first-tool (car tools))
-             (parameters (cdr (assoc "parameters" first-tool :test #'string=)))
+             (lookup-tool (find "lookup_time"
+                                tools
+                                :test #'string=
+                                :key (lambda (entry)
+                                       (cdr (assoc "name" entry :test #'string=))))
+             )
+             (parameters (cdr (assoc "parameters" lookup-tool :test #'string=)))
              (properties (and (hash-table-p parameters)
                               (gethash "properties" parameters))))
-        (fiveam:is (string= "function" (cdr (assoc "type" first-tool :test #'string=))))
+        (fiveam:is (string= "function" (cdr (assoc "type" lookup-tool :test #'string=))))
         (fiveam:is (hash-table-p parameters))
         (fiveam:is (null (gethash "$schema" parameters)))
         (fiveam:is (hash-table-p properties))
@@ -411,12 +454,15 @@
              (list (cons nil tool)))))
      (let* ((payload (make-interaction-payload bot "Hello"))
             (tools (cdr (assoc "tools" payload :test #'string=)))
-            (first-tool (car tools)))
-       (fiveam:is (= 1 (length tools)))
-       (fiveam:is (string= "function" (cdr (assoc "type" first-tool :test #'string=))))
-       (fiveam:is (string= "lookup_time" (cdr (assoc "name" first-tool :test #'string=))))
+            (lookup-tool (find "lookup_time"
+                               tools
+                               :test #'string=
+                               :key (lambda (entry)
+                                      (cdr (assoc "name" entry :test #'string=))))))
+       (fiveam:is (string= "function" (cdr (assoc "type" lookup-tool :test #'string=))))
+       (fiveam:is (string= "lookup_time" (cdr (assoc "name" lookup-tool :test #'string=))))
        (fiveam:is (string= "Looks up the current time"
-                           (cdr (assoc "description" first-tool :test #'string=))))))))
+                           (cdr (assoc "description" lookup-tool :test #'string=))))))))
 
 (fiveam:test test-payload-builders-include-read-file-lines-when-enabled
   (let* ((bot (make-instance 'chatbot
@@ -491,8 +537,15 @@
                            :test #'string=
                            :key (lambda (tool)
                                   (cdr (assoc "name" tool :test #'string=)))))
-    (fiveam:is-false (openai-request-tools bot))
-    (fiveam:is-false (generate-content-request-tools bot))))
+    (fiveam:is-false (find "readFileLines"
+                           (openai-request-tools bot)
+                           :test #'string=
+                           :key (lambda (tool)
+                                  (cdr (assoc "name"
+                                              (cdr (assoc "function" tool :test #'string=))
+                                              :test #'string=)))))
+    (fiveam:is-false (search "\"readFileLines\""
+                             (cl-json:encode-json-to-string (generate-content-request-tools bot))))))
 
 (fiveam:test test-payload-builders-include-eval-when-enabled
   (let* ((bot (make-instance 'chatbot

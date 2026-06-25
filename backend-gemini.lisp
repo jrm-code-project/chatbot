@@ -12,16 +12,17 @@
   (setf (conversation-interaction-id conversation) original-interaction-id))
 
 (defun retry-gemini-turn-on-google-gemini-pro-latest (bot input conversation callback
-                                                           &key file-attachments (recursion-depth 0))
+                                                           &key file-attachments effective-generation-config (recursion-depth 0))
   "Resubmits a Gemini turn through the Google backend on gemini-pro-latest."
   (retry-on-google-gemini-pro-latest bot
                                      input
                                      conversation
                                      callback
                                      :file-attachments file-attachments
+                                     :effective-generation-config effective-generation-config
                                      :recursion-depth recursion-depth))
 
-(defun chat-gemini (bot input conversation callback &key file-attachments effective-model (recursion-depth 0))
+(defun chat-gemini (bot input conversation callback &key file-attachments effective-model effective-generation-config (recursion-depth 0))
   "Sends user input to the active conversation using the Gemini Interactions API."
   (ensure-chatbot-tool-recursion-depth :gemini recursion-depth)
   (let ((api-key (gemini-api-key)))
@@ -37,6 +38,7 @@
                            :previous-interaction-id original-interaction-id
                            :file-attachments file-attachments
                            :effective-model effective-model
+                           :effective-generation-config effective-generation-config
                            :stream t))
            (payload-json (cl-json:encode-json-to-string payload-alist))
            (url (concatenate 'string *gemini-base-url* "/interactions?alt=sse"))
@@ -133,6 +135,7 @@
                                callback
                                :file-attachments file-attachments
                                :effective-model effective-model
+                               :effective-generation-config effective-generation-config
                                :recursion-depth recursion-depth))
                 (error "Gemini Chat Error: ~A" e)))))
       (if function-calls-to-run
@@ -162,6 +165,7 @@
                          conversation
                          callback
                          :effective-model effective-model
+                         :effective-generation-config effective-generation-config
                          :recursion-depth (next-chatbot-tool-recursion-depth
                                            :gemini
                                            recursion-depth)))
@@ -178,6 +182,7 @@
                  conversation
                  callback
                  :file-attachments file-attachments
+                 :effective-generation-config effective-generation-config
                  :recursion-depth recursion-depth)))
             (format-paragraphs full-text :width 80)
             (write-turn-token-summary completed-usage)

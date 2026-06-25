@@ -26,6 +26,7 @@
 
 (defun retry-on-google-gemini-pro-latest (bot input conversation callback
                                             &key file-attachments request-contents history-messages
+                                              effective-generation-config
                                               (recursion-depth 0))
   "Resubmits the current turn through the Google backend on gemini-pro-latest."
   (declare (ignore request-contents history-messages))
@@ -35,11 +36,12 @@
                callback
                :file-attachments file-attachments
                :effective-model +google-gemini-model-override-model+
+               :effective-generation-config effective-generation-config
                :malformed-response-fallback-attempted-p t
                :recursion-depth recursion-depth))
 
 (defun chat-google (bot input conversation callback
-                   &key file-attachments request-contents history-messages effective-model
+                   &key file-attachments request-contents history-messages effective-model effective-generation-config
                      malformed-response-fallback-attempted-p (recursion-depth 0))
   "Sends user input to the active conversation using Google's non-streaming generateContent API."
   (ensure-chatbot-tool-recursion-depth :google recursion-depth)
@@ -76,10 +78,20 @@
               (append payload-alist
                       (list (cons "systemInstruction"
                                   (list (cons "parts"
-                                              (vector (list (cons "text" system-inst))))))))))
+                                              (system-instruction-text-parts system-inst))))))))
       (when gemini-tools
         (setf payload-alist
               (append payload-alist (list (cons "tools" gemini-tools)))))
+      (when (or (getf effective-generation-config :temperature)
+                (getf effective-generation-config :top-p))
+        (setf payload-alist
+              (append payload-alist
+                      (list (cons "generationConfig"
+                                  (remove nil
+                                          (list (when (getf effective-generation-config :temperature)
+                                                  (cons "temperature" (getf effective-generation-config :temperature)))
+                                                (when (getf effective-generation-config :top-p)
+                                                  (cons "topP" (getf effective-generation-config :top-p))))))))))
       (let ((payload-json (cl-json:encode-json-to-string payload-alist)))
         (handler-case
             (funcall
@@ -124,11 +136,14 @@
                        :file-attachments file-attachments
                        :request-contents request-contents
                        :history-messages history-messages
+                       :effective-generation-config effective-generation-config
                        :recursion-depth recursion-depth))
                      (fn-call
                       (let* ((name (cdr (assoc :name fn-call)))
                              (raw-args (cdr (assoc :args fn-call)))
-                             (payload-args (json-encodable-value raw-args))
+                             (payload-args (if raw-args
+                                               (json-encodable-value raw-args)
+                                               (empty-json-object)))
                              (model-msg `(("role" . "model")
                                           ("parts" . ,(vector
                                                        (append
@@ -159,6 +174,7 @@
                                         :request-contents (append contents-list recursion-messages)
                                         :file-attachments file-attachments
                                         :effective-model effective-model
+                                        :effective-generation-config effective-generation-config
                                         :malformed-response-fallback-attempted-p malformed-response-fallback-attempted-p
                                         :recursion-depth (next-chatbot-tool-recursion-depth
                                                           :google
@@ -179,6 +195,7 @@
                                :file-attachments file-attachments
                                :request-contents request-contents
                                :history-messages history-messages
+                               :effective-generation-config effective-generation-config
                                :recursion-depth recursion-depth))
                             (error "No text returned from Gemini API response: ~A" response-body)))
                       (format-paragraphs final-str :width 80)

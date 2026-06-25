@@ -27,7 +27,27 @@
     (error (e)
       (error "Invalid persona config in ~A: ~A" config-path e))))
 
-(defun new-chat (&key model system-instruction google-search-p (gemini-fallback-to-google-p nil) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context)
+(defun persona-system-instruction-path (persona-dir)
+  "Returns the preferred persona system-instruction file pathname when present."
+  (or (probe-file (merge-pathnames "system-instructions" persona-dir))
+      (probe-file (merge-pathnames "system-instruction.md" persona-dir))
+      (probe-file (merge-pathnames "system-instructions.md" persona-dir))))
+
+(defun read-persona-system-instruction (inst-path)
+  "Reads INST-PATH using the appropriate internal representation."
+  (let ((contents (uiop:read-file-string inst-path)))
+    (if (string= "system-instructions" (file-namestring inst-path))
+        (split-system-instruction-into-paragraphs contents)
+        contents)))
+
+(defun persona-system-instruction-storage-kind (inst-path)
+  "Returns the storage kind implied by INST-PATH."
+  (if (and inst-path
+           (string= "system-instructions" (file-namestring inst-path)))
+      :paragraph-file
+      :markdown-file))
+
+(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p nil) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context)
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
@@ -43,6 +63,10 @@ configuration, instructions, or preloaded memory."
                                  :model chosen-model
                                  :backend backend
                                  :system-instruction system-instruction
+                                 :system-instruction-path system-instruction-path
+                                 :system-instruction-storage-kind system-instruction-storage-kind
+                                 :temperature (normalize-chatbot-temperature temperature :allow-nil-p t)
+                                 :top-p (normalize-chatbot-top-p top-p :allow-nil-p t)
                                  :google-search-p google-search-p
                                  :gemini-fallback-to-google-p gemini-fallback-to-google-p
                                  :web-tools-p web-tools-p
@@ -65,7 +89,7 @@ configuration, instructions, or preloaded memory."
 (defun new-chat-persona (persona-name &key runtime-context)
   "Creates a new chat session for a given chatbot persona.
 The persona's configuration is read from ~/.Personas/<persona-name>/config.lisp
-and the system instructions are loaded from the persona's system-instruction.md file.
+and the system instructions are loaded from the persona's system-instruction file set.
 Use NEW-CHAT instead when no persona should be loaded."
   (let* ((homedir (get-user-homedir-pathname))
          (name-str (string persona-name))
@@ -73,13 +97,14 @@ Use NEW-CHAT instead when no persona should be loaded."
                           (uiop:directory-exists-p (merge-pathnames (make-pathname :directory (list :relative ".Personas" (string-downcase name-str))) homedir))
                           (error "Persona directory not found: ~~/.Personas/~A" name-str)))
         (config-path (probe-file (merge-pathnames "config.lisp" persona-dir)))
-        (inst-path (or (probe-file (merge-pathnames "system-instruction.md" persona-dir))
-                       (probe-file (merge-pathnames "system-instructions.md" persona-dir)))))
+        (inst-path (persona-system-instruction-path persona-dir)))
     (let* ((config (when config-path
                      (read-persona-config config-path)))
            (system-instruction (when inst-path
-                                 (uiop:read-file-string inst-path)))
+                                 (read-persona-system-instruction inst-path)))
            (model (safe-getf config :model))
+           (temperature (safe-getf config :temperature))
+           (top-p (safe-getf config :top-p))
            (googleapi (safe-getf config :googleapi))
            (google-search-p (safe-getf config :google-search-p))
            (gemini-fallback-to-google-p (safe-getf config :gemini-fallback-to-google-p))
@@ -98,6 +123,10 @@ Use NEW-CHAT instead when no persona should be loaded."
                 (new-chat :backend backend
                           :model model
                           :system-instruction system-instruction
+                          :system-instruction-path inst-path
+                          :system-instruction-storage-kind (persona-system-instruction-storage-kind inst-path)
+                          :temperature temperature
+                          :top-p top-p
                           :google-search-p google-search-p
                           :gemini-fallback-to-google-p gemini-fallback-to-google-p
                           :web-tools-p web-tools-p

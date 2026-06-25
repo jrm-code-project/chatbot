@@ -724,6 +724,39 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (chat "Run tool loop" :conversation conv))
       (fiveam:is (= +max-chatbot-tool-recursion-depth+ call-count)))))
 
+(fiveam:test test-gemini-built-in-no-arg-tool-accepts-empty-arguments
+  (let ((conv (new-chat :backend :gemini))
+        (captured-payloads nil)
+        (call-count 0))
+    (let* ((bot (conversation-chatbot conv))
+           (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+           (*http-post-function*
+             (lambda (url &rest args)
+               (declare (ignore url))
+               (incf call-count)
+               (push (getf args :content) captured-payloads)
+               (values
+                (make-string-input-stream
+                 (if (= call-count 1)
+                     "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.start\",\"step\":{\"id\":\"call-1\",\"type\":\"function_call\",\"name\":\"readSystemInstructions\"}}
+data: {\"event_type\":\"step.stop\"}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-3.5-flash\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}"
+                     "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Handled empty args\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-3.5-flash\",\"usage\":{\"total_input_tokens\":2,\"total_output_tokens\":1,\"total_tokens\":3}}}"))
+                200))))
+      (setf (chatbot-system-instruction bot) #("Directive one." "Directive two."))
+      (setf (chatbot-system-instruction-path bot)
+            #p"C:/Users/bitdi/.Personas/Test/system-instructions.md")
+      (setf (chatbot-system-instruction-storage-kind bot) :markdown-file)
+      (fiveam:is (string= "Handled empty args" (chat "Inspect directives" :conversation conv)))
+      (fiveam:is (= 2 call-count))
+      (let ((second-payload (first captured-payloads)))
+        (fiveam:is (search "\"name\":\"readSystemInstructions\"" second-payload))
+        (fiveam:is (search "\\\"paragraphs\\\":[\\\"Directive one.\\\",\\\"Directive two.\\\"]"
+                           second-payload))))))
+
 (fiveam:test test-text-formatting
   (let ((wrapped (wrap-text "This is a test of the line wrapping utility." :width 15)))
     (fiveam:is (every (lambda (line) (<= (length line) 15)) wrapped))
@@ -935,10 +968,28 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
       (fiveam:is (string= "2099-01-01"
                           (cdr (assoc "Api-Revision" captured-headers :test #'string=)))))))
 
+(fiveam:test test-gemini-chat-ignores-done-sentinel
+  (let ((conv (new-chat :backend :gemini)))
+    (let ((*get-all-mcp-tools-function* (lambda (bot)
+                                         (declare (ignore bot))
+                                         nil))
+         (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore url args))
+             (values
+              (make-string-input-stream
+               "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Hello done\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-3.5-flash\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}
+data: [DONE]")
+              200))))
+      (fiveam:is (string= "Hello done" (chat "Hi done" :conversation conv))))))
+
 (fiveam:test test-new-chat-reuses-startup-mcp-servers
   (let ((*startup-chatbot* nil))
     (let ((*initialize-mcp-servers-for-chatbot-function*
-            (lambda (bot &key strict-required-p)
+           (lambda (bot &key strict-required-p)
               (declare (ignore strict-required-p))
               (setf (chatbot-mcp-servers bot) '(:shared-server))
               bot)))

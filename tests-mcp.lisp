@@ -183,6 +183,40 @@
                           "{\"value\":\"payload\"}"
                           "MCP helper test"))))))
 
+(fiveam:test test-execute-chatbot-tool-by-name-json-arguments-allows-empty-object-for-no-arg-builtins
+  (let* ((bot (make-instance 'chatbot
+                           :backend :gemini
+                           :system-instruction #("Paragraph one." "Paragraph two.")
+                           :system-instruction-path #p"C:/Users/bitdi/.Personas/Test/system-instructions.md"
+                           :system-instruction-storage-kind :markdown-file))
+        (payload (cl-json:decode-json-from-string
+                  (execute-chatbot-tool-by-name-json-arguments
+                   bot
+                   "readSystemInstructions"
+                   ""
+                   "Empty built-in tool arguments"))))
+    (fiveam:is (= 2 (cdr (assoc :count payload))))
+    (fiveam:is (equal '("Paragraph one." "Paragraph two.")
+                     (coerce (cdr (assoc :paragraphs payload)) 'list)))))
+
+(fiveam:test test-built-in-sampling-parameter-tools-update-runtime-state
+  (let* ((bot (make-instance 'chatbot
+                           :backend :gemini
+                           :temperature 0.2d0
+                           :top-p 0.3d0))
+        (initial (execute-chatbot-tool-by-name bot "readSamplingParameters" '()))
+        (updated (execute-chatbot-tool-by-name bot
+                                               "setSamplingParameters"
+                                               '(("temperature" . 0.8d0)
+                                                 ("topP" . 0.9d0))))
+        (reset (execute-chatbot-tool-by-name bot "resetSamplingParameters" '())))
+    (fiveam:is (search "\"temperature\":0.2" initial))
+    (fiveam:is (search "\"topP\":0.3" initial))
+    (fiveam:is (search "\"temperature\":0.8" updated))
+    (fiveam:is (search "\"topP\":0.9" updated))
+    (fiveam:is (search "\"temperature\":null" reset))
+    (fiveam:is (search "\"topP\":null" reset))))
+
 (fiveam:test test-execute-chatbot-tool-by-name-normalizes-mcp-argument-keys-from-schema
   (let ((*find-mcp-server-and-tool-function*
         (lambda (bot tool-name)

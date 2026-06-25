@@ -4,7 +4,7 @@
 (in-package "CHATBOT")
 
 (defun chat-openai (bot input conversation callback
-                    &key file-attachments request-messages history-messages (recursion-depth 0))
+                    &key file-attachments request-messages history-messages effective-generation-config (recursion-depth 0))
   "Sends user input to the active conversation using an OpenAI-compliant chat completions API."
   (ensure-chatbot-tool-recursion-depth :openai recursion-depth)
   (let* ((backend (chatbot-backend bot))
@@ -33,6 +33,10 @@
            (payload-alist (list (cons "model" (chatbot-model bot))
                                 (cons "messages" request-messages)
                                 (cons "stream" t))))
+      (when (getf effective-generation-config :temperature)
+        (push (cons "temperature" (getf effective-generation-config :temperature)) payload-alist))
+      (when (getf effective-generation-config :top-p)
+        (push (cons "top_p" (getf effective-generation-config :top-p)) payload-alist))
       (when openai-tools
         (push (cons "tools" openai-tools) payload-alist))
       (let* ((payload-json (cl-json:encode-json-to-string payload-alist))
@@ -152,6 +156,7 @@
                                   :history-messages recursive-history
                                   :request-messages (append request-messages recursion-messages)
                                   :file-attachments file-attachments
+                                  :effective-generation-config effective-generation-config
                                   :recursion-depth (next-chatbot-tool-recursion-depth
                                                     :openai
                                                    recursion-depth))))))))))))
