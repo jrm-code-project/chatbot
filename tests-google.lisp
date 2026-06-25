@@ -451,6 +451,31 @@
                           captured-second-request))
         (fiveam:is (string= "Read sampling ok" res))))))
 
+(fiveam:test test-google-chat-sanitizes-stored-no-arg-function-call-history
+  (let* ((stored-history
+          (list
+           '(("role" . "model")
+             ("parts" . #((("functionCall" . (("name" . "readSamplingParameters")
+                                              ("args" . nil)))))))
+           '(("role" . "user")
+             ("parts" . #((("functionResponse" . (("name" . "readSamplingParameters")
+                                                  ("response" . (("result" . "{\"temperature\":null,\"topP\":null}")))))))))))
+        (bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
+        (conv (make-instance 'conversation
+                             :chatbot bot
+                             :messages stored-history))
+        (captured-content nil))
+    (let ((*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore url))
+             (setf captured-content (getf args :content))
+             (values "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"History sanitized\"}],\"role\":\"model\"}}]}" 200))))
+      (let ((res (chat-google bot "Next turn" conv nil)))
+        (fiveam:is (search "\"functionCall\":{\"name\":\"readSamplingParameters\",\"args\":{}}"
+                          captured-content))
+        (fiveam:is (string= "History sanitized" res))))))
+
 (fiveam:test test-google-chat-tool-recursion-depth-is-capped
   (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
         (conv (make-instance 'conversation :chatbot bot))

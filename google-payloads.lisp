@@ -7,6 +7,54 @@
   "Normalizes a stored conversation ROLE for Google generateContent."
   (if (assistant-like-role-p role) "model" "user"))
 
+(defun sanitize-generate-content-function-call (function-call)
+  "Returns FUNCTION-CALL with nil args normalized to an empty JSON object."
+  (let* ((name-entry (or (assoc "name" function-call :test #'string=)
+                         (assoc :name function-call)))
+         (args-entry (or (assoc "args" function-call :test #'string=)
+                         (assoc :args function-call)))
+         (id-entry (or (assoc "id" function-call :test #'string=)
+                       (assoc :id function-call)))
+         (raw-args (and args-entry (cdr args-entry)))
+         (payload-args (if args-entry
+                           (if raw-args
+                               (json-encodable-value raw-args)
+                               (empty-json-object))
+                           nil)))
+    (remove nil
+            (list (when name-entry
+                    (cons "name" (cdr name-entry)))
+                  (when args-entry
+                    (cons "args" payload-args))
+                  (when id-entry
+                    (cons "id" (cdr id-entry)))))))
+
+(defun sanitize-generate-content-part (part)
+  "Returns PART with Google function-call fields normalized for generateContent."
+  (let* ((function-call-entry (or (assoc "functionCall" part :test #'string=)
+                                  (assoc :functionCall part)
+                                  (assoc :function-call part)
+                                  (assoc :function--call part)))
+         (sanitized-function-call
+           (and function-call-entry
+                (sanitize-generate-content-function-call (cdr function-call-entry)))))
+    (if sanitized-function-call
+        (append
+         (remove-if (lambda (entry)
+                      (member (car entry)
+                              '("functionCall" :functionCall :function-call :function--call)
+                              :test #'equal))
+                    part)
+         (list (cons "functionCall" sanitized-function-call)))
+        part)))
+
+(defun sanitize-generate-content-parts (parts)
+  "Returns PARTS with provider-specific function-call payloads normalized."
+  (typecase parts
+    (vector (map 'vector #'sanitize-generate-content-part parts))
+    (list (mapcar #'sanitize-generate-content-part parts))
+    (t parts)))
+
 (defun generate-content-live-user-message (chatbot input file-attachments &key effective-model)
   "Builds the transient current user message for generateContent requests."
   (let ((parts nil)
@@ -42,7 +90,7 @@
                  (cond
                    (parts
                     (list (cons "role" (generate-content-role-for-message role))
-                          (cons "parts" parts)))
+                          (cons "parts" (sanitize-generate-content-parts parts))))
                    (t
                     (list (cons "role" (generate-content-role-for-message role))
                           (cons "parts" (vector (list (cons "text" content)))))))))
