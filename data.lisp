@@ -212,6 +212,52 @@
     :initform nil
     :documentation "Accumulated conversation messages for stateless backends (like OpenAI).")))
 
+(defclass round-robin-participant ()
+  ((name
+    :initarg :name
+    :accessor round-robin-participant-name
+    :documentation "Human-readable name identifying this chatbot in round-robin transcripts.")
+   (conversation
+    :initarg :conversation
+    :accessor round-robin-participant-conversation
+    :documentation "Conversation state backing this participant's turns.")))
+
+(defclass round-robin-session ()
+  ((participants
+    :initarg :participants
+    :accessor round-robin-session-participants
+    :documentation "Ordered round-robin participants.")
+   (user-name
+    :initarg :user-name
+    :accessor round-robin-session-user-name
+    :initform "User"
+    :documentation "Display name used for the human participant in the shared transcript.")
+   (transcript
+    :initarg :transcript
+    :accessor round-robin-session-transcript
+    :initform nil
+    :documentation "Chronological shared transcript entries for the round-robin session.")))
+
+(defclass persona ()
+  ((name
+    :initarg :name
+    :accessor persona-name
+    :documentation "Unique runtime identifier for an active sandbox persona.")
+   (conversation
+    :initarg :conversation
+    :accessor persona-conversation
+    :documentation "Conversation state backing this sandbox persona.")
+   (history
+    :initarg :history
+    :accessor persona-history
+    :initform nil
+    :documentation "Provider-neutral user/assistant history replayed for sandbox persona turns.")
+   (prompt-options
+    :initarg :prompt-options
+    :accessor persona-prompt-options
+    :initform nil
+    :documentation "Structured prompt-building options captured when this persona was spawned.")))
+
 (defun split-system-instruction-into-paragraphs (text)
   "Splits TEXT into a vector of trimmed paragraphs."
   (let* ((normalized (remove #\Return text))
@@ -251,6 +297,7 @@
   (cond
     ((typep target 'chatbot) target)
     ((typep target 'conversation) (conversation-chatbot target))
+    ((typep target 'persona) (conversation-chatbot (persona-conversation target)))
     (t (error "System instruction target must be a chatbot or conversation: ~S" target))))
 
 (defun sampling-parameter-owner (target)
@@ -258,6 +305,7 @@
   (cond
     ((typep target 'chatbot) target)
     ((typep target 'conversation) (conversation-chatbot target))
+    ((typep target 'persona) (conversation-chatbot (persona-conversation target)))
     (t (error "Sampling parameter target must be a chatbot or conversation: ~S" target))))
 
 (defun normalize-chatbot-temperature (temperature &key allow-nil-p)

@@ -80,3 +80,14 @@
                  (write-line line stream))
                (when rest
                  (terpri stream))))))
+
+(defun print-chat-speaker-header (speaker &key (stream *standard-output*))
+  "Prints a bracketed SPEAKER heading to STREAM."
+  (format stream "[~A]~%" speaker))
+
+(defun print-chat-speaker-block (speaker text &key (width 80) (stream *standard-output*))
+  "Prints SPEAKER and TEXT using the standard wrapped transcript style."
+  (print-chat-speaker-header speaker :stream stream)
+  (format-paragraphs text :width width :stream stream)
+  (terpri stream)
+  (terpri stream))
