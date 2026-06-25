@@ -761,12 +761,18 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
   (let ((wrapped (wrap-text "This is a test of the line wrapping utility." :width 15)))
     (fiveam:is (every (lambda (line) (<= (length line) 15)) wrapped))
     (fiveam:is (string= "This is a test" (car wrapped))))
+  (let ((wrapped (wrap-text "This is a test of the line wrapping utility."
+                            :width 15
+                            :initial-prefix "  ")))
+    (fiveam:is (every (lambda (line) (<= (length line) 15)) wrapped))
+    (fiveam:is (string= "  This is a" (car wrapped)))
+    (fiveam:is (string= "test of the" (second wrapped))))
   (let ((output (with-output-to-string (s)
                   (format-paragraphs "Para one.
 
 Para two." :width 40 :stream s))))
-    (fiveam:is (search "Para one." output))
-    (fiveam:is (search "Para two." output))))
+    (fiveam:is (search "  Para one." output))
+    (fiveam:is (search (format nil "  Para one.~%~%  Para two." ) output))))
 
 (fiveam:test test-log-message-level-filtering
   (let ((*logging-enabled-p* t)

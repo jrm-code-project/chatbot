@@ -45,7 +45,8 @@
      (:file "backend-openai"  :depends-on ("package" "vars" "data" "http-utils" "text-utils" "payloads" "openai-payloads" "mcp"))
      (:file "backend-google"  :depends-on ("package" "vars" "data" "logging" "http-utils" "payloads" "google-payloads" "mcp"))
      (:file "chat"            :depends-on ("package" "vars" "data" "attachments" "backend-gemini" "backend-openai" "backend-google"))
-     (:file "screenshot-tools" :depends-on ("package" "attachment-paths" "chat"))))))
+     (:file "screenshot-tools" :depends-on ("package" "attachment-paths" "chat"))
+     (:file "news-tools"      :depends-on ("package" "chat"))))))
 
 (defsystem "chatbot/tests"
   :description "FiveAM test suite for the Chatbot framework"

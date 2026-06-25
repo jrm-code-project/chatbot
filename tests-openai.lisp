@@ -289,6 +289,50 @@ data: [DONE]")
               (fiveam:is-false (search "Older screenshot text" attachment-text)))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
+(fiveam:test test-lisp-news-fetches-configured-feed-urls-as_attachments
+  (let ((captured-payload nil)
+       (captured-urls nil))
+    (let* ((*openai-api-key* "test-key")
+          (context (make-runtime-context
+                    :http-get-function
+                    (lambda (url &rest args)
+                      (declare (ignore args))
+                      (push url captured-urls)
+                      (values (cond
+                                ((string= url "https://planet.lisp.org/rss20.xml")
+                                 "<rss><channel><title>Planet Lisp</title></channel></rss>")
+                                ((string= url "https://planet.scheme.org/atom.xml")
+                                 "<feed><title>Planet Scheme</title></feed>")
+                                (t
+                                 (error "Unexpected feed URL: ~A" url)))
+                              200
+                              '(("content-type" . "application/xml; charset=utf-8"))))
+                    :http-post-function
+                    (lambda (url &rest args)
+                      (declare (ignore url))
+                      (setf captured-payload (getf args :content))
+                      (values (make-string-input-stream
+                               "data: {\"choices\": [{\"delta\": {\"content\": \"Hello OpenAI\"}}]}
+data: [DONE]")
+                              200))))
+          (conv (new-chat :backend :openai :runtime-context context)))
+      (fiveam:is (string= "Hello OpenAI" (lisp-news :conversation conv)))
+      (fiveam:is (equal '("https://planet.lisp.org/rss20.xml"
+                         "https://planet.scheme.org/atom.xml")
+                       (nreverse captured-urls)))
+      (let* ((payload (cl-json:decode-json-from-string captured-payload))
+            (messages (cdr (assoc :messages payload)))
+            (content (cdr (assoc :content (first messages))))
+            (prompt-text (cdr (assoc :text (first content))))
+            (lisp-feed-text (cdr (assoc :text (second content))))
+            (scheme-feed-text (cdr (assoc :text (third content)))))
+       (fiveam:is (string= "What's new in the world of Lisp and Scheme these days?"
+                           prompt-text))
+       (fiveam:is (search "https://planet.lisp.org/rss20.xml" lisp-feed-text))
+       (fiveam:is (search "Planet Lisp" lisp-feed-text))
+       (fiveam:is (search "https://planet.scheme.org/atom.xml" scheme-feed-text))
+       (fiveam:is (search "Planet Scheme" scheme-feed-text))))))
+
 (fiveam:test test-openai-chat-includes-preloaded-diary-history
   (let ((captured-payload nil))
     (let* ((*openai-api-key* "test-key")

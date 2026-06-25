@@ -51,3 +51,26 @@
                  :content content
                  :connect-timeout connect-timeout
                  :read-timeout read-timeout)))))
+
+(defun get-web-request (url &key headers want-stream)
+  "Logs and sends an outbound HTTP GET request."
+  (let ((connect-timeout (current-http-connect-timeout))
+        (read-timeout (current-http-read-timeout)))
+    (log-message :info "HTTP GET request"
+                :context `(("url" . ,(sanitize-url-for-log url))
+                           ("headers" . ,(cl-json:encode-json-to-string
+                                          (sanitize-headers-for-log headers)))
+                           ("connect-timeout" . ,(princ-to-string connect-timeout))
+                           ("read-timeout" . ,(princ-to-string read-timeout))
+                           ("want-stream" . ,(if want-stream "true" "false"))))
+    (let ((http-get-function (current-http-get-function)))
+      (if want-stream
+         (funcall http-get-function url
+                  :headers headers
+                  :connect-timeout connect-timeout
+                  :read-timeout read-timeout
+                  :want-stream t)
+         (funcall http-get-function url
+                  :headers headers
+                  :connect-timeout connect-timeout
+                  :read-timeout read-timeout)))))

@@ -53,6 +53,11 @@
     :accessor runtime-context-http-post-function
     :initform #'dexador:post
     :documentation "HTTP POST function for this runtime context.")
+   (http-get-function
+    :initarg :http-get-function
+    :accessor runtime-context-http-get-function
+    :initform #'dexador:get
+    :documentation "HTTP GET function for this runtime context.")
    (gemini-api-key-function
     :initarg :gemini-api-key-function
     :accessor runtime-context-gemini-api-key-function

@@ -37,35 +37,46 @@
       (unless (string= payload "[DONE]")
         (parse-json-or-error payload :context "SSE event")))))
 
-(defun wrap-text (text &key (width 80))
+(defun wrap-text (text &key (width 80) (initial-prefix ""))
   "Wraps a single paragraph string to the specified width."
   (let ((words (cl-ppcre:split "\\s+" text))
         (lines nil)
         (current-line nil)
-        (current-length 0))
+        (current-length 0)
+        (first-line-p t)
+        (initial-prefix-length (length initial-prefix)))
     (dolist (word words)
-      (let ((word-len (length word)))
+      (let* ((word-len (length word))
+            (line-prefix-length (if first-line-p initial-prefix-length 0))
+            (available-width (max 1 (- width line-prefix-length))))
         (cond
           ((null current-line)
            (push word current-line)
            (setf current-length word-len))
-          ((<= (+ current-length 1 word-len) width)
+          ((<= (+ current-length 1 word-len) available-width)
            (push word current-line)
            (incf current-length (1+ word-len)))
           (t
-           (push (format nil "~{~A~^ ~}" (nreverse current-line)) lines)
+           (push (format nil "~A~{~A~^ ~}"
+                         (if first-line-p initial-prefix "")
+                         (nreverse current-line))
+                 lines)
            (setf current-line (list word))
-           (setf current-length word-len)))))
+           (setf current-length word-len)
+           (setf first-line-p nil)))))
     (when current-line
-      (push (format nil "~{~A~^ ~}" (nreverse current-line)) lines))
+      (push (format nil "~A~{~A~^ ~}"
+                   (if first-line-p initial-prefix "")
+                   (nreverse current-line))
+           lines))
     (nreverse lines)))
 
 (defun format-paragraphs (text &key (width 80) (stream *standard-output*))
   "Formats text to stream, split into paragraphs wrapped at width."
-  (let ((paragraphs (cl-ppcre:split "\\n{2,}" text)))
+  (let ((paragraphs (cl-ppcre:split "(?:\\r?\\n){2,}" text)))
     (loop for (para . rest) on paragraphs
-          do (let ((lines (wrap-text para :width width)))
-               (dolist (line lines)
+          do (let ((lines (wrap-text para :width width :initial-prefix "  ")))
+              (dolist (line lines)
                  (write-line line stream))
                (when rest
                  (terpri stream))))))

@@ -7,6 +7,7 @@
   (:use "ALEXANDRIA" "CL" "FOLD" "FUNCTION" "JSONX" "NAMED-LET" "PROMISE" "SERIES" "TRIVIAL-TIMEOUT")
   (:export "CHAT"
            "SEND-LATEST-SCREENSHOT"
+           "LISP-NEWS"
            "MAKE-RUNTIME-CONTEXT"
            "NEW-CHAT"
            "NEW-CHAT-PERSONA"

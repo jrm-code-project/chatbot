@@ -171,6 +171,9 @@ runtime globals are used to override the default runtime context.")
 (defvar *http-post-function* #'dexador:post
   "Function used to perform HTTP POST requests.")
 
+(defvar *http-get-function* #'dexador:get
+  "Function used to perform HTTP GET requests.")
+
 (defun eager-mcp-startup-enabled-p ()
   "Returns true when eager shared MCP startup is enabled via environment."
   (let ((value (funcall *getenv-function* "CHATBOT_EAGER_MCP_STARTUP")))
@@ -271,6 +274,7 @@ Prefer passing :CONVERSATION explicitly or using a runtime context.")
                                   (http-read-timeout nil http-read-timeout-p)
                                   (getenv-function nil getenv-function-p)
                                   (http-post-function nil http-post-function-p)
+                                  (http-get-function nil http-get-function-p)
                                   (gemini-api-key-function nil gemini-api-key-function-p)
                                   (filesystem-access-approval-function nil filesystem-access-approval-function-p)
                                   (eval-approval-function nil eval-approval-function-p)
@@ -326,6 +330,10 @@ compatibility-only ambient special variables."
                                                   http-post-function
                                                   #'runtime-context-http-post-function
                                                   *http-post-function*)
+                     :http-get-function (inherit http-get-function-p
+                                                 http-get-function
+                                                 #'runtime-context-http-get-function
+                                                 *http-get-function*)
                      :gemini-api-key-function (inherit gemini-api-key-function-p
                                                        gemini-api-key-function
                                                        #'runtime-context-gemini-api-key-function
@@ -801,6 +809,29 @@ compatibility-only ambient special variables."
        (setf *http-post-function* value))
     value))
 
+(defun current-http-get-function (&optional context)
+  "Returns the current HTTP GET function for CONTEXT."
+  (if context
+      (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
+       (if resolved-context
+           (if (active-runtime-context-p resolved-context)
+               *http-get-function*
+               (runtime-context-http-get-function resolved-context))
+           *http-get-function*))
+      *http-get-function*))
+
+(defun (setf current-http-get-function) (value &optional context)
+  "Sets the current HTTP GET function for CONTEXT."
+  (let ((resolved-context (and context
+                              (resolve-runtime-context context :sync-from-globals-p t))))
+    (if resolved-context
+       (progn
+         (setf (runtime-context-http-get-function resolved-context) value)
+         (when (active-runtime-context-p resolved-context)
+           (setf *http-get-function* value)))
+       (setf *http-get-function* value))
+    value))
+
 (defun current-gemini-api-key-function (&optional context)
   "Returns the current Gemini API key lookup function for CONTEXT."
   (if context
@@ -889,6 +920,9 @@ compatibility-only ambient special variables."
                            (*http-post-function* (if default-context-p
                                                      *http-post-function*
                                                      (runtime-context-http-post-function resolved-context)))
+                           (*http-get-function* (if default-context-p
+                                                    *http-get-function*
+                                                    (runtime-context-http-get-function resolved-context)))
                            (*gemini-api-key-function* (if default-context-p
                                                           *gemini-api-key-function*
                                                           (runtime-context-gemini-api-key-function resolved-context))))
@@ -899,6 +933,7 @@ compatibility-only ambient special variables."
                            (sync-runtime-context-from-legacy-globals resolved-context :warn-p nil)
                            (setf (runtime-context-getenv-function resolved-context) *getenv-function*)
                            (setf (runtime-context-http-post-function resolved-context) *http-post-function*)
+                           (setf (runtime-context-http-get-function resolved-context) *http-get-function*)
                            (setf (runtime-context-gemini-api-key-function resolved-context) *gemini-api-key-function*))))))
               (when default-context-p
                 (maybe-sync-legacy-globals-from-default-runtime-context resolved-context))
