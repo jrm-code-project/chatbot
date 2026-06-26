@@ -3,12 +3,8 @@
 
 (in-package "CHATBOT")
 
-(defparameter *active-personas* (make-hash-table :test 'equal)
-  "Registry mapping active sandbox persona names to PERSONA instances.")
-
-(defparameter *active-personas-lock*
-  (sb-thread:make-mutex :name "active-personas-lock")
-  "Mutex protecting the active sandbox persona registry.")
+(defparameter *default-persona-registry* (make-persona-registry)
+  "Default sandbox persona registry backing the convenience global API.")
 
 (defparameter +stock-persona-definitions+
   '((:r-lee-ermey-drill-sergeant
@@ -95,37 +91,48 @@
     (when paragraphs
       (format nil "~{~A~^~%~%~}" paragraphs))))
 
-(defun register-active-persona (persona)
-  "Registers PERSONA in the global sandbox registry."
-  (sb-thread:with-mutex (*active-personas-lock*)
-    (let ((name (persona-name persona)))
-      (when (gethash name *active-personas*)
-        (error "A sandbox persona named ~A is already active." name))
-      (setf (gethash name *active-personas*) persona)))
+(defun resolve-persona-registry (&optional registry)
+  "Returns REGISTRY when provided, otherwise the default sandbox persona registry."
+  (let ((resolved (or registry *default-persona-registry*)))
+    (unless (typep resolved 'persona-registry)
+      (error "Sandbox persona registry must be a PERSONA-REGISTRY: ~S" resolved))
+    resolved))
+
+(defun register-active-persona (persona &key registry)
+  "Registers PERSONA in REGISTRY."
+  (let ((registry (resolve-persona-registry registry)))
+    (sb-thread:with-mutex ((persona-registry-lock registry))
+      (let* ((table (persona-registry-personas registry))
+             (name (persona-name persona)))
+        (when (gethash name table)
+          (error "A sandbox persona named ~A is already active." name))
+        (setf (gethash name table) persona))))
   persona)
 
-(defun active-persona-objects ()
-  "Returns the registered sandbox personas in stable name order."
-  (sb-thread:with-mutex (*active-personas-lock*)
-    (sort (loop for persona being the hash-values of *active-personas*
-                collect persona)
-          #'string<
-          :key #'persona-name)))
+(defun active-persona-objects (&key registry)
+  "Returns REGISTRY's sandbox personas in stable name order."
+  (let ((registry (resolve-persona-registry registry)))
+    (sb-thread:with-mutex ((persona-registry-lock registry))
+      (sort (loop for persona being the hash-values of (persona-registry-personas registry)
+                  collect persona)
+            #'string<
+            :key #'persona-name))))
 
-(defun require-active-persona (designator)
-  "Returns the active sandbox persona named by DESIGNATOR or signals an error."
+(defun require-active-persona (designator &key registry)
+  "Returns the active sandbox persona named by DESIGNATOR from REGISTRY or signals an error."
   (typecase designator
     (persona designator)
     (t
-     (let ((name (validate-persona-name designator)))
-       (or (sb-thread:with-mutex (*active-personas-lock*)
-             (gethash name *active-personas*))
+     (let ((name (validate-persona-name designator))
+           (registry (resolve-persona-registry registry)))
+       (or (sb-thread:with-mutex ((persona-registry-lock registry))
+             (gethash name (persona-registry-personas registry)))
            (error "No active sandbox persona named ~A." name))))))
 
 (defun spawn-persona (name
                       &key persona-name model system-instruction role tone directives constraints context
-                        temperature top-p (backend :gemini) runtime-context)
-  "Creates, registers, and returns a new active sandbox persona."
+                        temperature top-p (backend :gemini) runtime-context registry)
+  "Creates, registers, and returns a new active sandbox persona in REGISTRY."
   (let* ((registry-name (validate-persona-name name))
          (generated-system-instruction
            (or system-instruction
@@ -166,33 +173,35 @@
                        (list :temperature temperature))
                      (when top-p
                        (list :top-p top-p)))))
-    (register-active-persona persona)))
+    (register-active-persona persona :registry registry)))
 
-(defun find-persona (name)
-  "Returns the active sandbox persona named NAME, or NIL when absent."
-  (let ((validated-name (validate-persona-name name)))
-    (sb-thread:with-mutex (*active-personas-lock*)
-      (gethash validated-name *active-personas*))))
+(defun find-persona (name &key registry)
+  "Returns the active sandbox persona named NAME from REGISTRY, or NIL when absent."
+  (let ((validated-name (validate-persona-name name))
+        (registry (resolve-persona-registry registry)))
+    (sb-thread:with-mutex ((persona-registry-lock registry))
+      (gethash validated-name (persona-registry-personas registry)))))
 
-(defun remove-persona (designator)
-  "Removes DESIGNATOR from the active sandbox persona registry and returns it when present."
+(defun remove-persona (designator &key registry)
+  "Removes DESIGNATOR from REGISTRY and returns it when present."
   (let ((name (validate-persona-name (if (typep designator 'persona)
                                          (persona-name designator)
-                                         designator))))
-    (sb-thread:with-mutex (*active-personas-lock*)
+                                         designator)))
+        (registry (resolve-persona-registry registry)))
+    (sb-thread:with-mutex ((persona-registry-lock registry))
       (multiple-value-bind (persona presentp)
-          (gethash name *active-personas*)
+          (gethash name (persona-registry-personas registry))
         (when presentp
-          (remhash name *active-personas*))
+          (remhash name (persona-registry-personas registry)))
         persona))))
 
-(defun list-personas ()
-  "Returns the active sandbox persona names in stable order."
-  (mapcar #'persona-name (active-persona-objects)))
+(defun list-personas (&key registry)
+  "Returns REGISTRY's active sandbox persona names in stable order."
+  (mapcar #'persona-name (active-persona-objects :registry registry)))
 
-(defun show-personas (&key (stream *standard-output*))
-  "Prints the active sandbox personas and returns their names."
-  (let ((personas (active-persona-objects)))
+(defun show-personas (&key (stream *standard-output*) registry)
+  "Prints REGISTRY's active sandbox personas and returns their names."
+  (let ((personas (active-persona-objects :registry registry)))
     (if personas
         (dolist (persona personas)
           (let* ((conversation (persona-conversation persona))
@@ -204,31 +213,32 @@
             (format stream "  history-turns: ~D~%" history-turns)
             (terpri stream)))
         (write-line "No active personas." stream))
-    (list-personas)))
+    (list-personas :registry registry)))
 
-(defun reset-persona (designator)
-  "Clears DESIGNATOR's sandbox history and provider conversation state."
-  (let* ((persona (require-active-persona designator))
+(defun reset-persona (designator &key registry)
+  "Clears DESIGNATOR's sandbox history and provider conversation state in REGISTRY."
+  (let* ((persona (require-active-persona designator :registry registry))
          (conversation (persona-conversation persona)))
     (setf (persona-history persona) nil)
     (setf (conversation-messages conversation) nil)
     (setf (conversation-interaction-id conversation) nil)
     persona))
 
-(defun reset-all-personas ()
-  "Clears history and provider state for every active sandbox persona."
+(defun reset-all-personas (&key registry)
+  "Clears history and provider state for every active sandbox persona in REGISTRY."
   (let ((count 0))
-    (dolist (persona (active-persona-objects))
-      (reset-persona persona)
+    (dolist (persona (active-persona-objects :registry registry))
+      (reset-persona persona :registry registry)
       (incf count))
     count))
 
-(defun clear-personas ()
-  "Purges the active sandbox persona registry and returns the number removed."
-  (sb-thread:with-mutex (*active-personas-lock*)
-    (let ((count (hash-table-count *active-personas*)))
-      (clrhash *active-personas*)
-      count)))
+(defun clear-personas (&key registry)
+  "Purges REGISTRY and returns the number removed."
+  (let ((registry (resolve-persona-registry registry)))
+    (sb-thread:with-mutex ((persona-registry-lock registry))
+      (let ((count (hash-table-count (persona-registry-personas registry))))
+        (clrhash (persona-registry-personas registry))
+        count))))
 
 (defun defpersona-macro-name-string (name)
   "Returns the runtime persona name string implied by DEFPERSONA NAME."
@@ -254,42 +264,45 @@ Example:
     `(progn
        (remove-persona ,name-string)
        (spawn-persona ,name-string
-                      ,@options
-                      ,@(when directives
-                          `(:directives (list ,@directives)))))))
+                     ,@options
+                     ,@(when directives
+                         `(:directives (list ,@directives)))))))
 
 (defun list-stock-personas ()
   "Returns the available stock sandbox persona keys."
   (mapcar #'car +stock-persona-definitions+))
 
-(defun spawn-stock-persona (designator &key name model temperature top-p (backend :google) runtime-context)
+(defun spawn-stock-persona (designator &key name model temperature top-p (backend :google) runtime-context registry)
   "Spawns one built-in stock sandbox persona by DESIGNATOR."
   (let* ((definition (stock-persona-definition designator))
          (properties (cdr definition))
          (display-name (or name (getf properties :display-name))))
     (spawn-persona display-name
-                   :backend backend
-                   :model model
-                   :role (getf properties :role)
-                   :tone (getf properties :tone)
-                   :directives (getf properties :directives)
-                   :constraints (getf properties :constraints)
-                   :temperature temperature
-                   :top-p top-p
-                   :runtime-context runtime-context)))
+                  :backend backend
+                  :model model
+                  :role (getf properties :role)
+                  :tone (getf properties :tone)
+                  :directives (getf properties :directives)
+                  :constraints (getf properties :constraints)
+                  :temperature temperature
+                  :top-p top-p
+                  :runtime-context runtime-context
+                  :registry registry)))
 
-(defun normalize-query-personas (personas)
+(defun normalize-query-personas (personas &key registry)
   "Returns PERSONAS normalized to a non-empty list of PERSONA instances."
   (let ((resolved
           (cond
             ((null personas)
-             (active-persona-objects))
+            (active-persona-objects :registry registry))
             ((typep personas 'persona)
-             (list personas))
+            (list personas))
             ((listp personas)
-             (mapcar #'require-active-persona personas))
+            (mapcar (lambda (designator)
+                      (require-active-persona designator :registry registry))
+                    personas))
             (t
-             (list (require-active-persona personas))))))
+            (list (require-active-persona personas :registry registry))))))
     (unless resolved
       (error "No active sandbox personas are available."))
     resolved))
@@ -341,10 +354,10 @@ Example:
         (setf (conversation-messages conversation) updated-history)
         response))))
 
-(defun query-all (prompt &key personas callback file files (temperature nil temperaturep) (top-p nil top-pp))
+(defun query-all (prompt &key personas callback file files (temperature nil temperaturep) (top-p nil top-pp) registry)
   "Sends PROMPT to each selected sandbox persona and returns ordered results."
   (let ((results nil))
-    (dolist (persona (normalize-query-personas personas))
+    (dolist (persona (normalize-query-personas personas :registry registry))
       (print-chat-speaker-header (persona-name persona))
       (let ((response
               (apply #'query-one-persona
@@ -378,12 +391,12 @@ Example:
   (write-line "[Your turn]")
   nil)
 
-(defun run-arena (prompt &key personas (rounds 1) callback file files (temperature nil temperaturep) (top-p nil top-pp))
+(defun run-arena (prompt &key personas (rounds 1) callback file files (temperature nil temperaturep) (top-p nil top-pp) registry)
   "Runs a multi-round sandbox arena where each persona responds to the previous turn."
   (unless (and (integerp rounds)
                (> rounds 0))
     (error "Arena :rounds must be a positive integer."))
-  (let* ((ordered-personas (normalize-query-personas personas))
+  (let* ((ordered-personas (normalize-query-personas personas :registry registry))
          (persona-count (length ordered-personas))
          (total-turns (* rounds persona-count))
          (results nil)

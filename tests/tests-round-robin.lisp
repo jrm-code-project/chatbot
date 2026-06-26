@@ -33,6 +33,80 @@
     (fiveam:is (string= "Beta: Beta one"
                         (cdr (assoc "content" (third history) :test #'string=))))))
 
+(fiveam:test test-round-robin-clones-conversation-through-shared-copy-helpers
+  (let* ((runtime-context (make-runtime-context))
+         (allowed-directories (list #p"C:/tmp/allowed-a/" #p"C:/tmp/allowed-b/"))
+         (mcp-servers (list :shared-tool-server))
+         (source-conversation
+           (make-instance 'conversation
+                          :chatbot (make-instance 'chatbot
+                                                  :backend :google
+                                                  :model "gemini-3.5-flash"
+                                                  :system-instruction "Be skeptical."
+                                                  :system-instruction-path #p"C:/tmp/system-instruction.md"
+                                                  :system-instruction-storage-kind :markdown-file
+                                                  :temperature 0.25d0
+                                                  :top-p 0.75d0
+                                                  :google-search-p t
+                                                  :gemini-fallback-to-google-p t
+                                                  :web-tools-p t
+                                                  :code-execution-p t
+                                                  :include-timestamp-p t
+                                                  :include-model-p t
+                                                  :enable-eval-p t
+                                                  :filesystem-tools-p t
+                                                  :filesystem-root-directory #p"C:/tmp/persona/"
+                                                  :filesystem-allowed-directories allowed-directories
+                                                  :filesystem-allowlist-path #p"C:/tmp/filesystem-allowlist.lisp"
+                                                  :mcp-servers mcp-servers
+                                                  :mcp-startup-status :ready
+                                                  :runtime-context runtime-context)
+                          :persona-memory "Compressed persona memory."
+                          :persona-diary-entries '(((:filename . "001.txt")
+                                                    (:content . "First diary entry.")))
+                          :interaction-id nil
+                          :messages nil))
+         (session (new-round-robin-chat
+                   (list (make-round-robin-participant :name "Alpha"
+                                                       :conversation source-conversation)
+                         (make-round-robin-participant :name "Beta"
+                                                       :conversation (new-chat :backend :google)))))
+         (cloned-conversation
+           (round-robin-participant-conversation
+            (first (round-robin-session-participants session))))
+         (source-bot (conversation-chatbot source-conversation))
+         (cloned-bot (conversation-chatbot cloned-conversation)))
+    (fiveam:is (not (eq source-conversation cloned-conversation)))
+    (fiveam:is (not (eq source-bot cloned-bot)))
+    (fiveam:is (eq runtime-context (chatbot-runtime-context cloned-bot)))
+    (fiveam:is (eq mcp-servers (chatbot-mcp-servers cloned-bot)))
+    (fiveam:is (equal allowed-directories
+                      (chatbot-filesystem-allowed-directories cloned-bot)))
+    (fiveam:is (string= (chatbot-model source-bot)
+                        (chatbot-model cloned-bot)))
+    (fiveam:is (string= (chatbot-system-instruction source-bot)
+                        (chatbot-system-instruction cloned-bot)))
+    (fiveam:is (eq (chatbot-system-instruction-storage-kind source-bot)
+                   (chatbot-system-instruction-storage-kind cloned-bot)))
+    (fiveam:is (= (chatbot-temperature source-bot)
+                  (chatbot-temperature cloned-bot)))
+    (fiveam:is (= (chatbot-top-p source-bot)
+                  (chatbot-top-p cloned-bot)))
+    (fiveam:is-true (chatbot-google-search-p cloned-bot))
+    (fiveam:is-true (chatbot-gemini-fallback-to-google-p cloned-bot))
+    (fiveam:is-true (chatbot-web-tools-p cloned-bot))
+    (fiveam:is-true (chatbot-code-execution-p cloned-bot))
+    (fiveam:is-true (chatbot-include-timestamp-p cloned-bot))
+    (fiveam:is-true (chatbot-include-model-p cloned-bot))
+    (fiveam:is-true (chatbot-enable-eval-p cloned-bot))
+    (fiveam:is-true (chatbot-filesystem-tools-p cloned-bot))
+    (fiveam:is (equal (conversation-persona-memory source-conversation)
+                      (conversation-persona-memory cloned-conversation)))
+    (fiveam:is (equal (conversation-persona-diary-entries source-conversation)
+                      (conversation-persona-diary-entries cloned-conversation)))
+    (fiveam:is (null (conversation-messages cloned-conversation)))
+    (fiveam:is (null (conversation-interaction-id cloned-conversation)))))
+
 (fiveam:test test-round-robin-chat-sequentially-feeds-next-participant
   (let ((first-payload nil)
         (second-payload nil))

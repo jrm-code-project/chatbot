@@ -12,7 +12,7 @@
                       (lm-studio-api-key)
                       (openai-api-key)))
          (base-url (if (eq backend :lm-studio)
-                       *lm-studio-base-url*
+                       (lm-studio-api-base-url)
                        *openai-base-url*)))
     (unless (and api-key (string/= api-key ""))
       (error "~A API Key is not set." (if (eq backend :lm-studio) "LM Studio" "OpenAI")))
@@ -102,17 +102,14 @@
           (setf tcs (nreverse tcs))
           (if (null tcs)
               (let ((final-str (coerce full-text 'string)))
-                (update-conversation-stateless-history
-                 conversation
-                 history-messages
-                 (list (cons "role" "assistant")
-                       (cons "content" final-str)))
-                (format-paragraphs final-str :width 80)
-                final-str)
+                (finish-stateless-text-turn conversation
+                                            history-messages
+                                            "assistant"
+                                            final-str))
               (let* ((assistant-tool-calls
-                       (mapcar (lambda (tc)
-                                 (let ((id (cdr (assoc :id tc)))
-                                       (name (cdr (assoc :name tc)))
+                      (mapcar (lambda (tc)
+                                (let ((id (cdr (assoc :id tc)))
+                                      (name (cdr (assoc :name tc)))
                                        (args (coerce (cdr (assoc :arguments tc)) 'string)))
                                    `(("id" . ,id)
                                      ("type" . "function")

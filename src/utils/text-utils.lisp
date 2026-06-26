@@ -71,15 +71,60 @@
            lines))
     (nreverse lines)))
 
+(defun blank-line-p (line)
+  "Returns true when LINE contains only whitespace."
+  (string= "" (string-trim '(#\Space #\Tab #\Return) line)))
+
+(defun fenced-code-line-p (line)
+  "Returns true when LINE begins a Markdown fenced code line."
+  (alexandria:starts-with-subseq
+   "```"
+   (string-left-trim '(#\Space #\Tab) line)))
+
 (defun format-paragraphs (text &key (width 80) (stream *standard-output*))
-  "Formats text to stream, split into paragraphs wrapped at width."
-  (let ((paragraphs (cl-ppcre:split "(?:\\r?\\n){2,}" text)))
-    (loop for (para . rest) on paragraphs
-          do (let ((lines (wrap-text para :width width :initial-prefix "  ")))
-              (dolist (line lines)
-                 (write-line line stream))
-               (when rest
-                 (terpri stream))))))
+  "Formats text to STREAM, wrapping prose paragraphs while preserving fenced code blocks verbatim."
+  (let ((blocks nil)
+        (paragraph-lines nil)
+        (fence-lines nil)
+        (in-fence-p nil))
+    (labels ((flush-paragraph ()
+              (when paragraph-lines
+                (push (cons :prose
+                            (format nil "~{~A~^ ~}" (nreverse paragraph-lines)))
+                      blocks)
+                (setf paragraph-lines nil)))
+            (flush-fence ()
+              (when fence-lines
+                (push (cons :fence (nreverse fence-lines)) blocks)
+                (setf fence-lines nil))))
+      (dolist (line (cl-ppcre:split "\\r?\\n" text))
+        (cond
+          (in-fence-p
+           (push line fence-lines)
+           (when (fenced-code-line-p line)
+            (flush-fence)
+            (setf in-fence-p nil)))
+          ((fenced-code-line-p line)
+           (flush-paragraph)
+           (setf in-fence-p t
+                fence-lines (list line)))
+          ((blank-line-p line)
+           (flush-paragraph))
+          (t
+           (push line paragraph-lines))))
+      (flush-paragraph)
+      (flush-fence))
+    (loop for (block-type . content) in (nreverse blocks)
+          for first-p = t then nil
+          do (unless first-p
+              (terpri stream))
+            (ecase block-type
+              (:prose
+               (dolist (line (wrap-text content :width width :initial-prefix "  "))
+                 (write-line line stream)))
+              (:fence
+               (dolist (line content)
+                 (write-line line stream)))))))
 
 (defun print-chat-speaker-header (speaker &key (stream *standard-output*))
   "Prints a bracketed SPEAKER heading to STREAM."

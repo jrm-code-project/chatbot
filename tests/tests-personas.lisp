@@ -114,9 +114,34 @@
                                    (conversation-persona-memory conv))))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
+(fiveam:test test-persona-loading-supports-lm-studio-backend
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-lm-studio/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-lm-studio/" personas-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "(:backend :lm-studio :model \"gemma-4-e4b-uncensored-hauhaucs-aggressive\")" s))
+    (with-open-file (s (merge-pathnames "system-instruction.md" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "You are direct and concise." s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let ((conv (new-chat-persona "persona-lm-studio")))
+            (let ((bot (conversation-chatbot conv)))
+              (fiveam:is (eq :lm-studio (chatbot-backend bot)))
+              (fiveam:is (string= "gemma-4-e4b-uncensored-hauhaucs-aggressive"
+                                  (chatbot-model bot)))
+              (fiveam:is (search "You are direct and concise."
+                                 (chatbot-system-instruction bot))))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
 (fiveam:test test-persona-system-instructions-file-loads-paragraph-vector
   (let* ((temp-dir (uiop:default-temporary-directory))
-        (mock-home (merge-pathnames "mock-home-system-instructions/" temp-dir))
+       (mock-home (merge-pathnames "mock-home-system-instructions/" temp-dir))
         (personas-dir (merge-pathnames ".Personas/" mock-home))
         (test-persona-dir (merge-pathnames "persona-system-instructions/" personas-dir)))
     (ensure-directories-exist test-persona-dir)

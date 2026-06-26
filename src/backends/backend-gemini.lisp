@@ -184,6 +184,5 @@
                  :file-attachments file-attachments
                  :effective-generation-config effective-generation-config
                  :recursion-depth recursion-depth)))
-            (format-paragraphs full-text :width 80)
-            (write-turn-token-summary completed-usage)
-            (coerce full-text 'string))))))
+            (emit-chat-response-text (coerce full-text 'string)
+                                     :usage completed-usage))))))

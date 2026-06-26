@@ -55,6 +55,25 @@
       (fiveam:is (string= "calculate_sum" (cdr (assoc "name" gemini-fn :test #'string=))))
       (fiveam:is (string= "Adds two numbers" (cdr (assoc "description" gemini-fn :test #'string=)))))))
 
+(fiveam:test test-openai-tool-translation-normalizes-parameter-properties-to-objects
+  (let* ((bot (make-instance 'chatbot
+                             :model "gpt-4o"
+                             :filesystem-tools-p t
+                             :enable-eval-p t
+                             :system-instruction-path #p"persona/system-instruction.md"))
+         (tools (openai-request-tools bot)))
+    (dolist (tool tools)
+      (let* ((function (cdr (assoc "function" tool :test #'string=)))
+             (parameters (cdr (assoc "parameters" function :test #'string=)))
+             (properties (and parameters
+                              (typecase parameters
+                                (hash-table (gethash "properties" parameters))
+                                (list (cdr (assoc "properties" parameters :test #'string=)))
+                                (t nil)))))
+        (fiveam:is (or (null properties)
+                       (hash-table-p properties)
+                       (json-object-alist-p properties)))))))
+
 (fiveam:test test-parse-mcp-server-def-supports-required-flag
   (multiple-value-bind (name command args required-p)
       (parse-mcp-server-def '(:name "required-server"

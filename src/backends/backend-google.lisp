@@ -198,15 +198,12 @@
                                :effective-generation-config effective-generation-config
                                :recursion-depth recursion-depth))
                             (error "No text returned from Gemini API response: ~A" response-body)))
-                      (format-paragraphs final-str :width 80)
-                      (write-turn-token-summary usage)
-                      (when callback
-                        (funcall callback final-str))
-                      (update-conversation-stateless-history
-                       conversation
-                       history-messages
-                       (list (cons "role" "model") (cons "content" final-str)))
-                      final-str))))))
+                      (finish-stateless-text-turn conversation
+                                                  history-messages
+                                                  "model"
+                                                  final-str
+                                                  :callback callback
+                                                  :usage usage)))))))
           (chatbot-tool-recursion-limit-error (e)
             (error e))
           (error (e)

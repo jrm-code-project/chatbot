@@ -261,6 +261,63 @@
     :initform nil
     :documentation "Structured prompt-building options captured when this persona was spawned.")))
 
+(defclass persona-registry ()
+  ((personas
+     :initarg :personas
+     :accessor persona-registry-personas
+     :initform (make-hash-table :test 'equal)
+     :documentation "Hash table mapping active sandbox persona names to PERSONA instances.")
+   (lock
+     :initarg :lock
+     :accessor persona-registry-lock
+     :initform (sb-thread:make-mutex :name "persona-registry-lock")
+     :documentation "Mutex protecting PERSONAS updates and reads.")))
+
+(defun make-persona-registry ()
+  "Returns a fresh explicit sandbox persona registry."
+  (make-instance 'persona-registry))
+
+(defun ensure-class-finalized (class)
+  "Returns CLASS after finalizing it when required for slot introspection."
+  (unless (sb-mop:class-finalized-p class)
+    (sb-mop:finalize-inheritance class))
+  class)
+
+(defun copy-initargs-for-instance (instance &key ignored-slots)
+  "Returns INSTANCE state as initargs, omitting any IGNORED-SLOTS by slot name."
+  (let* ((class (ensure-class-finalized (class-of instance)))
+         (ignored-slots (copy-list ignored-slots)))
+    (loop for slot in (sb-mop:class-slots class)
+          for slot-name = (sb-mop:slot-definition-name slot)
+          for initargs = (sb-mop:slot-definition-initargs slot)
+          unless (or (null initargs)
+                     (member slot-name ignored-slots))
+            append (let ((value (when (slot-boundp instance slot-name)
+                                  (slot-value instance slot-name))))
+                     (list (first initargs) value)))))
+
+(defun merge-initarg-overrides (base-initargs override-initargs)
+  "Returns BASE-INITARGS with OVERRIDE-INITARGS replacing duplicate initargs."
+  (let ((override-keys
+          (loop for initarg in override-initargs by #'cddr
+                collect initarg)))
+    (append (loop for (initarg value) on base-initargs by #'cddr
+                  unless (member initarg override-keys)
+                    append (list initarg value))
+            override-initargs)))
+
+(defun clone-chatbot (bot &rest initarg-overrides)
+  "Returns a shallow clone of BOT with INITARG-OVERRIDES applied."
+  (apply #'make-instance 'chatbot
+         (merge-initarg-overrides (copy-initargs-for-instance bot)
+                                  initarg-overrides)))
+
+(defun clone-conversation (conversation &rest initarg-overrides)
+  "Returns a shallow clone of CONVERSATION with INITARG-OVERRIDES applied."
+  (apply #'make-instance 'conversation
+         (merge-initarg-overrides (copy-initargs-for-instance conversation)
+                                  initarg-overrides)))
+
 (defun split-system-instruction-into-paragraphs (text)
   "Splits TEXT into a vector of trimmed paragraphs."
   (let* ((normalized (remove #\Return text))

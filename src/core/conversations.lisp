@@ -47,6 +47,19 @@
       :paragraph-file
       :markdown-file))
 
+(defun persona-config-backend (config)
+  "Returns the backend keyword implied by persona CONFIG."
+  (let ((backend (safe-getf config :backend)))
+    (cond
+      ((null backend)
+       (if (eq (safe-getf config :googleapi) :google-api)
+           :google
+           :gemini))
+      ((member backend '(:gemini :google :openai :lm-studio))
+       backend)
+      (t
+       (error "Unsupported persona backend: ~S" backend)))))
+
 (defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context)
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
@@ -114,9 +127,8 @@ Use NEW-CHAT instead when no persona should be loaded."
            (include-model-p (safe-getf config :include-model))
            (enable-eval-p (safe-getf config :enable-eval))
            (filesystem-tools-p (safe-getf config :enable-filesystem-tools))
-           (backend (cond
-                      ((eq googleapi :google-api) :google)
-                      (t :gemini))))
+           (backend (persona-config-backend config)))
+      (declare (ignore googleapi))
       (let ((conversation
               (preload-persona-conversation-diary
                (preload-persona-conversation-memory

@@ -159,6 +159,41 @@
                      captured-history))
     (fiveam:is (equal recursion-messages captured-messages))))
 
+(fiveam:test test-emit-chat-response-text-handles-formatting-usage-and-callback
+  (reset-global-token-grand-totals)
+  (let ((callback-text nil)
+       (stream (make-string-output-stream)))
+    (let ((*standard-output* stream))
+     (fiveam:is (string= "Shared reply"
+                         (emit-chat-response-text
+                          "Shared reply"
+                          :callback (lambda (text)
+                                      (setf callback-text text))
+                          :usage '(("total_input_tokens" . 2)
+                                   ("total_output_tokens" . 3)
+                                   ("total_tokens" . 5))))))
+    (let ((output (get-output-stream-string stream)))
+     (fiveam:is (search "Shared reply" output))
+     (fiveam:is (search "[Tokens] prompt: 2" output))
+     (fiveam:is (string= "Shared reply" callback-text)))))
+
+(fiveam:test test-finish-stateless-text-turn-emits-and-persists-history
+  (let* ((conversation (new-chat :backend :google))
+        (history-messages (list (list (cons "role" "user")
+                                      (cons "content" "hello"))))
+        (stream (make-string-output-stream)))
+    (let ((*standard-output* stream))
+     (fiveam:is (string= "Shared final"
+                         (finish-stateless-text-turn conversation
+                                                     history-messages
+                                                     "model"
+                                                     "Shared final"))))
+    (fiveam:is (search "Shared final" (get-output-stream-string stream)))
+    (fiveam:is (equal (append history-messages
+                             (list (list (cons "role" "model")
+                                         (cons "content" "Shared final"))))
+                     (conversation-messages conversation)))))
+
 (fiveam:test test-explicit-runtime-context-helpers-do-not-mutate-default-globals
   (let* ((context (make-runtime-context :mcp-config-path "explicit-start.lisp"
                                        :auto-initialize-startup-mcp-servers-p nil

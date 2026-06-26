@@ -63,6 +63,10 @@ Common options:
 - `:system-instruction` - set a custom system prompt
 - `:temperature` / `:top-p` - set default sampling behavior
 
+LM Studio uses the OpenAI-compatible local endpoint and defaults to
+`http://127.0.0.1:1234/`. The code normalizes that host root to the
+OpenAI-compatible `.../v1` API path internally.
+
 Example:
 
 ```lisp
@@ -117,6 +121,10 @@ Typical persona files may include:
 - `system-instruction.md` or `system-instructions.md`
 - `compressed-memory.txt` or `memory.json`
 - diary files in `CompressedDiary/` or `Diary/`
+
+`config.lisp` may set `:backend` to `:gemini`, `:google`, `:openai`, or `:lm-studio`.
+If `:backend` is omitted, the older `:googleapi :google-api` switch still selects the
+Google backend and everything else defaults to Gemini.
 
 Example:
 

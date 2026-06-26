@@ -381,11 +381,19 @@ data: [DONE]")
                              nil)))
     (fiveam:is (string= "custom-lm-default" (lm-studio-api-key)))))
 
+(fiveam:test test-lm-studio-api-base-url-normalizes-root-and-v1-paths
+  (let ((*lm-studio-base-url* "http://127.0.0.1:1234/"))
+    (fiveam:is (string= "http://127.0.0.1:1234/v1"
+                       (lm-studio-api-base-url))))
+  (let ((*lm-studio-base-url* "http://127.0.0.1:1234/v1"))
+    (fiveam:is (string= "http://127.0.0.1:1234/v1"
+                       (lm-studio-api-base-url)))))
+
 (fiveam:test test-lm-studio-chat-flow
   (let ((captured-url nil)
         (captured-headers nil))
     (let* ((*lm-studio-api-key* "lm_studio")
-           (*lm-studio-base-url* "http://127.0.0.1:8088/v1")
+           (*lm-studio-base-url* "http://127.0.0.1:1234/")
            (context (make-runtime-context
                     :http-post-function
                     (lambda (url &rest args)
@@ -398,7 +406,7 @@ data: [DONE]")
            (conv (new-chat :backend :lm-studio :runtime-context context)))
       (let ((res (chat "Hello local model" :conversation conv)))
         (fiveam:is (string= "Hello LM Studio" res))
-        (fiveam:is (string= "http://127.0.0.1:8088/v1/chat/completions" captured-url))
+        (fiveam:is (string= "http://127.0.0.1:1234/v1/chat/completions" captured-url))
         (fiveam:is (string= "Bearer lm_studio" (cdr (assoc "Authorization" captured-headers :test #'string=))))))))
 
 (fiveam:test test-openai-tool-call-recursion-preserves-history

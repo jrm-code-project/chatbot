@@ -61,6 +61,25 @@
                                 recursion-messages)))
     (funcall continuation updated-history recursion-messages)))
 
+(defun emit-chat-response-text (text &key callback usage)
+  "Formats TEXT for display, writes token USAGE when present, optionally calls CALLBACK, and returns TEXT."
+  (format-paragraphs text :width 80)
+  (when usage
+    (write-turn-token-summary usage))
+  (when callback
+    (funcall callback text))
+  text)
+
+(defun finish-stateless-text-turn (conversation history-messages role text &key callback usage)
+  "Emits final TEXT for a stateless backend turn, persists it on CONVERSATION, and returns TEXT."
+  (emit-chat-response-text text :callback callback :usage usage)
+  (update-conversation-stateless-history
+   conversation
+   history-messages
+   (list (cons "role" role)
+         (cons "content" text)))
+  text)
+
 (defun persona-memory-messages (persona-memory)
   "Returns provider-neutral synthetic history representing PERSONA-MEMORY."
   (when persona-memory

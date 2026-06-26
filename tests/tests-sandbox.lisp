@@ -19,9 +19,37 @@
     (fiveam:is (search "  - Find memory leaks." instruction))
     (fiveam:is (search "Constraints:" instruction))))
 
+(fiveam:test test-explicit-persona-registry-isolates_same_names_from_global_state
+  (let ((registry-a (make-persona-registry))
+       (registry-b (make-persona-registry)))
+    (unwind-protect
+        (progn
+          (clear-personas)
+          (let ((alpha-a (spawn-persona "Alpha"
+                                        :backend :google
+                                        :model "gemini-3.5-flash"
+                                        :registry registry-a))
+                (alpha-b (spawn-persona "Alpha"
+                                        :backend :google
+                                        :model "gemini-3.5-flash"
+                                        :registry registry-b)))
+            (fiveam:is (eq alpha-a (find-persona "Alpha" :registry registry-a)))
+            (fiveam:is (eq alpha-b (find-persona "Alpha" :registry registry-b)))
+            (fiveam:is (not (eq alpha-a alpha-b)))
+            (fiveam:is (equal '("Alpha") (list-personas :registry registry-a)))
+            (fiveam:is (equal '("Alpha") (list-personas :registry registry-b)))
+            (fiveam:is (null (list-personas)))
+            (fiveam:is (null (find-persona "Alpha")))
+            (fiveam:is (eq alpha-b (remove-persona "Alpha" :registry registry-b)))
+            (fiveam:is (null (find-persona "Alpha" :registry registry-b)))
+            (fiveam:is (equal '("Alpha") (list-personas :registry registry-a)))))
+     (clear-personas)
+     (clear-personas :registry registry-a)
+     (clear-personas :registry registry-b))))
+
 (fiveam:test test-spawn-persona-registers-list-finds-and-clears
   (unwind-protect
-       (progn
+      (progn
          (clear-personas)
          (let ((persona (spawn-persona "Alpha"
                                        :backend :google
@@ -43,6 +71,39 @@
            (fiveam:signals error
              (spawn-persona "Alpha" :backend :google :model "gemini-3.5-flash"))))
     (clear-personas)))
+
+(fiveam:test test-query-all-can_draw_default_personas_from_explicit_registry
+  (let ((registry (make-persona-registry))
+       (alpha-payloads nil)
+       (beta-payloads nil))
+    (unwind-protect
+        (let* ((alpha-context (make-runtime-context
+                               :gemini-api-key-function (lambda () "mocked-google-api-key")
+                               :http-post-function
+                               (lambda (url &rest args)
+                                 (declare (ignore url))
+                                 (push (getf args :content) alpha-payloads)
+                                 (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Alpha reply\"}], \"role\": \"model\"}}]}" 200))))
+               (beta-context (make-runtime-context
+                              :gemini-api-key-function (lambda () "mocked-google-api-key")
+                              :http-post-function
+                              (lambda (url &rest args)
+                                (declare (ignore url))
+                                (push (getf args :content) beta-payloads)
+                                (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Beta reply\"}], \"role\": \"model\"}}]}" 200)))))
+          (spawn-persona "Alpha" :backend :google :runtime-context alpha-context :registry registry)
+          (spawn-persona "Beta" :backend :google :runtime-context beta-context :registry registry)
+          (let ((results (query-all "Kickoff" :registry registry)))
+            (fiveam:is (equal '(("Alpha" . "Alpha reply") ("Beta" . "Beta reply"))
+                              (mapcar (lambda (result)
+                                        (cons (getf result :name)
+                                              (getf result :response)))
+                                      results))))
+          (fiveam:is (null (list-personas)))
+          (fiveam:is (= 1 (length alpha-payloads)))
+          (fiveam:is (= 1 (length beta-payloads))))
+     (clear-personas :registry registry)
+     (clear-personas))))
 
 (fiveam:test test-reset-persona-clears-isolated-history
   (let ((captured-payloads nil))

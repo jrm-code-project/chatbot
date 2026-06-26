@@ -46,40 +46,13 @@
     (error "Round-robin participant ~A must start from a fresh conversation with no active Gemini interaction." name))
   conversation)
 
-(defun clone-chatbot-for-round-robin (bot)
-  "Returns a shallow clone of BOT suitable for round-robin session-local state."
-  (make-instance 'chatbot
-                 :model (chatbot-model bot)
-                 :backend (chatbot-backend bot)
-                 :system-instruction (chatbot-system-instruction bot)
-                 :system-instruction-path (chatbot-system-instruction-path bot)
-                 :system-instruction-storage-kind (chatbot-system-instruction-storage-kind bot)
-                 :temperature (chatbot-temperature bot)
-                 :top-p (chatbot-top-p bot)
-                 :google-search-p (chatbot-google-search-p bot)
-                 :gemini-fallback-to-google-p (chatbot-gemini-fallback-to-google-p bot)
-                 :web-tools-p (chatbot-web-tools-p bot)
-                 :code-execution-p (chatbot-code-execution-p bot)
-                 :include-timestamp-p (chatbot-include-timestamp-p bot)
-                 :include-model-p (chatbot-include-model-p bot)
-                 :enable-eval-p (chatbot-enable-eval-p bot)
-                 :filesystem-tools-p (chatbot-filesystem-tools-p bot)
-                 :filesystem-root-directory (chatbot-filesystem-root-directory bot)
-                 :filesystem-allowed-directories (chatbot-filesystem-allowed-directories bot)
-                 :filesystem-allowlist-path (chatbot-filesystem-allowlist-path bot)
-                 :mcp-servers (chatbot-mcp-servers bot)
-                 :mcp-startup-status (chatbot-mcp-startup-status bot)
-                 :runtime-context (chatbot-runtime-context bot)))
-
 (defun clone-conversation-for-round-robin (conversation)
   "Returns a round-robin-local clone of CONVERSATION."
-  (make-instance 'conversation
-                 :chatbot (clone-chatbot-for-round-robin
-                           (conversation-chatbot conversation))
-                 :persona-memory (conversation-persona-memory conversation)
-                 :persona-diary-entries (conversation-persona-diary-entries conversation)
-                 :interaction-id nil
-                 :messages nil))
+  (clone-conversation conversation
+                      :chatbot (clone-chatbot
+                                (conversation-chatbot conversation))
+                      :interaction-id nil
+                      :messages nil))
 
 (defun make-round-robin-participant (&key name conversation)
   "Returns one named round-robin participant wrapper."

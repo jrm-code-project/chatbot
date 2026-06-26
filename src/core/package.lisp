@@ -10,6 +10,7 @@
            "MAKE-ROUND-ROBIN-PARTICIPANT"
            "NEW-ROUND-ROBIN-CHAT"
            "SPAWN-PERSONA"
+           "MAKE-PERSONA-REGISTRY"
            "DEFPERSONA"
            "FIND-PERSONA"
            "LIST-PERSONAS"

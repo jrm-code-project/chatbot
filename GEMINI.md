@@ -22,14 +22,20 @@ The **Chatbot** project is a Common Lisp framework designed for building convers
   - `fiveam`: Unit testing framework (build/test-time dependency).
 
 ### System & Architecture
-The system definition is managed in `Chatbot.asd` under the system `"Chatbot"`. The files are organized as an integrated codebase:
+The system definition is managed in `chatbot.asd` under the systems `"chatbot"` and `"chatbot/tests"`. Runtime code is organized under `src/` by concern:
 
-- **`Chatbot.asd`**: System definition, specifying dependencies and components.
-- **`package.lisp`**: Code package definition. Shadowing-imports several utilities from libraries like `SERIES`, `NAMED-LET`, and `FUNCTION` to streamline functional development.
-- **`vars.lisp`**: Contains global parameters and dynamic variables for framework behavior (e.g., configurations, API keys).
-- **`macros.lisp`**: Contains custom syntactic macros for simplifying conversation definitions and chatbot behaviors.
-- **`data.lisp`**: Defines core CLOS (Common Lisp Object System) classes including `chatbot` and `conversation`.
-- **`misc.lisp`**: Holds helper and miscellaneous utility functions.
+- **`src/core/`**: `package.lisp`, `data.lisp`, `vars.lisp`, `conversations.lisp`, and `chat.lisp`.
+- **`src/utils/`**: shared helpers such as `json-utils.lisp`, `logging.lisp`, `http-utils.lisp`, and `text-utils.lisp`.
+- **`src/attachments/`**: attachment path expansion, MIME policy, and attachment encoding.
+- **`src/prompts/`**: prompt decoration and request-history shaping.
+- **`src/payloads/`**: shared payload helpers plus provider-specific payload builders.
+- **`src/personas/`**: persona loading and persona startup helpers.
+- **`src/mcp/`**: Model Context Protocol support.
+- **`src/backends/`**: Gemini, Google, and OpenAI-compatible backend dispatch.
+- **`src/orchestration/`**: round-robin chat and sandbox persona orchestration.
+- **`src/tools/`**: convenience helpers like screenshot and news tools.
+
+FiveAM regression tests live under **`tests/`** and are loaded by the `chatbot/tests` ASDF system.
 
 ---
 
@@ -63,11 +69,10 @@ With the registry configured, load the project in SBCL:
 ```
 
 ### Running Tests
-The system uses the **FiveAM** library for regression and unit testing. To run tests (once test-systems and suites are added):
+The system uses the **FiveAM** library for regression and unit testing. To run the full suite:
 ```lisp
 (asdf:test-system :chatbot)
 ```
-*Note: Currently, a specific test system is not defined in `Chatbot.asd`. Adding a separate test system (e.g., `"Chatbot/tests"`) using FiveAM is a recommended next step.*
 
 ---
 
@@ -89,14 +94,14 @@ To maintain consistency and avoid common Common Lisp pitfalls, adhere to the fol
   ```lisp
   (in-package "CHATBOT")
   ```
-- File encodings or mode markers (e.g., `;;; -*- Lisp -*-`) are placed at the very top of infrastructure files (like `package.lisp`).
+- File encodings or mode markers (e.g., `;;; -*- Lisp -*-`) are placed at the very top of infrastructure files (like `src/core/package.lisp`).
 
 ### Architectural Practices & Style
 1. **Shadowing Imports:**
-   Be aware of package shadowing in `package.lisp`. Several standard CL macros/functions or external utility names (like `COMPOSE`, `LET`, `LET*`, `FUNCALL`, `DEFUN`, `MULTIPLE-VALUE-BIND`) are imported from helper libraries (`SERIES`, `NAMED-LET`, `FUNCTION`) rather than the standard `CL` package. Always use these shadowed forms when working within the `"CHATBOT"` package.
+   Be aware of package shadowing in `src/core/package.lisp`. Several standard CL macros/functions or external utility names (like `COMPOSE`, `LET`, `LET*`, `FUNCALL`, `DEFUN`, `MULTIPLE-VALUE-BIND`) are imported from helper libraries (`SERIES`, `NAMED-LET`, `FUNCTION`) rather than the standard `CL` package. Always use these shadowed forms when working within the `"CHATBOT"` package.
 2. **CLOS Classes:**
-   - Define custom structs/classes inside `data.lisp` or domain-specific files.
+   - Define custom structs/classes inside `src/core/data.lisp` or domain-specific files.
    - Utilize standard slot specifications (`:initarg`, `:accessor`, `:initform`) to ensure type-safe and clean object management.
 3. **Adding New Files:**
-   - When introducing a new source file, declare it under the `:components` list inside `Chatbot.asd`.
+   - When introducing a new source file, place it in the appropriate `src/` subdirectory and declare it under the `:components` list inside `chatbot.asd`.
    - Ensure you declare dependencies using `:depends-on ("package" ...)` to allow ASDF to resolve compilation orders correctly.

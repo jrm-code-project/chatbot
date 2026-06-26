@@ -112,8 +112,15 @@ Unknown backends fall back to the Gemini default."
   (or *openai-api-key*
       (funcall (current-getenv-function) "OPENAI_API_KEY")))
 
-(defvar *lm-studio-base-url* "http://127.0.0.1:8088/v1"
-  "The base REST endpoint for the local LM Studio API.")
+(defvar *lm-studio-base-url* "http://127.0.0.1:1234"
+  "The host root for the local LM Studio API.")
+
+(defun lm-studio-api-base-url ()
+  "Returns the normalized OpenAI-compatible LM Studio API base URL."
+  (let ((base-url (string-right-trim "/" *lm-studio-base-url*)))
+    (if (alexandria:ends-with-subseq "/v1" base-url)
+        base-url
+        (concatenate 'string base-url "/v1"))))
 
 (defvar *lm-studio-default-api-key* "lm_studio"
   "Fallback API key used when LM Studio credentials are otherwise unset.")
@@ -403,6 +410,10 @@ compatibility-only ambient special variables."
   (and context
        (eq context *active-runtime-context*)))
 
+(defun legacy-global-value (symbol)
+  "Returns SYMBOL's current ambient legacy-global value."
+  (symbol-value symbol))
+
 (defun resolve-runtime-context (context &key sync-from-globals-p)
   "Returns CONTEXT, otherwise the active context, otherwise the canonical default context."
   (let ((resolved (or context
@@ -413,495 +424,191 @@ compatibility-only ambient special variables."
       (sync-runtime-context-from-legacy-globals resolved))
     resolved))
 
-(defun current-default-conversation (&optional context)
+(defun mirrored-runtime-context-value (context accessor legacy-symbol)
+  "Returns the mirrored legacy/runtime-context value for ACCESSOR and LEGACY-SYMBOL."
+  (let ((resolved-context (resolve-runtime-context context)))
+    (cond
+      ((and (null context)
+            resolved-context
+            (active-runtime-context-p resolved-context)
+            (not (default-runtime-context-p resolved-context)))
+       (runtime-context-accessor-value resolved-context accessor))
+      (context
+       (when (default-runtime-context-p resolved-context)
+         (set-runtime-context-accessor-value resolved-context accessor
+                                           (legacy-global-value legacy-symbol)))
+       (and resolved-context
+            (runtime-context-accessor-value resolved-context accessor)))
+      (t
+       (when (default-runtime-context-p resolved-context)
+         (set-runtime-context-accessor-value resolved-context accessor
+                                           (legacy-global-value legacy-symbol)))
+       (legacy-global-value legacy-symbol)))))
+
+(defun set-mirrored-runtime-context-value (value context accessor legacy-symbol)
+  "Stores VALUE through the mirrored legacy/runtime-context bridge."
+  (let ((resolved-context (resolve-runtime-context context)))
+    (cond
+      ((and (null context)
+            resolved-context
+            (active-runtime-context-p resolved-context)
+            (not (default-runtime-context-p resolved-context)))
+       (set-runtime-context-accessor-value resolved-context accessor value))
+      (context
+       (when resolved-context
+         (set-runtime-context-accessor-value resolved-context accessor value)
+         (when (default-runtime-context-p resolved-context)
+           (setf (symbol-value legacy-symbol) value))))
+      (t
+       (setf (symbol-value legacy-symbol) value)
+       (when (default-runtime-context-p resolved-context)
+         (set-runtime-context-accessor-value resolved-context accessor value)))))
+  value)
+
+(defun runtime-context-function-value (context accessor legacy-symbol &key default-uses-legacy-p)
+  "Returns the function seam value for ACCESSOR and LEGACY-SYMBOL."
+  (if context
+      (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
+        (if resolved-context
+            (if (or (active-runtime-context-p resolved-context)
+                   (and default-uses-legacy-p
+                        (default-runtime-context-p resolved-context)))
+               (legacy-global-value legacy-symbol)
+               (runtime-context-accessor-value resolved-context accessor))
+            (legacy-global-value legacy-symbol)))
+      (legacy-global-value legacy-symbol)))
+
+(defun set-runtime-context-function-value (value context accessor legacy-symbol &key default-uses-legacy-p)
+  "Stores VALUE through the function seam bridge for ACCESSOR and LEGACY-SYMBOL."
+  (let ((resolved-context (and context
+                              (resolve-runtime-context context :sync-from-globals-p t))))
+    (if resolved-context
+        (progn
+          (set-runtime-context-accessor-value resolved-context accessor value)
+          (when (or (active-runtime-context-p resolved-context)
+                   (and default-uses-legacy-p
+                        (default-runtime-context-p resolved-context)))
+            (setf (symbol-value legacy-symbol) value)))
+        (setf (symbol-value legacy-symbol) value)))
+  value)
+
+(defmacro define-mirrored-runtime-context-helper (name accessor legacy-symbol getter-doc setter-doc)
+  `(progn
+     (defun ,name (&optional context)
+       ,getter-doc
+       (mirrored-runtime-context-value context ',accessor ',legacy-symbol))
+     (defun (setf ,name) (value &optional context)
+       ,setter-doc
+       (set-mirrored-runtime-context-value value context ',accessor ',legacy-symbol))))
+
+(defmacro define-runtime-context-function-helper (name accessor legacy-symbol getter-doc setter-doc
+                                                 &key default-uses-legacy-p)
+  `(progn
+     (defun ,name (&optional context)
+       ,getter-doc
+       (runtime-context-function-value context
+                                      ',accessor
+                                      ',legacy-symbol
+                                      :default-uses-legacy-p ,default-uses-legacy-p))
+     (defun (setf ,name) (value &optional context)
+       ,setter-doc
+       (set-runtime-context-function-value value
+                                          context
+                                          ',accessor
+                                          ',legacy-symbol
+                                          :default-uses-legacy-p ,default-uses-legacy-p))))
+
+(define-mirrored-runtime-context-helper current-default-conversation
+  runtime-context-default-conversation
+  *default-conversation*
   "Returns the ambient default conversation for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (runtime-context-default-conversation resolved-context))
-      (context
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-default-conversation resolved-context) *default-conversation*))
-       (and resolved-context
-            (runtime-context-default-conversation resolved-context)))
-      (t
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-default-conversation resolved-context) *default-conversation*))
-       *default-conversation*))))
+  "Sets the ambient default conversation for CONTEXT.")
 
-(defun (setf current-default-conversation) (value &optional context)
-  "Sets the ambient default conversation for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (setf (runtime-context-default-conversation resolved-context) value))
-      (context
-       (when resolved-context
-         (setf (runtime-context-default-conversation resolved-context) value)
-         (when (default-runtime-context-p resolved-context)
-           (setf *default-conversation* value))))
-      (t
-       (setf *default-conversation* value)
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-default-conversation resolved-context) value))))
-    value))
-
-(defun current-mcp-config-path (&optional context)
+(define-mirrored-runtime-context-helper current-mcp-config-path
+  runtime-context-mcp-config-path
+  *mcp-config-path*
   "Returns the ambient MCP configuration override path for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (runtime-context-mcp-config-path resolved-context))
-      (context
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-mcp-config-path resolved-context) *mcp-config-path*))
-       (and resolved-context
-            (runtime-context-mcp-config-path resolved-context)))
-      (t
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-mcp-config-path resolved-context) *mcp-config-path*))
-       *mcp-config-path*))))
+  "Sets the ambient MCP configuration override path for CONTEXT.")
 
-(defun (setf current-mcp-config-path) (value &optional context)
-  "Sets the ambient MCP configuration override path for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (setf (runtime-context-mcp-config-path resolved-context) value))
-      (context
-       (when resolved-context
-         (setf (runtime-context-mcp-config-path resolved-context) value)
-         (when (default-runtime-context-p resolved-context)
-           (setf *mcp-config-path* value))))
-      (t
-       (setf *mcp-config-path* value)
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-mcp-config-path resolved-context) value))))
-    value))
-
-(defun current-startup-chatbot (&optional context)
+(define-mirrored-runtime-context-helper current-startup-chatbot
+  runtime-context-startup-chatbot
+  *startup-chatbot*
   "Returns the shared startup chatbot for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (runtime-context-startup-chatbot resolved-context))
-      (context
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-startup-chatbot resolved-context) *startup-chatbot*))
-       (and resolved-context
-            (runtime-context-startup-chatbot resolved-context)))
-      (t *startup-chatbot*))))
+  "Sets the shared startup chatbot for CONTEXT.")
 
-(defun (setf current-startup-chatbot) (value &optional context)
-  "Sets the shared startup chatbot for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (setf (runtime-context-startup-chatbot resolved-context) value))
-      (context
-       (when resolved-context
-         (setf (runtime-context-startup-chatbot resolved-context) value)
-         (when (default-runtime-context-p resolved-context)
-           (setf *startup-chatbot* value))))
-      (t
-       (setf *startup-chatbot* value)
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-startup-chatbot resolved-context) value))))
-    value))
-
-(defun current-auto-initialize-startup-mcp-servers-p (&optional context)
+(define-mirrored-runtime-context-helper current-auto-initialize-startup-mcp-servers-p
+  runtime-context-auto-initialize-startup-mcp-servers-p
+  *auto-initialize-startup-mcp-servers-p*
   "Returns whether startup MCP auto-initialization is enabled for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (runtime-context-auto-initialize-startup-mcp-servers-p resolved-context))
-      (context
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-auto-initialize-startup-mcp-servers-p resolved-context)
-               *auto-initialize-startup-mcp-servers-p*))
-       (and resolved-context
-            (runtime-context-auto-initialize-startup-mcp-servers-p resolved-context)))
-      (t
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-auto-initialize-startup-mcp-servers-p resolved-context)
-               *auto-initialize-startup-mcp-servers-p*))
-       *auto-initialize-startup-mcp-servers-p*))))
+  "Sets whether startup MCP auto-initialization is enabled for CONTEXT.")
 
-(defun (setf current-auto-initialize-startup-mcp-servers-p) (value &optional context)
-  "Sets whether startup MCP auto-initialization is enabled for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (setf (runtime-context-auto-initialize-startup-mcp-servers-p resolved-context) value))
-      (context
-       (when resolved-context
-         (setf (runtime-context-auto-initialize-startup-mcp-servers-p resolved-context) value)
-         (when (default-runtime-context-p resolved-context)
-           (setf *auto-initialize-startup-mcp-servers-p* value))))
-      (t
-       (setf *auto-initialize-startup-mcp-servers-p* value)
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-auto-initialize-startup-mcp-servers-p resolved-context) value))))
-    value))
-
-(defun current-logging-enabled-p (&optional context)
+(define-mirrored-runtime-context-helper current-logging-enabled-p
+  runtime-context-logging-enabled-p
+  *logging-enabled-p*
   "Returns whether logging is enabled for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (runtime-context-logging-enabled-p resolved-context))
-      (context
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-logging-enabled-p resolved-context) *logging-enabled-p*))
-       (and resolved-context
-            (runtime-context-logging-enabled-p resolved-context)))
-      (t
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-logging-enabled-p resolved-context) *logging-enabled-p*))
-       *logging-enabled-p*))))
+  "Sets whether logging is enabled for CONTEXT.")
 
-(defun (setf current-logging-enabled-p) (value &optional context)
-  "Sets whether logging is enabled for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (setf (runtime-context-logging-enabled-p resolved-context) value))
-      (context
-       (when resolved-context
-         (setf (runtime-context-logging-enabled-p resolved-context) value)
-         (when (default-runtime-context-p resolved-context)
-           (setf *logging-enabled-p* value))))
-      (t
-       (setf *logging-enabled-p* value)
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-logging-enabled-p resolved-context) value))))
-    value))
-
-(defun current-log-level (&optional context)
+(define-mirrored-runtime-context-helper current-log-level
+  runtime-context-log-level
+  *log-level*
   "Returns the current log level for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (runtime-context-log-level resolved-context))
-      (context
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-log-level resolved-context) *log-level*))
-       (and resolved-context
-            (runtime-context-log-level resolved-context)))
-      (t
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-log-level resolved-context) *log-level*))
-       *log-level*))))
+  "Sets the current log level for CONTEXT.")
 
-(defun (setf current-log-level) (value &optional context)
-  "Sets the current log level for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (setf (runtime-context-log-level resolved-context) value))
-      (context
-       (when resolved-context
-         (setf (runtime-context-log-level resolved-context) value)
-         (when (default-runtime-context-p resolved-context)
-           (setf *log-level* value))))
-      (t
-       (setf *log-level* value)
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-log-level resolved-context) value))))
-    value))
-
-(defun current-log-stream (&optional context)
+(define-mirrored-runtime-context-helper current-log-stream
+  runtime-context-log-stream
+  *log-stream*
   "Returns the current log stream for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (runtime-context-log-stream resolved-context))
-      (context
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-log-stream resolved-context) *log-stream*))
-       (and resolved-context
-            (runtime-context-log-stream resolved-context)))
-      (t
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-log-stream resolved-context) *log-stream*))
-       *log-stream*))))
+  "Sets the current log stream for CONTEXT.")
 
-(defun (setf current-log-stream) (value &optional context)
-  "Sets the current log stream for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (setf (runtime-context-log-stream resolved-context) value))
-      (context
-       (when resolved-context
-         (setf (runtime-context-log-stream resolved-context) value)
-         (when (default-runtime-context-p resolved-context)
-           (setf *log-stream* value))))
-      (t
-       (setf *log-stream* value)
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-log-stream resolved-context) value))))
-    value))
-
-(defun current-http-connect-timeout (&optional context)
+(define-mirrored-runtime-context-helper current-http-connect-timeout
+  runtime-context-http-connect-timeout
+  *http-connect-timeout*
   "Returns the current HTTP connect timeout for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (runtime-context-http-connect-timeout resolved-context))
-      (context
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-http-connect-timeout resolved-context) *http-connect-timeout*))
-       (and resolved-context
-            (runtime-context-http-connect-timeout resolved-context)))
-      (t
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-http-connect-timeout resolved-context) *http-connect-timeout*))
-       *http-connect-timeout*))))
+  "Sets the current HTTP connect timeout for CONTEXT.")
 
-(defun (setf current-http-connect-timeout) (value &optional context)
-  "Sets the current HTTP connect timeout for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (setf (runtime-context-http-connect-timeout resolved-context) value))
-      (context
-       (when resolved-context
-         (setf (runtime-context-http-connect-timeout resolved-context) value)
-         (when (default-runtime-context-p resolved-context)
-           (setf *http-connect-timeout* value))))
-      (t
-       (setf *http-connect-timeout* value)
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-http-connect-timeout resolved-context) value))))
-    value))
-
-(defun current-http-read-timeout (&optional context)
+(define-mirrored-runtime-context-helper current-http-read-timeout
+  runtime-context-http-read-timeout
+  *http-read-timeout*
   "Returns the current HTTP read timeout for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (runtime-context-http-read-timeout resolved-context))
-      (context
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-http-read-timeout resolved-context) *http-read-timeout*))
-       (and resolved-context
-            (runtime-context-http-read-timeout resolved-context)))
-      (t
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-http-read-timeout resolved-context) *http-read-timeout*))
-       *http-read-timeout*))))
+  "Sets the current HTTP read timeout for CONTEXT.")
 
-(defun (setf current-http-read-timeout) (value &optional context)
-  "Sets the current HTTP read timeout for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (setf (runtime-context-http-read-timeout resolved-context) value))
-      (context
-       (when resolved-context
-         (setf (runtime-context-http-read-timeout resolved-context) value)
-         (when (default-runtime-context-p resolved-context)
-           (setf *http-read-timeout* value))))
-      (t
-       (setf *http-read-timeout* value)
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-http-read-timeout resolved-context) value))))
-    value))
-
-(defun current-getenv-function (&optional context)
+(define-runtime-context-function-helper current-getenv-function
+  runtime-context-getenv-function
+  *getenv-function*
   "Returns the current environment lookup function for CONTEXT."
-  (if context
-      (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
-       (if resolved-context
-           (if (active-runtime-context-p resolved-context)
-               *getenv-function*
-               (runtime-context-getenv-function resolved-context))
-           *getenv-function*))
-      *getenv-function*))
+  "Sets the current environment lookup function for CONTEXT.")
 
-(defun (setf current-getenv-function) (value &optional context)
-  "Sets the current environment lookup function for CONTEXT."
-  (let ((resolved-context (and context
-                              (resolve-runtime-context context :sync-from-globals-p t))))
-    (if resolved-context
-       (progn
-         (setf (runtime-context-getenv-function resolved-context) value)
-         (when (active-runtime-context-p resolved-context)
-           (setf *getenv-function* value)))
-       (setf *getenv-function* value))
-    value))
-
-(defun current-http-post-function (&optional context)
+(define-runtime-context-function-helper current-http-post-function
+  runtime-context-http-post-function
+  *http-post-function*
   "Returns the current HTTP POST function for CONTEXT."
-  (if context
-      (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
-       (if resolved-context
-           (if (active-runtime-context-p resolved-context)
-               *http-post-function*
-               (runtime-context-http-post-function resolved-context))
-           *http-post-function*))
-      *http-post-function*))
+  "Sets the current HTTP POST function for CONTEXT.")
 
-(defun (setf current-http-post-function) (value &optional context)
-  "Sets the current HTTP POST function for CONTEXT."
-  (let ((resolved-context (and context
-                              (resolve-runtime-context context :sync-from-globals-p t))))
-    (if resolved-context
-       (progn
-         (setf (runtime-context-http-post-function resolved-context) value)
-         (when (active-runtime-context-p resolved-context)
-           (setf *http-post-function* value)))
-       (setf *http-post-function* value))
-    value))
-
-(defun current-http-get-function (&optional context)
+(define-runtime-context-function-helper current-http-get-function
+  runtime-context-http-get-function
+  *http-get-function*
   "Returns the current HTTP GET function for CONTEXT."
-  (if context
-      (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
-       (if resolved-context
-           (if (active-runtime-context-p resolved-context)
-               *http-get-function*
-               (runtime-context-http-get-function resolved-context))
-           *http-get-function*))
-      *http-get-function*))
+  "Sets the current HTTP GET function for CONTEXT.")
 
-(defun (setf current-http-get-function) (value &optional context)
-  "Sets the current HTTP GET function for CONTEXT."
-  (let ((resolved-context (and context
-                              (resolve-runtime-context context :sync-from-globals-p t))))
-    (if resolved-context
-       (progn
-         (setf (runtime-context-http-get-function resolved-context) value)
-         (when (active-runtime-context-p resolved-context)
-           (setf *http-get-function* value)))
-       (setf *http-get-function* value))
-    value))
-
-(defun current-gemini-api-key-function (&optional context)
+(define-runtime-context-function-helper current-gemini-api-key-function
+  runtime-context-gemini-api-key-function
+  *gemini-api-key-function*
   "Returns the current Gemini API key lookup function for CONTEXT."
-  (if context
-      (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
-       (if resolved-context
-           (if (active-runtime-context-p resolved-context)
-               *gemini-api-key-function*
-               (runtime-context-gemini-api-key-function resolved-context))
-           *gemini-api-key-function*))
-      *gemini-api-key-function*))
+  "Sets the current Gemini API key lookup function for CONTEXT.")
 
-(defun (setf current-gemini-api-key-function) (value &optional context)
-  "Sets the current Gemini API key lookup function for CONTEXT."
-  (let ((resolved-context (and context
-                              (resolve-runtime-context context :sync-from-globals-p t))))
-    (if resolved-context
-       (progn
-         (setf (runtime-context-gemini-api-key-function resolved-context) value)
-         (when (active-runtime-context-p resolved-context)
-           (setf *gemini-api-key-function* value)))
-       (setf *gemini-api-key-function* value))
-    value))
-
-(defun current-filesystem-access-approval-function (&optional context)
+(define-runtime-context-function-helper current-filesystem-access-approval-function
+  runtime-context-filesystem-access-approval-function
+  *filesystem-access-approval-function*
   "Returns the current filesystem access approval function for CONTEXT."
-  (if context
-      (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
-        (and resolved-context
-             (if (or (active-runtime-context-p resolved-context)
-                     (default-runtime-context-p resolved-context))
-                 *filesystem-access-approval-function*
-                 (runtime-context-filesystem-access-approval-function resolved-context))))
-      *filesystem-access-approval-function*))
-
-(defun (setf current-filesystem-access-approval-function) (value &optional context)
   "Sets the current filesystem access approval function for CONTEXT."
-  (let ((resolved-context (and context
-                               (resolve-runtime-context context :sync-from-globals-p t))))
-    (if resolved-context
-        (progn
-          (setf (runtime-context-filesystem-access-approval-function resolved-context) value)
-          (when (or (active-runtime-context-p resolved-context)
-                    (default-runtime-context-p resolved-context))
-            (setf *filesystem-access-approval-function* value)))
-        (setf *filesystem-access-approval-function* value))
-    value))
+  :default-uses-legacy-p t)
 
-(defun current-eval-approval-function (&optional context)
+(define-runtime-context-function-helper current-eval-approval-function
+  runtime-context-eval-approval-function
+  *eval-approval-function*
   "Returns the current eval approval function for CONTEXT."
-  (if context
-      (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
-        (and resolved-context
-             (if (or (active-runtime-context-p resolved-context)
-                     (default-runtime-context-p resolved-context))
-                 *eval-approval-function*
-                 (runtime-context-eval-approval-function resolved-context))))
-      *eval-approval-function*))
-
-(defun (setf current-eval-approval-function) (value &optional context)
   "Sets the current eval approval function for CONTEXT."
-  (let ((resolved-context (and context
-                               (resolve-runtime-context context :sync-from-globals-p t))))
-    (if resolved-context
-        (progn
-          (setf (runtime-context-eval-approval-function resolved-context) value)
-          (when (or (active-runtime-context-p resolved-context)
-                    (default-runtime-context-p resolved-context))
-            (setf *eval-approval-function* value)))
-        (setf *eval-approval-function* value))
-    value))
+  :default-uses-legacy-p t)
 
 (defun call-with-runtime-context (context thunk)
   "Calls THUNK with legacy special variables rebound from CONTEXT when CONTEXT is non-nil."
