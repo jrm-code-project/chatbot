@@ -183,6 +183,32 @@
                                      "missing_tool"
                                      '())))))
 
+(fiveam:test test-map-chatbot-json-tool-call-results-error-builder-captures-tool-errors
+  (let ((*find-mcp-server-and-tool-function*
+         (lambda (bot tool-name)
+           (declare (ignore bot tool-name))
+           (values nil nil))))
+    (let* ((bot (conversation-chatbot (new-chat :backend :openai)))
+           (tool-calls (list '((:id . "call-1")
+                               (:name . "missing_tool")
+                               (:arguments . "{}"))))
+           (results
+             (map-chatbot-json-tool-call-results
+              bot
+              tool-calls
+              (lambda (name tool-call)
+                (declare (ignore name tool-call))
+                "MCP tool execution test")
+              (lambda (id name arguments-json res-text tool-call)
+                (declare (ignore id name arguments-json res-text tool-call))
+                (error "Result builder should not run for failing tools."))
+              :error-builder
+              (lambda (id name arguments-json condition tool-call)
+                (declare (ignore tool-call))
+                (list id name arguments-json (chatbot-tool-error-message condition))))))
+      (fiveam:is (equal '(("call-1" "missing_tool" "{}" "Tool not found: missing_tool"))
+                        results)))))
+
 (fiveam:test test-execute-chatbot-tool-by-name-json-arguments-parses-before-execution
   (let ((*find-mcp-server-and-tool-function*
          (lambda (bot tool-name)

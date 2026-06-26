@@ -3,9 +3,9 @@
 This file records the highest-signal technical debt items found during a repo walk on 2026-06-26.
 
 1. **`src/mcp/mcp.lisp` is still an oversized integration hub**
-   - **Why this is debt:** The built-in tool catalog and tool-registry helpers have now been extracted to `src/mcp/builtin-tools.lisp` and `src/mcp/tool-registry.lisp`, but `mcp.lisp` still mixes transport/process lifecycle, config parsing, startup orchestration, tool-call wrappers, built-in argument normalization, and built-in tool execution in one 1,500+ line file. It is trending in the right direction, but still owns too many unrelated MCP concerns.
-   - **Evidence:** `src/mcp/mcp.lisp:17-67`, `src/mcp/mcp.lisp:551-760`, `src/mcp/mcp.lisp:763-836`, `src/mcp/mcp.lisp:843-1564`, `src/mcp/builtin-tools.lisp:1-166`, `src/mcp/tool-registry.lisp:1-134`
-   - **Remediation direction:** Continue the split by carving out protocol/client transport, startup/configuration, and built-in tool execution/validation modules so `mcp.lisp` stops being the catch-all for every MCP concern.
+   - **Why this is debt:** The built-in tool catalog, tool registry, and tool execution layers now live in `src/mcp/builtin-tools.lisp`, `src/mcp/tool-registry.lisp`, and `src/mcp/tool-execution.lisp`, but `mcp.lisp` still combines core protocol types, config parsing, request bookkeeping, transport/process lifecycle, and startup orchestration in one file. The direction is better, yet the remaining file still spans too many MCP concerns for safe future changes.
+   - **Evidence:** `src/mcp/mcp.lisp:17-167`, `src/mcp/mcp.lisp:169-530`, `src/mcp/mcp.lisp:551-764`, `src/mcp/builtin-tools.lisp:1-184`, `src/mcp/tool-registry.lisp:1-134`, `src/mcp/tool-execution.lisp:1-920`
+   - **Remediation direction:** Continue the split by carving out startup/configuration orchestration and then reassess whether protocol/client transport should also move into dedicated modules.
 
 2. **Provider turn orchestration still duplicates the request and tool loop across OpenAI, Google, and Gemini**
    - **Why this is debt:** Final text emission and stateless-history persistence are now shared, but the heavy control flow is still copied three ways: request construction, response parsing, tool-call capture, retry/fallback decisions, and recursive continuation all remain backend-specific. That means every behavioral fix still has to be re-threaded provider by provider.
