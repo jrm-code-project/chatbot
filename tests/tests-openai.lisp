@@ -127,30 +127,26 @@ data: [DONE]")
       (chat "First live turn" :conversation conv)
       (chat "Second live turn" :conversation conv)
       (fiveam:is (= 2 (length captured-payloads)))
-      (let* ((first-payload (cl-json:decode-json-from-string (first captured-payloads)))
-            (first-messages (cdr (assoc :messages first-payload)))
-            (second-payload (cl-json:decode-json-from-string (second captured-payloads)))
-            (second-messages (cdr (assoc :messages second-payload))))
-        (fiveam:is (= 4 (length first-messages)))
-        (fiveam:is (string= "system" (cdr (assoc :role (first first-messages)))))
-        (fiveam:is (string= "Please concisely summarize your knowledge graph."
-                           (cdr (assoc :content (second first-messages)))))
-        (fiveam:is (string= "Stored persona memory."
-                           (cdr (assoc :content (third first-messages)))))
-        (fiveam:is (string= "First live turn"
-                           (cdr (assoc :content (fourth first-messages)))))
-        (fiveam:is (= 6 (length second-messages)))
-        (fiveam:is (string= "system" (cdr (assoc :role (first second-messages)))))
-        (fiveam:is (string= "Please concisely summarize your knowledge graph."
-                           (cdr (assoc :content (second second-messages)))))
-        (fiveam:is (string= "Stored persona memory."
-                           (cdr (assoc :content (third second-messages)))))
-        (fiveam:is (string= "First live turn"
-                           (cdr (assoc :content (fourth second-messages)))))
-        (fiveam:is (string= "Hello OpenAI"
-                           (cdr (assoc :content (fifth second-messages)))))
-        (fiveam:is (string= "Second live turn"
-                           (cdr (assoc :content (sixth second-messages)))))
+      (let* ((first-payload (decode-test-json (first captured-payloads)))
+             (first-messages (test-json-elements
+                              (test-json-value-any first-payload '(:messages "messages"))))
+             (second-payload (decode-test-json (second captured-payloads)))
+             (second-messages (test-json-elements
+                               (test-json-value-any second-payload '(:messages "messages")))))
+        (assert-role/content-sequence
+         first-messages
+         '(("system" "Be helpful")
+           ("user" "Please concisely summarize your knowledge graph.")
+           ("assistant" "Stored persona memory.")
+           ("user" "First live turn")))
+        (assert-role/content-sequence
+         second-messages
+         '(("system" "Be helpful")
+           ("user" "Please concisely summarize your knowledge graph.")
+           ("assistant" "Stored persona memory.")
+           ("user" "First live turn")
+           ("assistant" "Hello OpenAI")
+           ("user" "Second live turn")))
         (fiveam:is (= 4 (length (conversation-messages conv))))
         (fiveam:is (string= "Stored persona memory."
                            (conversation-persona-memory conv)))))))
@@ -183,26 +179,28 @@ data: [DONE]")
           (fiveam:is (string= "Hello OpenAI"
                               (chat "No files now" :conversation conv)))
           (fiveam:is (= 2 (length captured-payloads)))
-          (let* ((first-payload (cl-json:decode-json-from-string (first captured-payloads)))
-                 (first-messages (cdr (assoc :messages first-payload)))
-                 (first-content (cdr (assoc :content (second first-messages))))
-                 (second-payload (cl-json:decode-json-from-string (second captured-payloads)))
-                 (second-messages (cdr (assoc :messages second-payload)))
-                 (stored-history (conversation-messages conv)))
-            (fiveam:is (= 2 (length first-content)))
-            (fiveam:is (string= "Summarize"
-                                (cdr (assoc :text (first first-content)))))
-            (fiveam:is (search "Alpha attachment"
-                               (cdr (assoc :text (second first-content)))))
-            (fiveam:is (string= "Summarize"
-                                (cdr (assoc :content (second second-messages)))))
+          (let* ((first-payload (decode-test-json (first captured-payloads)))
+                 (first-messages (test-json-elements
+                                 (test-json-value-any first-payload '(:messages "messages"))))
+                 (first-user-msg (second first-messages))
+                 (second-payload (decode-test-json (second captured-payloads)))
+                 (second-messages (test-json-elements
+                                  (test-json-value-any second-payload '(:messages "messages"))))
+                 (stored-history (conversation-messages conv))
+                 (first-texts (message-content-texts first-user-msg)))
+            (assert-json-field= first-user-msg :role "user")
+            (fiveam:is (= 2 (length first-texts)))
+            (fiveam:is (string= "Summarize" (first first-texts)))
+            (fiveam:is (search "Alpha attachment" (second first-texts)))
+            (assert-role/content (second second-messages) "user" "Summarize")
             (fiveam:is (notany (lambda (message)
                                  (search "Alpha attachment"
-                                         (princ-to-string (cdr (assoc :content message)))))
+                                         (princ-to-string
+                                          (test-json-value-any message '(:content "content")))))
                                second-messages))
             (fiveam:is (= 4 (length stored-history)))
             (fiveam:is (string= "Summarize"
-                                (cdr (assoc "content" (first stored-history) :test #'string=))))
+                               (cdr (assoc "content" (first stored-history) :test #'string=))))
             (fiveam:is (notany (lambda (message)
                                  (search "Alpha attachment"
                                          (princ-to-string
@@ -524,17 +522,20 @@ data: [DONE]")
                               200))))
           (conv (new-chat :backend :openai :runtime-context context)))
       (fiveam:is (string= "Hello OpenAI" (chat "Hi there" :conversation conv)))
-      (let* ((payload (cl-json:decode-json-from-string captured-payload))
-            (tools (cdr (assoc :tools payload)))
-            (echo-tool (find "echo_tool"
-                             tools
-                             :test #'string=
-                             :key (lambda (tool)
-                                    (cdr (assoc :name (cdr (assoc :function tool)))))))
-            (function (cdr (assoc :function echo-tool))))
-        (fiveam:is (string= "function" (cdr (assoc :type echo-tool))))
-        (fiveam:is (string= "echo_tool" (cdr (assoc :name function))))
-        (fiveam:is (string= "Echo tool" (cdr (assoc :description function))))))))
+      (let* ((payload (decode-test-json captured-payload))
+             (tools (test-json-elements (test-json-value-any payload '(:tools "tools"))))
+             (echo-tool (find "echo_tool"
+                              tools
+                              :test #'string=
+                              :key (lambda (tool)
+                                     (test-json-value-any
+                                      (test-json-value-any tool '("function" :function))
+                                      '("name" :name)))))
+             (function (test-json-value-any echo-tool '("function" :function))))
+        (fiveam:is (member "echo_tool" (openai-tool-names tools) :test #'string=))
+        (assert-json-field= echo-tool "type" "function")
+        (assert-json-field= function "name" "echo_tool")
+        (assert-json-field= function "description" "Echo tool")))))
 
 (fiveam:test test-openai-tool-call-errors-are-reported-back-to-the-model
   (let ((conv (new-chat :backend :openai :system-instruction "Be helpful"))
