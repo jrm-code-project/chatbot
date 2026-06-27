@@ -97,6 +97,25 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
             (mcp-val :text part))
           (test-json-elements (mcp-val :parts message))))
 
+(defun message-content-parts (message)
+  "Returns MESSAGE content as normalized content parts when it is part-based."
+  (let ((content (test-json-value-any message '(:content "content"))))
+    (and (or (vectorp content)
+             (listp content))
+         (test-json-elements content))))
+
+(defun message-content-texts (message)
+  "Returns text values from MESSAGE content parts."
+  (mapcar (lambda (part)
+            (test-json-value-any part '(:text "text")))
+          (or (message-content-parts message) '())))
+
+(defun assert-message-content-texts (message role expected-texts)
+  "Asserts MESSAGE has ROLE and EXPECTED-TEXTS content parts."
+  (assert-json-field= message :role role)
+  (fiveam:is (equal expected-texts
+                    (message-content-texts message))))
+
 (defun google-payload-contents (payload)
   "Returns Google-format request contents from PAYLOAD."
   (test-json-elements (test-json-value-any payload '(:contents "contents"))))
