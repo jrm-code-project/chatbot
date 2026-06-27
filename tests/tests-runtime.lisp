@@ -581,12 +581,13 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
       (fiveam:is (string= "session-1" (conversation-interaction-id conv)))
       (fiveam:is (string= "Hello two" (chat "Second turn" :conversation conv)))
       (fiveam:is (= 2 (length captured-payloads)))
-      (let ((second-payload (first captured-payloads))
-            (first-payload (second captured-payloads)))
-        (fiveam:is (search "\"input\":\"First turn\"" first-payload))
-        (fiveam:is (null (search "\"previous_interaction_id\"" first-payload)))
-        (fiveam:is (search "\"input\":\"Second turn\"" second-payload))
-        (fiveam:is (search "\"previous_interaction_id\":\"session-1\"" second-payload))))))
+      (let ((second-payload (decode-test-json (first captured-payloads)))
+            (first-payload (decode-test-json (second captured-payloads))))
+        (assert-json-field= first-payload "input" "First turn")
+        (fiveam:is-false (test-json-value-any first-payload
+                                              '("previous_interaction_id" :previous-interaction-id)))
+        (assert-json-field= second-payload "input" "Second turn")
+        (assert-json-field= second-payload "previous_interaction_id" "session-1")))))
 
 (fiveam:test test-gemini-chat-dollar-prefix-overrides-model-for-one-turn
   (let ((conv (new-chat :backend :gemini))
@@ -613,13 +614,14 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                 200))))
       (fiveam:is (string= "Hello one" (chat "$First turn" :conversation conv)))
       (fiveam:is (string= "Hello two" (chat "Second turn" :conversation conv)))
-      (let ((first-payload (second captured-payloads))
-            (second-payload (first captured-payloads)))
-        (fiveam:is (search "\"model\":\"gemini-pro-latest\"" first-payload))
-        (fiveam:is (search "\"input\":\"First turn\"" first-payload))
-        (fiveam:is-false (search "\\$First turn" first-payload))
-        (fiveam:is (search "\"model\":\"gemini-3.5-flash\"" second-payload))
-        (fiveam:is (search "\"input\":\"Second turn\"" second-payload))
+      (let ((first-payload (decode-test-json (second captured-payloads)))
+            (second-payload (decode-test-json (first captured-payloads))))
+        (assert-json-field= first-payload "model" "gemini-pro-latest")
+        (assert-json-field= first-payload "input" "First turn")
+        (fiveam:is-false (search "\\$First turn"
+                                 (princ-to-string (test-json-value-any first-payload '("input" :input)))))
+        (assert-json-field= second-payload "model" "gemini-3.5-flash")
+        (assert-json-field= second-payload "input" "Second turn")
         (fiveam:is (string= "gemini-3.5-flash" (chatbot-model (conversation-chatbot conv))))))))
 
 (fiveam:test test-gemini-chat-retries-malformed-response-on-google-gemini-pro-latest
@@ -660,11 +662,14 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (fiveam:is (string= "Recovered from Gemini malformed response" res))
         (fiveam:is (search "/interactions?alt=sse" (second captured-urls)))
         (fiveam:is (search "/models/gemini-pro-latest:generateContent" (first captured-urls)))
-        (fiveam:is (search "\"input\":\"[08:46 gemini] [model: gemini-3.5-flash] Retry this\""
-                           captured-gemini-payload))
-        (fiveam:is (search "\"text\":\"[08:46 retry] [model: gemini-pro-latest] Retry this\""
-                           captured-google-payload))
-        (fiveam:is-false (search "[model: gemini-3.5-flash] Retry this" captured-google-payload))
+        (let ((gemini-payload (decode-test-json captured-gemini-payload))
+              (google-payload (decode-test-json captured-google-payload)))
+          (assert-json-field= gemini-payload "input" "[08:46 gemini] [model: gemini-3.5-flash] Retry this")
+          (assert-google-message-texts (first (google-payload-contents google-payload))
+                                       "user"
+                                       '("[08:46 retry] [model: gemini-pro-latest] Retry this"))
+          (fiveam:is-false (search "[model: gemini-3.5-flash] Retry this"
+                                   (princ-to-string google-payload))))
         (fiveam:is (null (conversation-interaction-id conv)))
         (let ((stored-history (conversation-messages conv)))
           (fiveam:is (= 2 (length stored-history)))
@@ -700,7 +705,10 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (fiveam:is (string= "Recovered from Gemini empty response" res))
         (fiveam:is (search "/interactions?alt=sse" (second captured-urls)))
         (fiveam:is (search "/models/gemini-pro-latest:generateContent" (first captured-urls)))
-        (fiveam:is (search "\"text\":\"Retry empty\"" captured-google-payload))
+        (let ((google-payload (decode-test-json captured-google-payload)))
+          (assert-google-message-texts (first (google-payload-contents google-payload))
+                                       "user"
+                                       '("Retry empty")))
         (fiveam:is (null (conversation-interaction-id conv)))
         (let ((stored-history (conversation-messages conv)))
           (fiveam:is (= 2 (length stored-history)))
@@ -750,12 +758,18 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                200))))
       (fiveam:is (string= "Handled tool error" (chat "Run tool" :conversation conv)))
       (fiveam:is (= 2 (length captured-payloads)))
-      (let ((second-payload (first captured-payloads)))
-        (fiveam:is (search "\"previous_interaction_id\":\"session-1\"" second-payload))
-        (fiveam:is (search "\"type\":\"function_result\"" second-payload))
-        (fiveam:is (search "\\\"type\\\":\\\"tool_error\\\"" second-payload))
-        (fiveam:is (search "\\\"toolName\\\":\\\"echo_tool\\\"" second-payload))
-        (fiveam:is (search "\\\"message\\\":\\\"Mock tool failure\\\"" second-payload))))))
+      (let* ((second-payload (decode-test-json (first captured-payloads)))
+             (input (interaction-payload-input second-payload))
+             (result-step (first input))
+             (result-parts (test-json-elements (test-json-value-any result-step '("result" :result))))
+             (result-text (decode-test-json
+                           (test-json-value-any (first result-parts) '("text" :text)))))
+        (assert-json-field= second-payload "previous_interaction_id" "session-1")
+        (assert-json-field= result-step "type" "function_result")
+        (assert-json-field= result-step "name" "echo_tool")
+        (assert-json-field= result-text "type" "tool_error")
+        (assert-json-field= result-text "toolName" "echo_tool")
+        (assert-json-field= result-text "message" "Mock tool failure")))))
 
 (fiveam:test test-gemini-tool-recursion-depth-is-capped
   (let ((conv (new-chat :backend :gemini))
