@@ -140,19 +140,19 @@
                                   results)))
         (let* ((decoded-first (cl-json:decode-json-from-string first-payload))
                (decoded-second (cl-json:decode-json-from-string second-payload))
-               (first-contents (cdr (assoc :contents decoded-first)))
-               (second-contents (cdr (assoc :contents decoded-second))))
+               (first-contents (google-payload-contents decoded-first))
+               (second-contents (google-payload-contents decoded-second)))
           (fiveam:is (= 1 (length first-contents)))
-          (fiveam:is (string= "User: Kickoff"
-                              (cdr (assoc :text
-                                          (car (cdr (assoc :parts (first first-contents))))))))
+          (assert-google-message-texts (first first-contents)
+                                       "user"
+                                       '("User: Kickoff"))
           (fiveam:is (= 2 (length second-contents)))
-          (fiveam:is (string= "User: Kickoff"
-                              (cdr (assoc :text
-                                          (car (cdr (assoc :parts (first second-contents))))))))
-          (fiveam:is (string= "Alpha: Alpha reply"
-                              (cdr (assoc :text
-                                          (car (cdr (assoc :parts (second second-contents)))))))))))))
+          (assert-google-message-texts (first second-contents)
+                                       "user"
+                                       '("User: Kickoff"))
+          (assert-google-message-texts (second second-contents)
+                                       "user"
+                                       '("Alpha: Alpha reply")))))))
 
 (fiveam:test test-round-robin-chat-prints-speaker-headings-and-user-turn-marker
   (let* ((context-a (make-runtime-context
@@ -224,8 +224,16 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"~A\",\
         (round-robin-chat "First turn" :session session)
         (round-robin-chat "Second turn" :session session)
         (fiveam:is (= 2 (length alpha-payloads)))
-        (let ((second-alpha-payload (first alpha-payloads)))
-          (fiveam:is-false (search "\"previous_interaction_id\"" second-alpha-payload))
-          (fiveam:is (search "\"type\":\"model_output\"" second-alpha-payload))
-          (fiveam:is (search "Beta: Beta reply" second-alpha-payload))
-          (fiveam:is (search "User: Second turn" second-alpha-payload)))))))
+        (let* ((second-alpha-payload (decode-test-json (first alpha-payloads)))
+               (input (interaction-payload-input second-alpha-payload)))
+          (fiveam:is-false (test-json-value-any second-alpha-payload
+                                                '("previous_interaction_id" :previous-interaction-id)))
+          (fiveam:is (equal '("user_input" "model_output" "user_input" "user_input")
+                            (mapcar (lambda (step)
+                                      (test-json-value-any step '("type" :type)))
+                                    input)))
+          (fiveam:is (equal '(("User: First turn")
+                              ("Alpha: Alpha reply")
+                              ("Beta: Beta reply")
+                              ("User: Second turn"))
+                            (mapcar #'interaction-step-content-texts input))))))))
