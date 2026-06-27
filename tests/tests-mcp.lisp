@@ -133,6 +133,31 @@
     (fiveam:is-false (search "\"arguments\":["
                              json))))
 
+(fiveam:test test-mcp-debug-logging-includes-tool-call-name
+  (let* ((server (make-instance 'mcp-server
+                                :name "mock-server"
+                                :input-stream (make-string-output-stream)))
+         (worker (sb-thread:make-thread
+                  (lambda ()
+                    (loop for mailbox = (gethash 1 (mcp-server-pending-requests server))
+                          until mailbox
+                          do (sleep 0.01)
+                          finally (sb-concurrency:send-message
+                                   mailbox
+                                   '((:result . "ok"))))))))
+    (unwind-protect
+         (let ((output (with-output-to-string (s)
+                         (let ((*standard-output* s))
+                           (fiveam:is (equal '((:result . "ok"))
+                                             (default-mcp-send-request
+                                              server
+                                              "tools/call"
+                                              '((:name . "echo_tool")
+                                                (:arguments . ((:value . "payload")))))))))))
+           (fiveam:is (search "Request ID 1: tools/call (echo_tool)" output))
+           (fiveam:is (search "Response ID 1 received (echo_tool)" output)))
+      (sb-thread:join-thread worker))))
+
 (fiveam:test test-execute-chatbot-tool-read-file-lines
   (let* ((temp-dir (uiop:default-temporary-directory))
          (root (merge-pathnames "filesystem-tool-root/" temp-dir))

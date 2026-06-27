@@ -289,6 +289,43 @@ data: [DONE]")
               (fiveam:is-false (search "Older screenshot text" attachment-text)))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
+(fiveam:test test-send-latest-screenshot-clamps-requested-count-to-available-files
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-single-screenshot/" temp-dir))
+        (shots-dir (merge-pathnames "OneDrive/Pictures/Screenshots 1/" mock-home))
+        (only-shot (merge-pathnames "only.txt" shots-dir))
+        (captured-payload nil))
+    (ensure-directories-exist shots-dir)
+    (with-open-file (stream only-shot :direction :output :if-exists :supersede)
+      (write-string "Only screenshot text" stream))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home))
+              (*screenshot-path* #p"~/Missing/*.txt")
+              (*screenshot-path-1* #p"~/OneDrive/Pictures/Screenshots 1/*.txt")
+              (*screenshot-prompt* "Describe the screenshot.")
+              (*openai-api-key* "test-key"))
+          (let* ((context (make-runtime-context
+                           :http-post-function
+                           (lambda (url &rest args)
+                             (declare (ignore url))
+                             (setf captured-payload (getf args :content))
+                             (values (make-string-input-stream
+                                      "data: {\"choices\": [{\"delta\": {\"content\": \"Hello OpenAI\"}}]}\r\ndata: [DONE]")
+                                     200))))
+                 (conv (new-chat :backend :openai :runtime-context context)))
+            (fiveam:is (string= "Hello OpenAI"
+                                (send-latest-screenshot :n 2
+                                                        :conversation conv)))
+            (let* ((payload (cl-json:decode-json-from-string captured-payload))
+                   (messages (cdr (assoc :messages payload)))
+                   (content (cdr (assoc :content (first messages)))))
+              (fiveam:is (= 2 (length content)))
+              (fiveam:is (string= "Describe the screenshot."
+                                  (cdr (assoc :text (first content)))))
+              (fiveam:is (search "Only screenshot text"
+                                 (cdr (assoc :text (second content))))))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
 (fiveam:test test-lisp-news-fetches-configured-feed-urls-as_attachments
   (let ((captured-payload nil)
        (captured-urls nil))

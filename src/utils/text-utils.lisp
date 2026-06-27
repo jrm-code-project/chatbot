@@ -81,6 +81,27 @@
    "```"
    (string-left-trim '(#\Space #\Tab) line)))
 
+(defun ordered-bullet-line-p (line)
+  "Returns true when LINE begins with an ordered Markdown list marker."
+  (let ((dot-position (position #\. line)))
+    (and dot-position
+         (> dot-position 0)
+         (every #'digit-char-p (subseq line 0 dot-position))
+         (< (1+ dot-position) (length line))
+         (member (char line (1+ dot-position)) '(#\Space #\Tab)))))
+
+(defun bullet-line-p (line)
+  "Returns true when LINE begins with a Markdown bullet or numbered list marker."
+  (let ((trimmed-line (string-left-trim '(#\Space #\Tab) line)))
+    (or (alexandria:starts-with-subseq "- " trimmed-line)
+        (alexandria:starts-with-subseq "* " trimmed-line)
+        (alexandria:starts-with-subseq "+ " trimmed-line)
+        (ordered-bullet-line-p trimmed-line))))
+
+(defun paragraph-preserve-verbatim-p (lines)
+  "Returns true when LINES should be emitted without reflow."
+  (some #'bullet-line-p lines))
+
 (defun format-paragraphs (text &key (width 80) (stream *standard-output*))
   "Formats text to STREAM, wrapping prose paragraphs while preserving fenced code blocks verbatim."
   (let ((blocks nil)
@@ -89,9 +110,11 @@
         (in-fence-p nil))
     (labels ((flush-paragraph ()
               (when paragraph-lines
-                (push (cons :prose
-                            (format nil "~{~A~^ ~}" (nreverse paragraph-lines)))
-                      blocks)
+                (let ((lines (nreverse paragraph-lines)))
+                  (push (if (paragraph-preserve-verbatim-p lines)
+                            (cons :verbatim-lines lines)
+                            (cons :prose (format nil "~{~A~^ ~}" lines)))
+                        blocks))
                 (setf paragraph-lines nil)))
             (flush-fence ()
               (when fence-lines
@@ -121,6 +144,9 @@
             (ecase block-type
               (:prose
                (dolist (line (wrap-text content :width width :initial-prefix "  "))
+                 (write-line line stream)))
+              (:verbatim-lines
+               (dolist (line content)
                  (write-line line stream)))
               (:fence
                (dolist (line content)

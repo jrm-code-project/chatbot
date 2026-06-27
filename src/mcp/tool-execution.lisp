@@ -58,9 +58,11 @@ entries instead of aborting the full turn."
                              (funcall context-builder name tool-call))))
               (push (funcall result-builder id name arguments-json res-text tool-call) results))
           (error (condition)
-            (if error-builder
+            (if (typep condition 'agentic-loop-approval-required)
+                (error condition)
+                (if error-builder
                 (push (funcall error-builder id name arguments-json condition tool-call) results)
-                (error condition))))))))
+                (error condition)))))))))
 
 (defun normalize-builtin-tool-integer-argument (value argument-name tool-name)
   "Normalizes VALUE to an integer argument or signals an execution error."
@@ -662,6 +664,68 @@ entries instead of aborting the full turn."
        (execute-approved-eval-expression expression form tool-name)))
     ((string= tool-name "readSamplingParameters")
      (sampling-parameters-tool-result bot))
+    ((string= tool-name "startAgenticLoop")
+     (unless *active-conversation*
+       (error 'mcp-tool-execution-error
+              :tool-name tool-name
+              :reason "No active conversation is bound for autonomous loop startup."))
+     (let* ((goal (normalize-builtin-tool-string-argument
+                   (or (mcp-val "goal" arguments)
+                       (mcp-val :goal arguments))
+                   "goal"
+                   tool-name))
+            (max-iterations (let ((raw (or (mcp-val "maxIterations" arguments)
+                                           (mcp-val :max-iterations arguments))))
+                              (if raw
+                                  (normalize-builtin-tool-integer-argument raw "maxIterations" tool-name)
+                                  10)))
+            (loop (start-agentic-loop *active-conversation*
+                                      goal
+                                      :max-iterations max-iterations)))
+       (agentic-loop-public-json loop)))
+    ((string= tool-name "listAgenticLoops")
+     (agentic-loop-list-json))
+    ((string= tool-name "readAgenticLoop")
+     (let* ((loop-id (normalize-builtin-tool-integer-argument
+                      (or (mcp-val "loopId" arguments)
+                          (mcp-val :loop-id arguments))
+                      "loopId"
+                      tool-name))
+            (loop (or (find-agentic-loop loop-id)
+                      (error 'mcp-tool-execution-error
+                             :tool-name tool-name
+                             :reason (format nil "Unknown agentic loop id: ~A" loop-id)))))
+       (agentic-loop-public-json loop)))
+    ((string= tool-name "abortAgenticLoop")
+     (multiple-value-bind (force-foundp force-value)
+         (builtin-tool-argument arguments "force" :force)
+       (let* ((loop-id (normalize-builtin-tool-integer-argument
+                        (or (mcp-val "loopId" arguments)
+                            (mcp-val :loop-id arguments))
+                        "loopId"
+                        tool-name))
+              (force (if force-foundp
+                         (normalize-builtin-tool-boolean-argument force-foundp
+                                                                  force-value
+                                                                  "force"
+                                                                  tool-name)
+                         nil))
+              (loop (abort-agentic-loop loop-id :force force)))
+         (agentic-loop-public-json loop))))
+    ((string= tool-name "resumeAgenticLoop")
+     (multiple-value-bind (approve-foundp approve-value)
+         (builtin-tool-argument arguments "approve" :approve)
+       (let* ((loop-id (normalize-builtin-tool-integer-argument
+                        (or (mcp-val "loopId" arguments)
+                            (mcp-val :loop-id arguments))
+                        "loopId"
+                        tool-name))
+              (approve (normalize-builtin-tool-boolean-argument approve-foundp
+                                                                approve-value
+                                                                "approve"
+                                                                tool-name))
+              (loop (resume-agentic-loop loop-id :approve approve)))
+         (agentic-loop-public-json loop))))
     ((string= tool-name "setSamplingParameters")
      (multiple-value-bind (temperature-foundp temperature-value)
          (builtin-tool-argument arguments "temperature" :temperature)

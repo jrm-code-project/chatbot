@@ -63,9 +63,10 @@ Returns the complete response text."
                                    (list :top-p top-p))))))
            (multiple-value-bind (effective-input effective-model)
                (resolve-prompt-model-override bot input)
-             (dispatch-chat-turn conversation
-                                 effective-input
-                                 callback
-                                 :file-attachments file-attachments
-                                 :effective-model effective-model
-                                 :effective-generation-config effective-generation-config))))))))
+             (let ((*active-conversation* conversation))
+               (dispatch-chat-turn conversation
+                                   effective-input
+                                   callback
+                                   :file-attachments file-attachments
+                                   :effective-model effective-model
+                                   :effective-generation-config effective-generation-config)))))))))

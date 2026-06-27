@@ -32,12 +32,7 @@
   (let ((connect-timeout (current-http-connect-timeout))
         (read-timeout (current-http-read-timeout)))
     (log-message :info "HTTP POST request"
-                 :context `(("url" . ,(sanitize-url-for-log url))
-                            ("headers" . ,(cl-json:encode-json-to-string
-                                           (sanitize-headers-for-log headers)))
-                            ("connect-timeout" . ,(princ-to-string connect-timeout))
-                            ("read-timeout" . ,(princ-to-string read-timeout))
-                            ("want-stream" . ,(if want-stream "true" "false"))))
+                 :context `(("url" . ,(sanitize-url-for-log url))))
     (let ((http-post-function (current-http-post-function)))
       (if want-stream
         (funcall http-post-function url
@@ -57,12 +52,7 @@
   (let ((connect-timeout (current-http-connect-timeout))
         (read-timeout (current-http-read-timeout)))
     (log-message :info "HTTP GET request"
-                :context `(("url" . ,(sanitize-url-for-log url))
-                           ("headers" . ,(cl-json:encode-json-to-string
-                                          (sanitize-headers-for-log headers)))
-                           ("connect-timeout" . ,(princ-to-string connect-timeout))
-                           ("read-timeout" . ,(princ-to-string read-timeout))
-                           ("want-stream" . ,(if want-stream "true" "false"))))
+                :context `(("url" . ,(sanitize-url-for-log url))))
     (let ((http-get-function (current-http-get-function)))
       (if want-stream
          (funcall http-get-function url

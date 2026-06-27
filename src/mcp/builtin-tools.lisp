@@ -151,9 +151,63 @@
     (:input-schema . ((:type . "object")
                       (:properties . nil)))))
 
+(defun builtin-start-agentic-loop-tool ()
+  "Returns the built-in startAgenticLoop tool definition."
+  '((:name . "startAgenticLoop")
+    (:description . "Starts a background autonomous loop from the current conversation clone.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("goal" . ((:type . "string")
+                                                 (:description . "The loop goal to pursue autonomously.")))
+                                      ("maxIterations" . ((:type . "integer")
+                                                          (:description . "Maximum autonomous iterations before stopping.")))))
+                      (:required . ("goal"))))))
+
+(defun builtin-list-agentic-loops-tool ()
+  "Returns the built-in listAgenticLoops tool definition."
+  '((:name . "listAgenticLoops")
+    (:description . "Lists active and historical autonomous loops.")
+    (:input-schema . ((:type . "object")
+                      (:properties . nil)))))
+
+(defun builtin-read-agentic-loop-tool ()
+  "Returns the built-in readAgenticLoop tool definition."
+  '((:name . "readAgenticLoop")
+    (:description . "Reads the state of one autonomous loop by id.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("loopId" . ((:type . "integer")
+                                                   (:description . "The autonomous loop identifier.")))))
+                      (:required . ("loopId"))))))
+
+(defun builtin-abort-agentic-loop-tool ()
+  "Returns the built-in abortAgenticLoop tool definition."
+  '((:name . "abortAgenticLoop")
+    (:description . "Stops one autonomous loop by id.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("loopId" . ((:type . "integer")
+                                                   (:description . "The autonomous loop identifier.")))
+                                      ("force" . ((:type . "boolean")
+                                                  (:description . "When true, forcefully terminates the loop thread.")))))
+                      (:required . ("loopId"))))))
+
+(defun builtin-resume-agentic-loop-tool ()
+  "Returns the built-in resumeAgenticLoop tool definition."
+  '((:name . "resumeAgenticLoop")
+    (:description . "Resumes a paused autonomous loop with an explicit approval decision.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("loopId" . ((:type . "integer")
+                                                   (:description . "The autonomous loop identifier.")))
+                                      ("approve" . ((:type . "boolean")
+                                                    (:description . "Whether to approve the loop's pending request and resume it.")))))
+                      (:required . ("loopId" "approve"))))))
+
 (defun default-get-all-builtin-tools (bot)
   "Returns all built-in tools enabled for BOT as (source . tool) pairs."
   (let ((tools nil))
+    (push (cons :built-in (builtin-resume-agentic-loop-tool)) tools)
+    (push (cons :built-in (builtin-abort-agentic-loop-tool)) tools)
+    (push (cons :built-in (builtin-read-agentic-loop-tool)) tools)
+    (push (cons :built-in (builtin-list-agentic-loops-tool)) tools)
+    (push (cons :built-in (builtin-start-agentic-loop-tool)) tools)
     (push (cons :built-in (builtin-reset-sampling-parameters-tool)) tools)
     (push (cons :built-in (builtin-set-sampling-parameters-tool)) tools)
     (push (cons :built-in (builtin-read-sampling-parameters-tool)) tools)

@@ -219,6 +219,15 @@
       (remhash id (mcp-server-pending-requests server))
       mailbox)))
 
+(defun mcp-debug-request-target (method params)
+  "Returns a short debug suffix describing the request target when useful."
+  (let ((tool-name (and (string= method "tools/call")
+                        (listp params)
+                        (mcp-val :name params))))
+    (if tool-name
+        (format nil " (~A)" tool-name)
+        "")))
+
 (defun mcp-assoc (key alist)
   "Look up key in alist, matching stringified key name (case-insensitive)."
   (let ((key-str (string-downcase (string key))))
@@ -406,20 +415,23 @@
          (payload `((:jsonrpc . "2.0")
                     (:id . ,id)
                     (:method . ,method)))
+         (debug-target (mcp-debug-request-target method params))
          (payload-json (cl-json:encode-json-to-string
                         (json-encodable-value
                          (if params
                              (append payload `((:params . ,params)))
                              payload)))))
     (mcp-register-request server id mailbox)
-    (format t "[MCP DEBUG] (~A) -> Request ID ~A: ~A~%" (mcp-server-name server) id method)
+    (format t "[MCP DEBUG] (~A) -> Request ID ~A: ~A~A~%"
+            (mcp-server-name server) id method debug-target)
     (handler-case
         (progn
           (write-line payload-json (mcp-server-input-stream server))
           (force-output (mcp-server-input-stream server))
           (let ((response (trivial-timeout:with-timeout (timeout)
                             (sb-concurrency:receive-message mailbox))))
-             (format t "[MCP DEBUG] (~A) <- Response ID ~A received~%" (mcp-server-name server) id)
+             (format t "[MCP DEBUG] (~A) <- Response ID ~A received~A~%"
+                     (mcp-server-name server) id debug-target)
              response))
       (trivial-timeout:timeout-error ()
         (mcp-lookup-and-remove-request server id)

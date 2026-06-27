@@ -229,6 +229,9 @@ Prefer passing :CONVERSATION explicitly or using a runtime context.")
 (defvar *active-runtime-context* nil
   "Runtime context currently bound by CALL-WITH-RUNTIME-CONTEXT, when any.")
 
+(defvar *active-conversation* nil
+  "Conversation currently being processed by CHAT, when any.")
+
 (defparameter *runtime-context-legacy-global-specs*
   '()
   "Authoritative compatibility-global mirror specification for runtime contexts.")
@@ -632,7 +635,13 @@ compatibility-only ambient special variables."
                                                     (runtime-context-http-get-function resolved-context)))
                            (*gemini-api-key-function* (if default-context-p
                                                           *gemini-api-key-function*
-                                                          (runtime-context-gemini-api-key-function resolved-context))))
+                                                          (runtime-context-gemini-api-key-function resolved-context)))
+                           (*filesystem-access-approval-function* (if default-context-p
+                                                                      *filesystem-access-approval-function*
+                                                                      (runtime-context-filesystem-access-approval-function resolved-context)))
+                           (*eval-approval-function* (if default-context-p
+                                                         *eval-approval-function*
+                                                         (runtime-context-eval-approval-function resolved-context))))
                        (progv (runtime-context-legacy-global-symbols)
                               (runtime-context-legacy-global-values resolved-context)
                          (unwind-protect
@@ -641,7 +650,11 @@ compatibility-only ambient special variables."
                            (setf (runtime-context-getenv-function resolved-context) *getenv-function*)
                            (setf (runtime-context-http-post-function resolved-context) *http-post-function*)
                            (setf (runtime-context-http-get-function resolved-context) *http-get-function*)
-                           (setf (runtime-context-gemini-api-key-function resolved-context) *gemini-api-key-function*))))))
+                           (setf (runtime-context-gemini-api-key-function resolved-context) *gemini-api-key-function*)
+                           (setf (runtime-context-filesystem-access-approval-function resolved-context)
+                                 *filesystem-access-approval-function*)
+                           (setf (runtime-context-eval-approval-function resolved-context)
+                                 *eval-approval-function*))))))
               (when default-context-p
                 (maybe-sync-legacy-globals-from-default-runtime-context resolved-context))
               result)))))
