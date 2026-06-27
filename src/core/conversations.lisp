@@ -104,11 +104,7 @@ configuration, instructions, or preloaded memory."
 The persona's configuration is read from ~/.Personas/<persona-name>/config.lisp
 and the system instructions are loaded from the persona's system-instruction file set.
 Use NEW-CHAT instead when no persona should be loaded."
-  (let* ((homedir (get-user-homedir-pathname))
-         (name-str (string persona-name))
-         (persona-dir (or (uiop:directory-exists-p (merge-pathnames (make-pathname :directory (list :relative ".Personas" name-str)) homedir))
-                          (uiop:directory-exists-p (merge-pathnames (make-pathname :directory (list :relative ".Personas" (string-downcase name-str))) homedir))
-                          (error "Persona directory not found: ~~/.Personas/~A" name-str)))
+  (let* ((persona-dir (resolve-persona-directory persona-name))
         (config-path (probe-file (merge-pathnames "config.lisp" persona-dir)))
         (inst-path (persona-system-instruction-path persona-dir)))
     (let* ((config (when config-path
@@ -153,4 +149,6 @@ Use NEW-CHAT instead when no persona should be loaded."
                           :runtime-context runtime-context)
                 persona-dir)
                persona-dir)))
-        (attach-persona-memory-mcp-server conversation persona-dir)))))
+        (setf conversation (attach-persona-memory-mcp-server conversation persona-dir))
+        (start-persona-memory-compression-thread conversation persona-dir)
+        conversation))))

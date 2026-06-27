@@ -604,7 +604,12 @@ Paragraph two." s))
                         (lambda (name command args &optional environment)
                           (declare (ignore command args environment))
                           (make-instance 'mcp-server :name name)))
-                      (*mcp-initialize-function* (lambda (server) server)))
+                      (*mcp-initialize-function* (lambda (server) server))
+                      (*persona-memory-compression-thread-function*
+                        (lambda (thunk thread-name)
+                          (declare (ignore thread-name))
+                          (funcall thunk)
+                          :ran-inline)))
                   (let ((conv (new-chat-persona "persona-json-memory")))
                     (fiveam:is (null (conversation-messages conv)))
                     (fiveam:is (search "{\"entities\":[]}"
@@ -657,7 +662,12 @@ Paragraph two." s))
                   (declare (ignore command args))
                   (setf captured-environment environment)
                   (make-instance 'mcp-server :name name)))
-              (*mcp-initialize-function* (lambda (server) server)))
+              (*mcp-initialize-function* (lambda (server) server))
+              (*persona-memory-compression-thread-function*
+                (lambda (thunk thread-name)
+                  (declare (ignore thread-name))
+                  (funcall thunk)
+                  :ran-inline)))
           (let* ((memory-path (merge-pathnames "memory.json" test-persona-dir))
                  (conv (new-chat-persona "persona-memory-server"))
                  (bot (conversation-chatbot conv))
@@ -675,9 +685,113 @@ Paragraph two." s))
             (fiveam:is (null (search "\"entities\"" memory-file-text)))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
+(fiveam:test test-save-compressed-persona-memory-from-graph-json
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-compressed-memory-graph/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-compressed-memory-graph/" personas-dir))
+        (memory-path (merge-pathnames "memory.json" test-persona-dir))
+        (compressed-path (merge-pathnames "compressed-memory.txt" test-persona-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s memory-path :direction :output :if-exists :supersede)
+      (write-string "{\"entities\":[{\"name\":\"Joe\",\"entityType\":\"person\",\"observations\":[\"likes Lisp\",\"uses Emacs\"]},{\"name\":\"SBCL\",\"entityType\":\"tool\",\"observations\":[\"fast compiler\"]}],\"relations\":[{\"from\":\"Joe\",\"to\":\"SBCL\",\"relationType\":\"uses\"}]}" s))
+    (unwind-protect
+       (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+         (fiveam:is (equal compressed-path
+                           (save-compressed-persona-memory "persona-compressed-memory-graph")))
+         (fiveam:is (string= (format nil "Entities:~%- Joe (person): likes Lisp; uses Emacs~%- SBCL (tool): fast compiler~%~%Relations:~%- Joe -uses-> SBCL")
+                             (uiop:read-file-string compressed-path))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-save-compressed-persona-memory-from-jsonl
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-compressed-memory-jsonl/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-compressed-memory-jsonl/" personas-dir))
+        (memory-path (merge-pathnames "memory.json" test-persona-dir))
+        (compressed-path (merge-pathnames "compressed-memory.txt" test-persona-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s memory-path :direction :output :if-exists :supersede)
+      (write-line "{\"type\":\"entity\",\"name\":\"Joe\",\"entityType\":\"person\",\"observations\":[\"likes Lisp\"]}" s)
+      (write-line "{\"type\":\"relation\",\"from\":\"Joe\",\"to\":\"Common Lisp\",\"relationType\":\"studies\"}" s))
+    (unwind-protect
+       (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+         (fiveam:is (equal compressed-path
+                           (save-compressed-persona-memory "persona-compressed-memory-jsonl")))
+         (fiveam:is (string= (format nil "Entities:~%- Joe (person): likes Lisp~%~%Relations:~%- Joe -studies-> Common Lisp")
+                             (uiop:read-file-string compressed-path))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-new-chat-persona-starts-background-memory-compression
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-persona-memory-compression-thread/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "persona-memory-compression-thread/" personas-dir))
+         (compressed-path (merge-pathnames "compressed-memory.txt" test-persona-dir))
+         (captured-thread-name nil))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "(:model \"models/gemini-mock-model\" :googleapi :google-api)" s))
+    (with-open-file (s (merge-pathnames "memory.json" test-persona-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "{\"entities\":[{\"name\":\"Joe\",\"entityType\":\"person\",\"observations\":[\"likes Lisp\"]}],\"relations\":[{\"from\":\"Joe\",\"to\":\"SBCL\",\"relationType\":\"uses\"}]}" s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home))
+              (*read-mcp-config-function*
+                (lambda ()
+                  '((:name "memory"
+                     :command "npx"
+                     :args ("-y" "@modelcontextprotocol/server-memory")
+                     :env (("MEMORY_FILE_PATH" . "default-memory.json"))))))
+              (*start-mcp-server-function*
+                (lambda (name command args &optional environment)
+                  (declare (ignore command args environment))
+                  (make-instance 'mcp-server :name name)))
+              (*mcp-initialize-function* (lambda (server) server))
+              (*persona-memory-compression-thread-function*
+                (lambda (thunk thread-name)
+                  (setf captured-thread-name thread-name)
+                  (funcall thunk)
+                  :ran-inline)))
+          (new-chat-persona "persona-memory-compression-thread")
+          (fiveam:is (search "Persona-Memory-Compression-persona-memory-compression-thread"
+                             captured-thread-name))
+          (fiveam:is (string= (format nil "Entities:~%- Joe (person): likes Lisp~%~%Relations:~%- Joe -uses-> SBCL")
+                              (uiop:read-file-string compressed-path))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-new-chat-persona-skips-background-memory-compression-without-memory-json
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-persona-no-memory-compression-thread/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "persona-no-memory-compression-thread/" personas-dir))
+         (compression-started-p nil))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "(:model \"models/gemini-mock-model\" :googleapi :google-api)" s))
+    (with-open-file (s (merge-pathnames "compressed-memory.txt" test-persona-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "Existing compressed memory." s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home))
+              (*persona-memory-compression-thread-function*
+                (lambda (thunk thread-name)
+                  (declare (ignore thunk thread-name))
+                  (setf compression-started-p t)
+                  :unexpected)))
+          (new-chat-persona "persona-no-memory-compression-thread")
+          (fiveam:is-false compression-started-p))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
 (fiveam:test test-persona-memory-server-replaces-shared-memory-server
   (let* ((temp-dir (uiop:default-temporary-directory))
-        (mock-home (merge-pathnames "mock-home-persona-memory-shared/" temp-dir))
+       (mock-home (merge-pathnames "mock-home-persona-memory-shared/" temp-dir))
         (personas-dir (merge-pathnames ".Personas/" mock-home))
         (test-persona-dir (merge-pathnames "persona-memory-shared/" personas-dir))
         (context (make-runtime-context))
@@ -708,7 +822,12 @@ Paragraph two." s))
                 (lambda (name command args &optional environment)
                   (declare (ignore name command args environment))
                   persona-memory-server))
-              (*mcp-initialize-function* (lambda (server) server)))
+              (*mcp-initialize-function* (lambda (server) server))
+              (*persona-memory-compression-thread-function*
+                (lambda (thunk thread-name)
+                  (declare (ignore thread-name))
+                  (funcall thunk)
+                  :ran-inline)))
           (setf (runtime-context-startup-chatbot context) startup-bot)
           (let* ((conv (new-chat-persona "persona-memory-shared" :runtime-context context))
                  (servers (chatbot-mcp-servers (conversation-chatbot conv))))

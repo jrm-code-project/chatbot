@@ -14,6 +14,30 @@
   "Returns the persona filesystem allowlist pathname."
   (merge-pathnames *persona-filesystem-allowlist-filename* persona-dir))
 
+(defun resolve-persona-directory (persona-name-or-directory)
+  "Returns the existing persona directory for PERSONA-NAME-OR-DIRECTORY."
+  (or (and (pathnamep persona-name-or-directory)
+           (uiop:directory-exists-p persona-name-or-directory))
+      (and (stringp persona-name-or-directory)
+           (uiop:directory-exists-p (pathname persona-name-or-directory)))
+      (let* ((homedir (get-user-homedir-pathname))
+             (name-str (string persona-name-or-directory)))
+        (or (uiop:directory-exists-p
+             (merge-pathnames (make-pathname :directory (list :relative ".Personas" name-str))
+                              homedir))
+            (uiop:directory-exists-p
+             (merge-pathnames (make-pathname :directory (list :relative ".Personas"
+                                                              (string-downcase name-str)))
+                              homedir))
+            (error "Persona directory not found: ~A"
+                   (if (pathnamep persona-name-or-directory)
+                       persona-name-or-directory
+                       (format nil "~~/.Personas/~A" name-str)))))))
+
+(defun persona-compressed-memory-path (persona-dir)
+  "Returns the compressed-memory.txt pathname for PERSONA-DIR."
+  (merge-pathnames "compressed-memory.txt" persona-dir))
+
 (defun persona-filesystem-allowlist-directories (persona-dir)
   "Returns normalized approved filesystem directories loaded for PERSONA-DIR."
   (let ((allowlist-file (probe-file (persona-filesystem-allowlist-path persona-dir))))
@@ -60,6 +84,128 @@
 (defun persona-memory-json-path (persona-dir)
   "Returns the persona memory.json pathname when present."
   (probe-file (merge-pathnames "memory.json" persona-dir)))
+
+(defun persona-memory-json-records (memory-json-path)
+  "Returns MEMORY-JSON-PATH as normalized entity/relation records."
+  (let* ((raw-text (uiop:read-file-string memory-json-path))
+         (json-data (safe-parse-json raw-text)))
+    (if (persona-memory-graph-json-p json-data)
+        (list :entities (json-array-elements (mcp-val :entities json-data))
+              :relations (json-array-elements (mcp-val :relations json-data)))
+        (let ((entities nil)
+              (relations nil))
+          (dolist (line (cl-ppcre:split "\\r?\\n" raw-text))
+            (let ((trimmed (string-trim '(#\Space #\Tab #\Return #\Linefeed) line)))
+              (unless (string= trimmed "")
+                (let* ((record (parse-json-or-error trimmed :context "persona memory JSONL"))
+                       (type (string-downcase
+                              (or (mcp-val :type record)
+                                  (mcp-val "type" record)
+                                  ""))))
+                  (cond
+                    ((string= type "entity")
+                     (push `((:name . ,(mcp-val :name record))
+                             (:entity-type . ,(or (mcp-val :entity-type record)
+                                                  (mcp-val "entityType" record)))
+                             (:observations . ,(json-array-elements (mcp-val :observations record))))
+                           entities))
+                    ((string= type "relation")
+                     (push `((:from . ,(mcp-val :from record))
+                             (:to . ,(mcp-val :to record))
+                             (:relation-type . ,(or (mcp-val :relation-type record)
+                                                    (mcp-val "relationType" record))))
+                           relations))
+                    (t
+                     (error "Unsupported persona memory record type ~S in ~A."
+                            (or (mcp-val :type record)
+                                (mcp-val "type" record))
+                            memory-json-path)))))))
+          (list :entities (nreverse entities)
+                :relations (nreverse relations))))))
+
+(defun persona-memory-entity-summary-line (entity)
+  "Returns a concise one-line summary for ENTITY."
+  (let* ((name (or (mcp-val :name entity) "Unnamed entity"))
+         (entity-type (or (mcp-val :entity-type entity)
+                          (mcp-val "entityType" entity)))
+         (observations (remove ""
+                               (mapcar #'princ-to-string
+                                       (json-array-elements (mcp-val :observations entity)))
+                               :test #'string=)))
+    (format nil "- ~A~@[ (~A)~]~@[: ~{~A~^; ~}~]"
+            name
+            entity-type
+            observations)))
+
+(defun persona-memory-relation-summary-line (relation)
+  "Returns a concise one-line summary for RELATION."
+  (format nil "- ~A -~A-> ~A"
+          (or (mcp-val :from relation) "Unknown")
+          (or (mcp-val :relation-type relation)
+              (mcp-val "relationType" relation)
+              "related-to")
+          (or (mcp-val :to relation) "Unknown")))
+
+(defun persona-memory-records->compressed-text (records)
+  "Returns a concise text summary for persona memory RECORDS."
+  (let ((entities (safe-getf records :entities))
+        (relations (safe-getf records :relations))
+        (sections nil))
+    (when entities
+      (push (format nil "Entities:~%~{~A~^~%~}"
+                    (mapcar #'persona-memory-entity-summary-line entities))
+            sections))
+    (when relations
+      (push (format nil "Relations:~%~{~A~^~%~}"
+                    (mapcar #'persona-memory-relation-summary-line relations))
+            sections))
+    (if sections
+        (format nil "~{~A~^~%~%~}" (nreverse sections))
+        "Knowledge graph is empty.")))
+
+(defun save-compressed-persona-memory (persona-name-or-directory)
+  "Writes compressed-memory.txt for PERSONA-NAME-OR-DIRECTORY from its memory.json graph."
+  (let* ((persona-dir (resolve-persona-directory persona-name-or-directory))
+         (memory-json-path (or (persona-memory-json-path persona-dir)
+                               (error "Persona ~A does not contain memory.json."
+                                      persona-name-or-directory)))
+         (compressed-path (persona-compressed-memory-path persona-dir))
+         (compressed-text (persona-memory-records->compressed-text
+                           (persona-memory-json-records memory-json-path))))
+    (with-open-file (stream compressed-path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-string compressed-text stream))
+    (log-message :info "Saved compressed persona memory"
+                 :context `(("memory.json" . ,(namestring memory-json-path))
+                            ("compressed-memory.txt" . ,(namestring compressed-path))))
+    compressed-path))
+
+(defun persona-memory-compression-thread-name (persona-dir)
+  "Returns the background thread name for PERSONA-DIR compression."
+  (let ((directory-components (pathname-directory persona-dir)))
+    (format nil "Persona-Memory-Compression-~A"
+            (or (car (last directory-components))
+                (namestring persona-dir)))))
+
+(defun start-persona-memory-compression-thread (conversation persona-dir)
+  "Starts background compressed-memory generation for PERSONA-DIR when memory.json exists."
+  (let ((memory-json-path (persona-memory-json-path persona-dir)))
+    (when memory-json-path
+      (let ((runtime-context (chatbot-runtime-context (conversation-chatbot conversation))))
+        (funcall *persona-memory-compression-thread-function*
+                 (lambda ()
+                   (call-with-runtime-context
+                    runtime-context
+                    (lambda ()
+                      (handler-case
+                          (save-compressed-persona-memory persona-dir)
+                        (error (condition)
+                          (log-message :error "Failed to save compressed persona memory"
+                                       :context `(("path" . ,(namestring memory-json-path))
+                                                  ("error" . ,(princ-to-string condition)))))))))
+                 (persona-memory-compression-thread-name persona-dir))))))
 
 (defun persona-diary-directory (persona-dir)
   "Returns the preferred persona diary directory pathname when present."

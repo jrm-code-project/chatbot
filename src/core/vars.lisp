@@ -78,6 +78,14 @@
 (defvar *execute-mcp-tool-function* nil
   "Optional test seam for executing an MCP tool and returning text content.")
 
+(defun default-persona-memory-compression-thread-function (thunk thread-name)
+  "Starts a background thread for persona memory compression."
+  (sb-thread:make-thread thunk :name thread-name))
+
+(defvar *persona-memory-compression-thread-function*
+  #'default-persona-memory-compression-thread-function
+  "Function used to start background persona memory compression threads.")
+
 (defvar *global-token-grand-totals* nil
   "Process-wide cumulative token totals shared across unrelated chats.")
 
