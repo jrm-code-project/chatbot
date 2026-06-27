@@ -181,6 +181,14 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
                                   '("functionDeclarations" :function-declarations))))
           (test-json-elements tools)))
 
+(defun google-payload-tools (payload)
+  "Returns Google-format tool groups from PAYLOAD."
+  (test-json-elements (test-json-value-any payload '(:tools "tools"))))
+
+(defun google-tool-parameters (tool)
+  "Returns the parameters object from a Google tool declaration."
+  (test-json-value-any tool '("parameters" :parameters)))
+
 (defun google-tool-names (tools)
   "Returns the function declaration names from Google-format TOOLS."
   (mapcar (lambda (tool)

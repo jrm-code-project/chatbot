@@ -351,10 +351,26 @@
               (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google tool test\"}], \"role\": \"model\"}}]}" 200))))
       (let ((res (chat-google bot "Hi Google" conv nil)))
         (fiveam:is (string= "Hello from Google tool test" res))
-        (fiveam:is (search "\"functionDeclarations\"" captured-content))
-        (fiveam:is (null (search "\"type\":\"function_declarations\"" captured-content)))
-        (fiveam:is (null (search "\"$schema\"" captured-content)))
-        (fiveam:is (search "\"properties\":{}" captured-content))))))
+        (let* ((payload (decode-test-json captured-content))
+               (tools (google-payload-tools payload))
+               (declarations (google-tool-declarations tools))
+               (lookup-tool (find "lookup_time"
+                                  declarations
+                                  :test #'string=
+                                  :key (lambda (tool)
+                                         (test-json-value-any tool '("name" :name)))))
+               (parameters (google-tool-parameters lookup-tool))
+               (properties (test-json-value-any parameters '("properties" :properties))))
+          (fiveam:is (= 1 (length tools)))
+          (fiveam:is (null (test-json-value-any (first tools) '("type" :type))))
+          (fiveam:is (not (null lookup-tool)))
+          (assert-json-field= lookup-tool "name" "lookup_time")
+          (fiveam:is (null (test-json-value-any parameters '("$schema" :|$schema|))))
+          (fiveam:is (or (null properties)
+                         (and (hash-table-p properties)
+                              (= 0 (hash-table-count properties)))
+                         (and (json-object-alist-p properties)
+                              (null properties)))))))))
 
 (fiveam:test test-google-chat-function-call-response
   (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
