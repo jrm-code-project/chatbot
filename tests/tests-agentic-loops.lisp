@@ -63,6 +63,39 @@
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))
 
+(fiveam:test test-abort-agentic-loop-interrupts-in-flight-step-cooperatively
+  (let* ((entered-step-p nil)
+         (release-step-p nil)
+         (*agentic-loop-chat-function*
+          (lambda (prompt &key conversation callback file files temperature top-p)
+            (declare (ignore prompt conversation callback file files temperature top-p))
+            (setf entered-step-p t)
+            (loop until release-step-p
+                  do (sleep 0.01))
+            "FINAL: this response must not win after abort"))
+         (conversation (new-chat :backend :openai)))
+    (unwind-protect
+         (let ((loop (start-agentic-loop conversation "Interrupt the running step" :max-iterations 3)))
+           (loop repeat 100
+                 until entered-step-p
+                 do (sleep 0.01))
+           (fiveam:is (not (null entered-step-p)))
+           (abort-agentic-loop (agentic-loop-id loop) :force t)
+           (setf release-step-p t)
+           (fiveam:is (eq :interrupted
+                          (wait-for-agentic-loop-status loop '(:interrupted :completed :failed :limit-reached))))
+           (loop repeat 100
+                 while (agentic-loop-thread-alive-p loop)
+                 do (sleep 0.01))
+           (fiveam:is (string= "Interrupted." (agentic-loop-result-summary loop)))
+           (fiveam:is (string= "Interrupted." (agentic-loop-last-error loop)))
+           (fiveam:is (= 1 (length (agentic-loop-step-history loop))))
+           (fiveam:is (eq :interrupted
+                          (getf (first (agentic-loop-step-history loop)) :status))))
+      (setf release-step-p t)
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
 (fiveam:test test-start-agentic-loop-applies-backend-and-model-overrides
   (let* ((observed-backend nil)
          (observed-model nil)

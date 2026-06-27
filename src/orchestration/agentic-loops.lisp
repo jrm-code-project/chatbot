@@ -330,11 +330,24 @@
          :loop-id (agentic-loop-id loop)
          :reason reason))
 
+(defun agentic-loop-interruption-reason (loop)
+  "Returns the current interruption reason recorded for LOOP."
+  (or (agentic-loop-last-error loop)
+      (agentic-loop-result-summary loop)
+      "Interrupted."))
+
+(defun ensure-agentic-loop-not-interrupted (loop)
+  "Signals interruption when LOOP has already been asked to stop."
+  (when (eq (agentic-loop-status loop) :interrupted)
+    (interrupt-agentic-loop-error loop
+                                 (agentic-loop-interruption-reason loop))))
+
 (defun agentic-loop-approval-wrapper (loop kind resource)
   "Returns an approval function wrapper for LOOP."
   (lambda (bot raw-resource tool-name)
     (declare (ignore bot))
     (let ((resolved-resource (funcall resource raw-resource)))
+      (ensure-agentic-loop-not-interrupted loop)
       (sb-thread:with-mutex ((agentic-loop-lock loop))
         (setf (agentic-loop-status loop) :awaiting-approval)
         (setf (agentic-loop-pending-approval loop)
@@ -450,26 +463,29 @@
          (iteration (1+ (agentic-loop-current-iteration loop))))
     (setf (agentic-loop-pending-step-prompt loop) prompt)
     (handler-case
-        (let ((response (funcall (or (agentic-loop-chat-function-override loop)
-                                     #'chat)
-                                 prompt
-                                 :conversation conversation)))
-          (incf (agentic-loop-current-iteration loop))
-          (setf (agentic-loop-pending-step-prompt loop) nil)
-          (setf (agentic-loop-pending-approval loop) nil)
-          (setf (agentic-loop-pending-approval-decision loop) nil)
-          (append-agentic-loop-step-record
-           loop
-           (make-agentic-loop-step-record iteration :completed
-                                          :prompt prompt
-                                          :response response))
-          (if (agentic-loop-final-response-p response)
-              (progn
-                (setf (agentic-loop-status loop) :completed)
-                (setf (agentic-loop-result-summary loop)
-                      (agentic-loop-final-response-text response))
-                :completed)
-              :continue))
+        (progn
+          (ensure-agentic-loop-not-interrupted loop)
+          (let ((response (funcall (or (agentic-loop-chat-function-override loop)
+                                      #'chat)
+                                  prompt
+                                  :conversation conversation)))
+            (ensure-agentic-loop-not-interrupted loop)
+            (incf (agentic-loop-current-iteration loop))
+            (setf (agentic-loop-pending-step-prompt loop) nil)
+            (setf (agentic-loop-pending-approval loop) nil)
+            (setf (agentic-loop-pending-approval-decision loop) nil)
+            (append-agentic-loop-step-record
+             loop
+             (make-agentic-loop-step-record iteration :completed
+                                           :prompt prompt
+                                           :response response))
+            (if (agentic-loop-final-response-p response)
+                (progn
+                  (setf (agentic-loop-status loop) :completed)
+                  (setf (agentic-loop-result-summary loop)
+                       (agentic-loop-final-response-text response))
+                  :completed)
+                :continue)))
       (agentic-loop-interrupted (condition)
         (restore-conversation-state conversation snapshot)
         (setf (agentic-loop-pending-step-prompt loop) nil)
@@ -565,16 +581,18 @@
 
 (defun abort-agentic-loop (loop-id &key force context)
   "Interrupts the autonomous loop identified by LOOP-ID."
+  (declare (ignore force))
   (let ((loop (or (find-agentic-loop loop-id context)
                   (error "Unknown agentic loop id: ~A" loop-id))))
-    (setf (agentic-loop-status loop) :interrupted)
-    (setf (agentic-loop-result-summary loop) "Interrupted.")
-    (setf (agentic-loop-finished-at loop) (get-universal-time))
     (sb-thread:with-mutex ((agentic-loop-lock loop))
+      (setf (agentic-loop-last-error loop) "Interrupted.")
+      (setf (agentic-loop-result-summary loop) "Interrupted.")
+      (unless (member (agentic-loop-status loop) '(:completed :failed :limit-reached))
+        (setf (agentic-loop-status loop) :interrupted))
       (setf (agentic-loop-pending-approval-decision loop) :deny)
       (sb-thread:condition-broadcast (agentic-loop-approval-waitqueue loop)))
-    (when (and force (agentic-loop-thread-alive-p loop))
-      (sb-thread:terminate-thread (agentic-loop-thread loop))
+    (unless (agentic-loop-thread-alive-p loop)
+      (setf (agentic-loop-finished-at loop) (get-universal-time))
       (setf (agentic-loop-thread loop) nil))
     (agentic-loop-log :warn loop "interrupted")
     loop))
