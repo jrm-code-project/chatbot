@@ -220,10 +220,18 @@ Second paragraph." s))
                              (coerce (system-instruction-paragraphs-copy conv) 'list)))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
+(fiveam:test test-split-system-instructions-preserves-fenced-blocks
+  (let* ((text (format nil "Intro paragraph.~%~%```markdown~%Paragraph one inside fence.~%~%Paragraph two inside fence.~%```~%~%Outro paragraph."))
+        (paragraphs (coerce (split-system-instruction-into-paragraphs text) 'list)))
+    (fiveam:is (equal (list "Intro paragraph."
+                           (format nil "```markdown~%Paragraph one inside fence.~%~%Paragraph two inside fence.~%```")
+                           "Outro paragraph.")
+                     paragraphs))))
+
 (fiveam:test test-save-system-instructions-persists-paragraph-file
   (let* ((temp-dir (uiop:default-temporary-directory))
-        (mock-home (merge-pathnames "mock-home-save-system-instructions/" temp-dir))
-        (personas-dir (merge-pathnames ".Personas/" mock-home))
+       (mock-home (merge-pathnames "mock-home-save-system-instructions/" temp-dir))
+       (personas-dir (merge-pathnames ".Personas/" mock-home))
         (test-persona-dir (merge-pathnames "persona-save-system-instructions/" personas-dir))
         (inst-path (merge-pathnames "system-instructions" test-persona-dir)))
     (ensure-directories-exist test-persona-dir)

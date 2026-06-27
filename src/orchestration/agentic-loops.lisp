@@ -22,6 +22,15 @@
                      (agentic-loop-approval-required-tool-name condition)
                      (agentic-loop-approval-required-resource condition)))))
 
+(define-condition agentic-loop-interrupted (error)
+  ((loop-id :initarg :loop-id :reader agentic-loop-interrupted-loop-id)
+   (reason :initarg :reason :reader agentic-loop-interrupted-reason))
+  (:report (lambda (condition stream)
+             (format stream
+                     "Agentic loop ~A interrupted: ~A"
+                     (agentic-loop-interrupted-loop-id condition)
+                     (agentic-loop-interrupted-reason condition)))))
+
 (defclass agentic-loop ()
   ((id
     :initarg :id
@@ -75,6 +84,10 @@
     :initarg :pending-approval-decision
     :accessor agentic-loop-pending-approval-decision
     :initform nil)
+   (approval-waitqueue
+    :initarg :approval-waitqueue
+    :accessor agentic-loop-approval-waitqueue
+    :initform (sb-thread:make-waitqueue :name "agentic-loop-approval-waitqueue"))
    (pending-step-prompt
     :initarg :pending-step-prompt
     :accessor agentic-loop-pending-step-prompt
@@ -235,20 +248,43 @@
          :tool-name tool-name
          :resource resource))
 
+(defun interrupt-agentic-loop-error (loop reason)
+  "Signals a loop interruption error for LOOP with REASON."
+  (error 'agentic-loop-interrupted
+         :loop-id (agentic-loop-id loop)
+         :reason reason))
+
 (defun agentic-loop-approval-wrapper (loop kind resource)
   "Returns an approval function wrapper for LOOP."
   (lambda (bot raw-resource tool-name)
     (declare (ignore bot))
     (let ((resolved-resource (funcall resource raw-resource)))
-      (let ((decision (agentic-loop-consume-approval-decision loop kind tool-name resolved-resource)))
-        (cond
-          ((eq decision t) t)
-          ((eq decision :deny)
-           (error 'mcp-tool-execution-error
-                  :tool-name tool-name
-                  :reason "Approval denied by user."))
-          (t
-           (signal-agentic-loop-approval loop kind tool-name resolved-resource)))))))
+      (sb-thread:with-mutex ((agentic-loop-lock loop))
+        (setf (agentic-loop-status loop) :awaiting-approval)
+        (setf (agentic-loop-pending-approval loop)
+              (agentic-loop-pending-approval-plist kind tool-name resolved-resource))
+        (setf (agentic-loop-pending-approval-decision loop) nil)
+        (loop
+          for decision = (agentic-loop-pending-approval-decision loop)
+          do (cond
+               ((eq decision t)
+                (setf (agentic-loop-pending-approval-decision loop) nil)
+                (setf (agentic-loop-pending-approval loop) nil)
+                (setf (agentic-loop-status loop) :running)
+                (return t))
+               ((eq decision :deny)
+                (setf (agentic-loop-pending-approval-decision loop) nil)
+                (setf (agentic-loop-pending-approval loop) nil)
+                (setf (agentic-loop-status loop) :interrupted)
+                (interrupt-agentic-loop-error loop "Approval denied by user."))
+               ((eq (agentic-loop-status loop) :interrupted)
+                (setf (agentic-loop-pending-approval loop) nil)
+                (interrupt-agentic-loop-error loop
+                                              (or (agentic-loop-result-summary loop)
+                                                  "Interrupted.")))
+               (t
+                (sb-thread:condition-wait (agentic-loop-approval-waitqueue loop)
+                                          (agentic-loop-lock loop)))))))))
 
 (defun make-agentic-loop-runtime-context (loop template-context conversation)
   "Returns a loop-specific runtime context derived from TEMPLATE-CONTEXT."
@@ -348,20 +384,16 @@
                       (agentic-loop-final-response-text response))
                 :completed)
               :continue))
-      (agentic-loop-approval-required (condition)
+      (agentic-loop-interrupted (condition)
         (restore-conversation-state conversation snapshot)
-        (setf (agentic-loop-status loop) :awaiting-approval)
-        (setf (agentic-loop-pending-approval loop)
-              (agentic-loop-pending-approval-plist
-               (agentic-loop-approval-required-kind condition)
-               (agentic-loop-approval-required-tool-name condition)
-               (agentic-loop-approval-required-resource condition)))
+        (setf (agentic-loop-pending-step-prompt loop) nil)
+        (setf (agentic-loop-pending-approval-decision loop) nil)
         (append-agentic-loop-step-record
          loop
-         (make-agentic-loop-step-record iteration :awaiting-approval
+         (make-agentic-loop-step-record iteration :interrupted
                                         :prompt prompt
                                         :note (princ-to-string condition)))
-        :paused))))
+        :interrupted))))
 
 (defun run-agentic-loop-worker (loop)
   "Runs LOOP to completion, pause, interruption, or failure."
@@ -380,8 +412,16 @@
               (case (run-agentic-loop-step loop)
                 (:completed (return))
                 (:paused (return))
-                (:continue nil)
-                (t (return))))
+               (:interrupted (return))
+               (:continue nil)
+               (t (return))))
+       (agentic-loop-interrupted (condition)
+         (unless (eq (agentic-loop-status loop) :interrupted)
+          (setf (agentic-loop-status loop) :interrupted))
+         (setf (agentic-loop-last-error loop) (agentic-loop-interrupted-reason condition))
+         (setf (agentic-loop-result-summary loop) (agentic-loop-interrupted-reason condition))
+         (agentic-loop-log :warn loop "interrupted"
+                          :context `(("reason" . ,(agentic-loop-interrupted-reason condition)))))
        (error (condition)
          (setf (agentic-loop-status loop) :failed)
          (setf (agentic-loop-last-error loop) (princ-to-string condition))
@@ -440,6 +480,9 @@
     (setf (agentic-loop-status loop) :interrupted)
     (setf (agentic-loop-result-summary loop) "Interrupted.")
     (setf (agentic-loop-finished-at loop) (get-universal-time))
+    (sb-thread:with-mutex ((agentic-loop-lock loop))
+      (setf (agentic-loop-pending-approval-decision loop) :deny)
+      (sb-thread:condition-broadcast (agentic-loop-approval-waitqueue loop)))
     (when (and force (agentic-loop-thread-alive-p loop))
       (sb-thread:terminate-thread (agentic-loop-thread loop))
       (setf (agentic-loop-thread loop) nil))
@@ -461,19 +504,21 @@
       (error "Agentic loop ~A has no pending approval." loop-id))
     (if approve
         (progn
-          (setf (agentic-loop-pending-approval-decision loop) t)
-          (setf (agentic-loop-status loop) :pending)
+          (unless (agentic-loop-thread-alive-p loop)
+            (error "Agentic loop ~A is paused but has no live worker thread." loop-id))
           (setf (agentic-loop-finished-at loop) nil)
-          (spawn-agentic-loop-thread loop))
+          (sb-thread:with-mutex ((agentic-loop-lock loop))
+            (setf (agentic-loop-pending-approval-decision loop) t)
+            (setf (agentic-loop-status loop) :running)
+            (sb-thread:condition-broadcast (agentic-loop-approval-waitqueue loop))))
         (progn
-          (setf (agentic-loop-pending-approval-decision loop) :deny)
-          (setf (agentic-loop-status loop) :interrupted)
+          (unless (agentic-loop-thread-alive-p loop)
+            (error "Agentic loop ~A is paused but has no live worker thread." loop-id))
           (setf (agentic-loop-last-error loop) "Approval denied by user.")
           (setf (agentic-loop-result-summary loop) "Approval denied by user.")
           (setf (agentic-loop-finished-at loop) (get-universal-time))
-          (append-agentic-loop-step-record
-           loop
-           (make-agentic-loop-step-record (1+ (agentic-loop-current-iteration loop))
-                                          :interrupted
-                                          :note "Approval denied by user."))))
+          (sb-thread:with-mutex ((agentic-loop-lock loop))
+            (setf (agentic-loop-pending-approval-decision loop) :deny)
+            (setf (agentic-loop-status loop) :interrupted)
+            (sb-thread:condition-broadcast (agentic-loop-approval-waitqueue loop)))))
     loop))

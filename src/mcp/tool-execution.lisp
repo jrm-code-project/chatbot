@@ -58,7 +58,8 @@ entries instead of aborting the full turn."
                              (funcall context-builder name tool-call))))
               (push (funcall result-builder id name arguments-json res-text tool-call) results))
           (error (condition)
-            (if (typep condition 'agentic-loop-approval-required)
+            (if (or (typep condition 'agentic-loop-approval-required)
+                   (typep condition 'agentic-loop-interrupted))
                 (error condition)
                 (if error-builder
                 (push (funcall error-builder id name arguments-json condition tool-call) results)

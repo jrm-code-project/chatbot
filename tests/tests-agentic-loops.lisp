@@ -58,7 +58,7 @@
            (resume-agentic-loop (agentic-loop-id loop) :approve t)
            (fiveam:is (eq :completed
                           (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
-           (fiveam:is (= 2 calls))
+           (fiveam:is (= 1 calls))
            (fiveam:is (string= "eval complete" (agentic-loop-result-summary loop))))
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))

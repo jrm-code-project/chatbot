@@ -318,16 +318,39 @@
          (merge-initarg-overrides (copy-initargs-for-instance conversation)
                                   initarg-overrides)))
 
+(defun system-instruction-fence-line-p (line)
+  "Returns true when LINE begins a Markdown triple-backtick fence."
+  (alexandria:starts-with-subseq
+   "```"
+   (string-left-trim '(#\Space #\Tab) line)))
+
 (defun split-system-instruction-into-paragraphs (text)
-  "Splits TEXT into a vector of trimmed paragraphs."
-  (let* ((normalized (remove #\Return text))
-        (paragraphs (remove ""
-                            (mapcar (lambda (paragraph)
-                                      (string-trim '(#\Space #\Tab #\Return #\Linefeed)
-                                                   paragraph))
-                                    (cl-ppcre:split "(?:\\n[ \\t]*){2,}" normalized))
-                            :test #'string=)))
-    (coerce paragraphs 'vector)))
+  "Splits TEXT into trimmed paragraphs, preserving blank lines inside fenced blocks."
+  (let ((paragraphs nil)
+        (current-lines nil)
+        (in-fence-p nil))
+    (labels ((flush-paragraph ()
+               (when current-lines
+                 (let ((paragraph (string-trim '(#\Space #\Tab #\Return #\Linefeed)
+                                               (format nil "~{~A~^~%~}" (nreverse current-lines)))))
+                   (unless (string= paragraph "")
+                     (push paragraph paragraphs)))
+                 (setf current-lines nil))))
+      (dolist (line (cl-ppcre:split "\\r?\\n" text))
+        (cond
+          (in-fence-p
+           (push line current-lines)
+           (when (system-instruction-fence-line-p line)
+             (setf in-fence-p nil)))
+          ((system-instruction-fence-line-p line)
+           (push line current-lines)
+           (setf in-fence-p t))
+          ((string= "" (string-trim '(#\Space #\Tab #\Return) line))
+           (flush-paragraph))
+          (t
+           (push line current-lines))))
+      (flush-paragraph))
+    (coerce (nreverse paragraphs) 'vector)))
 
 (defun system-instruction-paragraphs (system-instruction)
   "Returns SYSTEM-INSTRUCTION as a vector of paragraphs."

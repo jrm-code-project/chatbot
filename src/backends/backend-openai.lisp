@@ -90,6 +90,8 @@
                                           (loop for char across args
                                                 do (vector-push-extend char (cdr (assoc :arguments existing))))))))))))
                 (close stream)))
+          (agentic-loop-interrupted (e)
+            (error e))
           (chatbot-tool-recursion-limit-error (e)
             (error e))
           (error (e)

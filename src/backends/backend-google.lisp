@@ -153,6 +153,8 @@
                              (response-payload
                                (handler-case
                                    `(("result" . ,(execute-chatbot-tool-by-name bot name raw-args)))
+                                 (agentic-loop-interrupted (e)
+                                   (error e))
                                  (error (condition)
                                    (chatbot-tool-error-payload name condition))))
                              (resp-msg `(("role" . "user")
@@ -204,6 +206,8 @@
                                                   final-str
                                                   :callback callback
                                                   :usage usage)))))))
+          (agentic-loop-interrupted (e)
+            (error e))
           (chatbot-tool-recursion-limit-error (e)
             (error e))
           (error (e)

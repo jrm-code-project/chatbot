@@ -118,6 +118,9 @@
                                        (when id
                                          (setf (conversation-interaction-id conversation) id)))))))))
                 (close stream)))))
+        (agentic-loop-interrupted (e)
+          (restore-gemini-interaction-id conversation original-interaction-id)
+          (error e))
         (chatbot-tool-recursion-limit-error (e)
           (restore-gemini-interaction-id conversation original-interaction-id)
           (error e))
