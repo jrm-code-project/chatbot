@@ -123,8 +123,7 @@
              (stored-history (conversation-messages conv)))
         (assert-google-message-texts (first first-contents) "user" '("First turn"))
         (assert-google-message-texts (third second-contents) "user" '("Second turn"))
-        (fiveam:is (string= "First turn"
-                           (cdr (assoc "content" (first stored-history) :test #'string=))))
+        (assert-history-message (first stored-history) "user" "First turn")
         (fiveam:is (string= "gemini-3.5-flash" (chatbot-model (conversation-chatbot conv))))))))
 
 (fiveam:test test-google-chat-preserves-preloaded-history-every-turn
@@ -216,14 +215,11 @@
                                  (test-json-value-any part '("inlineData" :inline-data)))
                                second-parts))
             (fiveam:is (= 4 (length stored-history)))
-            (fiveam:is (string= "Summarize"
-                                (cdr (assoc "content" (first stored-history) :test #'string=))))
-            (fiveam:is (notany (lambda (message)
-                                 (search "Alpha attachment"
-                                         (princ-to-string
-                                          (cdr (assoc "content" message :test #'string=)))))
-                               stored-history))))
-      (uiop:delete-directory-tree root :validate t))))
+            (assert-history-message (first stored-history) "user" "Summarize")
+            (fiveam:is (notany (lambda (content)
+                                 (search "Alpha attachment" content))
+                               (history-contents stored-history))))
+      (uiop:delete-directory-tree root :validate t)))))
 
 (fiveam:test test-google-chat-continues-without-persona
   (let ((captured-payloads nil)
@@ -605,11 +601,9 @@
           (fiveam:is-false
            (search "[model: gemini-3.5-flash]"
                    (first (message-part-texts (first retry-contents)))))
-          (fiveam:is (= 2 (length stored-history)))
-          (fiveam:is (string= "Retry me"
-                              (cdr (assoc "content" (first stored-history) :test #'string=))))
-          (fiveam:is (string= "Recovered on retry"
-                              (cdr (assoc "content" (second stored-history) :test #'string=)))))))))
+          (assert-history-sequence stored-history
+                                   '(("user" "Retry me")
+                                     ("model" "Recovered on retry"))))))))
 
 (fiveam:test test-google-chat-retries-no-text-response-on-gemini-pro-latest
   (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))

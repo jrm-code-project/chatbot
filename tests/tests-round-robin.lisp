@@ -22,16 +22,11 @@
                            (round-robin-transcript-entry "Alpha" :bot "Alpha one")
                            (round-robin-transcript-entry "Beta" :bot "Beta one")))
          (history (build-round-robin-history-messages transcript "Alpha")))
-    (fiveam:is (= 3 (length history)))
-    (fiveam:is (string= "user" (cdr (assoc "role" (first history) :test #'string=))))
-    (fiveam:is (string= "User: Hello"
-                        (cdr (assoc "content" (first history) :test #'string=))))
-    (fiveam:is (string= "assistant" (cdr (assoc "role" (second history) :test #'string=))))
-    (fiveam:is (string= "Alpha: Alpha one"
-                        (cdr (assoc "content" (second history) :test #'string=))))
-    (fiveam:is (string= "user" (cdr (assoc "role" (third history) :test #'string=))))
-    (fiveam:is (string= "Beta: Beta one"
-                        (cdr (assoc "content" (third history) :test #'string=))))))
+    (assert-history-sequence
+     history
+     '(("user" "User: Hello")
+       ("assistant" "Alpha: Alpha one")
+       ("user" "Beta: Beta one")))))
 
 (fiveam:test test-round-robin-clones-conversation-through-shared-copy-helpers
   (let* ((runtime-context (make-runtime-context))

@@ -671,11 +671,9 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                              (google-payload-texts google-payload))))
         (fiveam:is (null (conversation-interaction-id conv)))
         (let ((stored-history (conversation-messages conv)))
-          (fiveam:is (= 2 (length stored-history)))
-          (fiveam:is (string= "Retry this"
-                              (cdr (assoc "content" (first stored-history) :test #'string=))))
-          (fiveam:is (string= "Recovered from Gemini malformed response"
-                              (cdr (assoc "content" (second stored-history) :test #'string=)))))))))
+          (assert-history-sequence stored-history
+                                   '(("user" "Retry this")
+                                     ("model" "Recovered from Gemini malformed response"))))))))
 
 (fiveam:test test-gemini-chat-retries-empty-response-on-google-gemini-pro-latest
   (let ((conv (new-chat :backend :gemini))
@@ -710,11 +708,9 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                                        '("Retry empty")))
         (fiveam:is (null (conversation-interaction-id conv)))
         (let ((stored-history (conversation-messages conv)))
-          (fiveam:is (= 2 (length stored-history)))
-          (fiveam:is (string= "Retry empty"
-                              (cdr (assoc "content" (first stored-history) :test #'string=))))
-          (fiveam:is (string= "Recovered from Gemini empty response"
-                              (cdr (assoc "content" (second stored-history) :test #'string=)))))))))
+          (assert-history-sequence stored-history
+                                   '(("user" "Retry empty")
+                                     ("model" "Recovered from Gemini empty response"))))))))
 
 (fiveam:test test-gemini-tool-call-errors-are-reported-back-to-the-model
   (let ((conv (new-chat :backend :gemini))

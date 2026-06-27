@@ -117,11 +117,41 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
             (test-json-value-any part '(:text "text")))
           (or (message-content-parts message) '())))
 
+(defun message-all-texts (message)
+  "Returns all human-readable text strings carried by MESSAGE."
+  (let ((content (test-json-value-any message '(:content "content"))))
+    (cond
+      ((stringp content) (list content))
+      (t (remove nil (message-content-texts message))))))
+
+(defun messages-all-texts (messages)
+  "Returns all human-readable text strings across MESSAGES."
+  (mapcan #'message-all-texts (test-json-elements messages)))
+
 (defun assert-message-content-texts (message role expected-texts)
   "Asserts MESSAGE has ROLE and EXPECTED-TEXTS content parts."
   (assert-json-field= message :role role)
   (fiveam:is (equal expected-texts
                     (message-content-texts message))))
+
+(defun assert-history-message (message role content)
+  "Asserts stored conversation MESSAGE has ROLE and CONTENT."
+  (assert-json-field= message :role role)
+  (assert-json-field= message :content content))
+
+(defun assert-history-sequence (messages expected)
+  "Asserts stored conversation MESSAGES match EXPECTED (ROLE CONTENT) pairs."
+  (let ((message-list (test-json-elements messages)))
+    (fiveam:is (= (length expected) (length message-list)))
+    (loop for message in message-list
+          for (role content) in expected
+          do (assert-history-message message role content))))
+
+(defun history-contents (messages)
+  "Returns the stored content strings from conversation MESSAGES."
+  (mapcar (lambda (message)
+            (test-json-value-any message '(:content "content")))
+          (test-json-elements messages)))
 
 (defun google-payload-contents (payload)
   "Returns Google-format request contents from PAYLOAD."
@@ -218,6 +248,10 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
   "Asserts PAYLOAD system instruction parts match EXPECTED-TEXTS."
   (fiveam:is (equal expected-texts
                     (message-part-texts (mcp-val :system-instruction payload)))))
+
+(defun json-object-field (object key)
+  "Returns KEY from decoded JSON OBJECT."
+  (test-json-value-any object (list key)))
 
 (defun assert-sampling-parameters (object &key (temperature nil temperature-supplied-p)
                                               (top-p nil top-p-supplied-p)

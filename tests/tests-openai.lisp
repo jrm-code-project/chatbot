@@ -189,24 +189,19 @@ data: [DONE]")
                  (stored-history (conversation-messages conv))
                  (first-texts (message-content-texts first-user-msg)))
             (assert-json-field= first-user-msg :role "user")
-            (fiveam:is (= 2 (length first-texts)))
-            (fiveam:is (string= "Summarize" (first first-texts)))
-            (fiveam:is (search "Alpha attachment" (second first-texts)))
-            (assert-role/content (second second-messages) "user" "Summarize")
-            (fiveam:is (notany (lambda (message)
-                                 (search "Alpha attachment"
-                                         (princ-to-string
-                                          (test-json-value-any message '(:content "content")))))
-                               second-messages))
-            (fiveam:is (= 4 (length stored-history)))
-            (fiveam:is (string= "Summarize"
-                               (cdr (assoc "content" (first stored-history) :test #'string=))))
-            (fiveam:is (notany (lambda (message)
-                                 (search "Alpha attachment"
-                                         (princ-to-string
-                                          (cdr (assoc "content" message :test #'string=)))))
-                               stored-history))))
-      (uiop:delete-directory-tree root :validate t))))
+           (fiveam:is (= 2 (length first-texts)))
+           (fiveam:is (string= "Summarize" (first first-texts)))
+           (fiveam:is (search "Alpha attachment" (second first-texts)))
+           (assert-role/content (second second-messages) "user" "Summarize")
+           (fiveam:is (notany (lambda (text)
+                                (search "Alpha attachment" text))
+                              (messages-all-texts second-messages)))
+           (fiveam:is (= 4 (length stored-history)))
+           (assert-history-message (first stored-history) "user" "Summarize")
+           (fiveam:is (notany (lambda (content)
+                                (search "Alpha attachment" content))
+                              (history-contents stored-history))))
+      (uiop:delete-directory-tree root :validate t)))))
 
 (fiveam:test test-openai-chat-file-alias-matches-singleton-files
   (let* ((temp-dir (uiop:default-temporary-directory))
@@ -691,8 +686,10 @@ data: [DONE]")
                            (cdr (assoc :content (third messages))))))
       (let ((updated-messages (conversation-messages conv)))
        (fiveam:is (= 4 (length updated-messages)))
-       (fiveam:is (string= "What time is it?"
-                           (cdr (assoc "content" (third updated-messages) :test #'string=))))))))
+       (assert-history-sequence (subseq updated-messages 0 3)
+                                '(("user" "Earlier question")
+                                  ("assistant" "Earlier answer")
+                                  ("user" "What time is it?")))))))
 
 (fiveam:test test-openai-request-prefixes-live-input-with-timestamp-and-model-only
   (let (captured-payload)
@@ -727,8 +724,10 @@ data: [DONE]")
                            (cdr (assoc :content (third messages))))))
       (let ((updated-messages (conversation-messages conv)))
        (fiveam:is (= 4 (length updated-messages)))
-       (fiveam:is (string= "What time is it?"
-                           (cdr (assoc "content" (third updated-messages) :test #'string=))))))))
+       (assert-history-sequence (subseq updated-messages 0 3)
+                                '(("user" "Earlier question")
+                                  ("assistant" "Earlier answer")
+                                  ("user" "What time is it?")))))))
 
 (fiveam:test test-openai-built-in-eval-tool-recursion
   (let (captured-payloads)
