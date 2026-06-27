@@ -116,15 +116,13 @@
       (fiveam:is (equal '("https://example.test/gemini/models/gemini-pro-latest:generateContent"
                          "https://example.test/gemini/models/gemini-3.5-flash:generateContent")
                        (nreverse captured-urls)))
-      (let* ((first-payload (cl-json:decode-json-from-string (second captured-payloads)))
-            (first-contents (cdr (assoc :contents first-payload)))
-            (first-parts (cdr (assoc :parts (first first-contents))))
-            (second-payload (cl-json:decode-json-from-string (first captured-payloads)))
-            (second-contents (cdr (assoc :contents second-payload)))
-            (stored-history (conversation-messages conv)))
-        (fiveam:is (string= "First turn" (cdr (assoc :text (first first-parts)))))
-        (fiveam:is (string= "Second turn"
-                           (cdr (assoc :text (car (cdr (assoc :parts (third second-contents))))))))
+      (let* ((first-payload (decode-test-json (second captured-payloads)))
+             (first-contents (google-payload-contents first-payload))
+             (second-payload (decode-test-json (first captured-payloads)))
+             (second-contents (google-payload-contents second-payload))
+             (stored-history (conversation-messages conv)))
+        (assert-google-message-texts (first first-contents) "user" '("First turn"))
+        (assert-google-message-texts (third second-contents) "user" '("Second turn"))
         (fiveam:is (string= "First turn"
                            (cdr (assoc "content" (first stored-history) :test #'string=))))
         (fiveam:is (string= "gemini-3.5-flash" (chatbot-model (conversation-chatbot conv))))))))
@@ -144,30 +142,30 @@
       (chat "First live turn" :conversation conv)
       (chat "Second live turn" :conversation conv)
       (fiveam:is (= 2 (length captured-payloads)))
-      (let* ((first-payload (cl-json:decode-json-from-string (first captured-payloads)))
-             (first-contents (cdr (assoc :contents first-payload)))
-             (second-payload (cl-json:decode-json-from-string (second captured-payloads)))
-             (second-contents (cdr (assoc :contents second-payload))))
+      (let* ((first-payload (decode-test-json (first captured-payloads)))
+             (first-contents (google-payload-contents first-payload))
+             (second-payload (decode-test-json (second captured-payloads)))
+             (second-contents (google-payload-contents second-payload)))
         (fiveam:is (= 3 (length first-contents)))
-        (fiveam:is (string= "user" (cdr (assoc :role (first first-contents)))))
-        (fiveam:is (string= "Please concisely summarize your knowledge graph."
-                           (cdr (assoc :text (car (cdr (assoc :parts (first first-contents))))))))
-        (fiveam:is (string= "model" (cdr (assoc :role (second first-contents)))))
-        (fiveam:is (string= "Stored persona memory."
-                           (cdr (assoc :text (car (cdr (assoc :parts (second first-contents))))))))
-        (fiveam:is (string= "First live turn"
-                           (cdr (assoc :text (car (cdr (assoc :parts (third first-contents))))))))
+        (assert-google-message-texts (first first-contents)
+                                    "user"
+                                    '("Please concisely summarize your knowledge graph."))
+        (assert-google-message-texts (second first-contents)
+                                    "model"
+                                    '("Stored persona memory."))
+        (assert-google-message-texts (third first-contents) "user" '("First live turn"))
         (fiveam:is (= 5 (length second-contents)))
-        (fiveam:is (string= "Please concisely summarize your knowledge graph."
-                           (cdr (assoc :text (car (cdr (assoc :parts (first second-contents))))))))
-        (fiveam:is (string= "Stored persona memory."
-                           (cdr (assoc :text (car (cdr (assoc :parts (second second-contents))))))))
-        (fiveam:is (string= "First live turn"
-                           (cdr (assoc :text (car (cdr (assoc :parts (third second-contents))))))))
-        (fiveam:is (string= "Hello from Google non-streaming"
-                           (cdr (assoc :text (car (cdr (assoc :parts (fourth second-contents))))))))
-        (fiveam:is (string= "Second live turn"
-                           (cdr (assoc :text (car (cdr (assoc :parts (fifth second-contents))))))))
+        (assert-google-message-texts (first second-contents)
+                                    "user"
+                                    '("Please concisely summarize your knowledge graph."))
+        (assert-google-message-texts (second second-contents)
+                                    "model"
+                                    '("Stored persona memory."))
+        (assert-google-message-texts (third second-contents) "user" '("First live turn"))
+        (assert-google-message-texts (fourth second-contents)
+                                    "model"
+                                    '("Hello from Google non-streaming"))
+        (assert-google-message-texts (fifth second-contents) "user" '("Second live turn"))
         (fiveam:is (= 4 (length (conversation-messages conv))))
         (fiveam:is (string= "Stored persona memory."
                            (conversation-persona-memory conv)))))))
@@ -324,15 +322,18 @@
            '(((:filename . "1.txt") (:content . "First diary entry."))
              ((:filename . "2.txt") (:content . "Second diary entry."))))
       (chat "First live turn" :conversation conv)
-      (let* ((payload (cl-json:decode-json-from-string captured-content))
-            (contents (cdr (assoc :contents payload))))
+      (let* ((payload (decode-test-json captured-content))
+            (contents (google-payload-contents payload)))
        (fiveam:is (= 5 (length contents)))
-       (fiveam:is (string= (format nil "[Diary: 1.txt]~%First diary entry.")
-                           (cdr (assoc :text (car (cdr (assoc :parts (third contents))))))))
-       (fiveam:is (string= (format nil "[Diary: 2.txt]~%Second diary entry.")
-                           (cdr (assoc :text (car (cdr (assoc :parts (fourth contents))))))))
-       (fiveam:is (string= "First live turn"
-                           (cdr (assoc :text (car (cdr (assoc :parts (fifth contents))))))))))))
+       (assert-google-message-texts (third contents)
+                                    "model"
+                                    (list (format nil "[Diary: 1.txt]~%First diary entry.")))
+       (assert-google-message-texts (fourth contents)
+                                    "model"
+                                    (list (format nil "[Diary: 2.txt]~%Second diary entry.")))
+       (assert-google-message-texts (fifth contents)
+                                    "user"
+                                    '("First live turn"))))))
 
 (fiveam:test test-google-chat-tool-payload-sanitization
   (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
