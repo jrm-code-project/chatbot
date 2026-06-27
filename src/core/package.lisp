@@ -29,6 +29,7 @@
            "MAKE-RUNTIME-CONTEXT"
            "NEW-CHAT"
            "NEW-CHAT-PERSONA"
+           "RUN-ALL-TESTS"
            "START-AGENTIC-LOOP"
            "LIST-AGENTIC-LOOPS"
            "FIND-AGENTIC-LOOP"
