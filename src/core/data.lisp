@@ -87,7 +87,17 @@
     :initarg :agentic-loop-default-model
     :accessor runtime-context-agentic-loop-default-model
     :initform nil
-    :documentation "Optional default model for new agentic loops in this runtime context.")))
+    :documentation "Optional default model for new agentic loops in this runtime context.")
+   (agentic-loop-registry
+    :initarg :agentic-loop-registry
+    :accessor runtime-context-agentic-loop-registry
+    :initform (make-hash-table)
+    :documentation "The active agentic loops registered in this runtime context.")
+   (agentic-loop-registry-lock
+    :initarg :agentic-loop-registry-lock
+    :accessor runtime-context-agentic-loop-registry-lock
+    :initform (sb-thread:make-mutex :name "agentic-loop-registry-lock")
+    :documentation "Lock protecting agentic-loop-registry updates.")))
 
 (defparameter +default-gemini-fallback-to-google-p+ nil
   "Authoritative default for the Gemini Interactions compatibility fallback.")

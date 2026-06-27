@@ -6,6 +6,7 @@
 (defvar *agentic-loop-registry* (make-hash-table))
 (defvar *agentic-loop-registry-lock* (sb-thread:make-mutex :name "agentic-loop-registry-lock"))
 (defvar *agentic-loop-id-counter* 0)
+(defvar *agentic-loop-id-lock* (sb-thread:make-mutex :name "agentic-loop-id-lock"))
 (defvar *agentic-loop-chat-function* nil
   "Optional test seam overriding the chat function used by agentic loops.")
 
@@ -115,7 +116,7 @@
 
 (defun next-agentic-loop-id ()
   "Returns the next unique autonomous loop identifier."
-  (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+  (sb-thread:with-mutex (*agentic-loop-id-lock*)
     (incf *agentic-loop-id-counter*)))
 
 (defun clone-runtime-context (context &rest initarg-overrides)
@@ -183,29 +184,62 @@
   conversation)
 
 (defun register-agentic-loop (loop)
-  "Registers LOOP in the global autonomous loop registry."
-  (sb-thread:with-mutex (*agentic-loop-registry-lock*)
-    (setf (gethash (agentic-loop-id loop) *agentic-loop-registry*) loop))
-  loop)
+  "Registers LOOP in the autonomous loop registry of its runtime context."
+  (let* ((context (agentic-loop-runtime-context loop))
+         (registry (runtime-context-agentic-loop-registry context))
+         (lock (runtime-context-agentic-loop-registry-lock context)))
+    (sb-thread:with-mutex (lock)
+      (setf (gethash (agentic-loop-id loop) registry) loop))
+    (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+      (setf (gethash (agentic-loop-id loop) *agentic-loop-registry*) loop))
+    loop))
 
-(defun find-agentic-loop (loop-id)
+(defun find-agentic-loop (loop-id &optional context)
   "Returns the autonomous loop identified by LOOP-ID, or NIL."
-  (sb-thread:with-mutex (*agentic-loop-registry-lock*)
-    (gethash loop-id *agentic-loop-registry*)))
+  (if context
+      (let* ((resolved-context (resolve-runtime-context context))
+             (registry (runtime-context-agentic-loop-registry resolved-context))
+             (lock (runtime-context-agentic-loop-registry-lock resolved-context)))
+        (sb-thread:with-mutex (lock)
+          (gethash loop-id registry)))
+      (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+        (gethash loop-id *agentic-loop-registry*))))
 
-(defun list-agentic-loops ()
+(defun list-agentic-loops (&optional context)
   "Returns all registered autonomous loops ordered by id."
-  (sb-thread:with-mutex (*agentic-loop-registry-lock*)
-    (sort (loop for loop being the hash-values of *agentic-loop-registry*
-                collect loop)
-          #'<
-          :key #'agentic-loop-id)))
+  (let ((loops
+          (if context
+              (let* ((resolved-context (resolve-runtime-context context))
+                     (registry (runtime-context-agentic-loop-registry resolved-context))
+                     (lock (runtime-context-agentic-loop-registry-lock resolved-context)))
+                (sb-thread:with-mutex (lock)
+                  (loop for loop being the hash-values of registry
+                        collect loop)))
+              (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+                (loop for loop being the hash-values of *agentic-loop-registry*
+                      collect loop)))))
+    (sort loops #'< :key #'agentic-loop-id)))
 
-(defun clear-agentic-loops ()
+(defun clear-agentic-loops (&optional context)
   "Clears the autonomous loop registry."
-  (sb-thread:with-mutex (*agentic-loop-registry-lock*)
-    (clrhash *agentic-loop-registry*))
-  t)
+  (if context
+      (let* ((resolved-context (resolve-runtime-context context))
+             (registry (runtime-context-agentic-loop-registry resolved-context))
+             (lock (runtime-context-agentic-loop-registry-lock resolved-context))
+             (loop-ids nil))
+        (sb-thread:with-mutex (lock)
+          (setf loop-ids
+                (loop for loop being the hash-values of registry
+                      collect (agentic-loop-id loop)))
+          (clrhash registry))
+        (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+          (dolist (loop-id loop-ids)
+            (remhash loop-id *agentic-loop-registry*)))
+        t)
+      (progn
+        (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+          (clrhash *agentic-loop-registry*))
+        t)))
 
 (defun agentic-loop-thread-alive-p (loop)
   "Returns true when LOOP still has a live worker thread."
@@ -400,10 +434,12 @@
   "Returns LOOP state as a JSON string."
   (cl-json:encode-json-to-string (agentic-loop-public-alist loop)))
 
-(defun agentic-loop-list-json ()
+(defun agentic-loop-list-json (&optional context)
   "Returns all loop states as a JSON string."
   (cl-json:encode-json-to-string
-   `(("loops" . ,(coerce (mapcar #'agentic-loop-public-alist (list-agentic-loops)) 'vector)))))
+   `(("loops" . ,(coerce (mapcar #'agentic-loop-public-alist
+                                (list-agentic-loops context))
+                        'vector)))))
 
 (defun run-agentic-loop-step (loop)
   "Runs one autonomous iteration for LOOP."
@@ -527,9 +563,9 @@
     (spawn-agentic-loop-thread loop)
     loop))
 
-(defun abort-agentic-loop (loop-id &key force)
+(defun abort-agentic-loop (loop-id &key force context)
   "Interrupts the autonomous loop identified by LOOP-ID."
-  (let ((loop (or (find-agentic-loop loop-id)
+  (let ((loop (or (find-agentic-loop loop-id context)
                   (error "Unknown agentic loop id: ~A" loop-id))))
     (setf (agentic-loop-status loop) :interrupted)
     (setf (agentic-loop-result-summary loop) "Interrupted.")
@@ -543,14 +579,14 @@
     (agentic-loop-log :warn loop "interrupted")
     loop))
 
-(defun abort-agentic-loops (&key force)
+(defun abort-agentic-loops (&key force context)
   "Interrupts all registered autonomous loops."
-  (dolist (loop (list-agentic-loops) t)
-    (abort-agentic-loop (agentic-loop-id loop) :force force)))
+  (dolist (loop (list-agentic-loops context) t)
+    (abort-agentic-loop (agentic-loop-id loop) :force force :context context)))
 
-(defun resume-agentic-loop (loop-id &key approve)
+(defun resume-agentic-loop (loop-id &key approve context)
   "Resumes a paused autonomous loop after an explicit approval decision."
-  (let ((loop (or (find-agentic-loop loop-id)
+  (let ((loop (or (find-agentic-loop loop-id context)
                   (error "Unknown agentic loop id: ~A" loop-id))))
     (unless (eq (agentic-loop-status loop) :awaiting-approval)
       (error "Agentic loop ~A is not awaiting approval." loop-id))

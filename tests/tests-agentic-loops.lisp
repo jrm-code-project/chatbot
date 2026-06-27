@@ -200,3 +200,27 @@
            (fiveam:is (string= "gpt-4.1-mini" (cdr (assoc :model execution-profile)))))
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))
+
+
+(fiveam:test test-agentic-loop-registry-context-isolation
+  (let* ((context-a (make-runtime-context))
+         (context-b (make-runtime-context))
+         (conv-a (new-chat :backend :openai :runtime-context context-a))
+         (conv-b (new-chat :backend :openai :runtime-context context-b))
+         (*agentic-loop-chat-function*
+          (lambda (prompt &key conversation callback file files temperature top-p)
+            (declare (ignore prompt conversation callback file files temperature top-p))
+            "FINAL: ok")))
+    (unwind-protect
+         (let ((loop-a (start-agentic-loop conv-a "Goal A" :max-iterations 2))
+               (loop-b (start-agentic-loop conv-b "Goal B" :max-iterations 2)))
+           (fiveam:is (typep (find-agentic-loop (agentic-loop-id loop-a) context-a) 'agentic-loop))
+           (fiveam:is (null (find-agentic-loop (agentic-loop-id loop-a) context-b)))
+           (fiveam:is (typep (find-agentic-loop (agentic-loop-id loop-b) context-b) 'agentic-loop))
+           (fiveam:is (null (find-agentic-loop (agentic-loop-id loop-b) context-a)))
+           (fiveam:is (= 1 (length (list-agentic-loops context-a))))
+           (fiveam:is (= 1 (length (list-agentic-loops context-b)))))
+      (abort-agentic-loops :force t :context context-a)
+      (abort-agentic-loops :force t :context context-b)
+      (clear-agentic-loops context-a)
+      (clear-agentic-loops context-b))))
