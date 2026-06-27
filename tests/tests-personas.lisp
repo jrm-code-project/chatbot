@@ -693,15 +693,11 @@ Paragraph two." s))
       (write-line "{\"entities\":[{\"name\":\"Joe\",\"entityType\":\"person\",\"observations\":[\"likes Lisp\"]}],\"relations\":[]}" s))
     (unwind-protect
         (let ((*user-homedir-pathname-function* (lambda () mock-home))
-              (*read-mcp-config-function*
-                (lambda ()
-                  '((:name "memory"
-                     :command "npx"
-                     :args ("-y" "@modelcontextprotocol/server-memory")
-                     :env (("MEMORY_FILE_PATH" . "default-memory.json"))))))
               (*start-mcp-server-function*
                 (lambda (name command args &optional environment)
-                  (declare (ignore command args))
+                  (fiveam:is (string= "memory" name))
+                  (fiveam:is (search "npx" (string-downcase command)))
+                  (fiveam:is (equal '("-y" "@modelcontextprotocol/server-memory") args))
                   (setf captured-environment environment)
                   (make-instance 'mcp-server :name name)))
               (*mcp-initialize-function* (lambda (server) server))

@@ -111,6 +111,30 @@
     (fiveam:is (equal '(("MEMORY_FILE_PATH" . "persona-memory.json")) environment))
     (fiveam:is (string= "memory tools" system-instruction))))
 
+(fiveam:test test-initialize-configured-mcp-server-falls-back-to-built-in-memory-definition
+  (let ((captured-name nil)
+        (captured-command nil)
+        (captured-args nil)
+        (captured-environment nil))
+    (let ((*read-mcp-config-function* (lambda () nil))
+          (*start-mcp-server-function*
+            (lambda (name command args &optional environment)
+              (setf captured-name name)
+              (setf captured-command command)
+              (setf captured-args args)
+              (setf captured-environment environment)
+              (make-instance 'mcp-server :name name)))
+          (*mcp-initialize-function* (lambda (server) server)))
+      (let ((server (initialize-configured-mcp-server
+                     "memory"
+                     :environment '(("MEMORY_FILE_PATH" . "persona-memory.json")))))
+        (fiveam:is (string= "memory" (mcp-server-name server)))
+        (fiveam:is (string= "memory" captured-name))
+        (fiveam:is (search "npx" (string-downcase captured-command)))
+        (fiveam:is (equal '("-y" "@modelcontextprotocol/server-memory") captured-args))
+        (fiveam:is (equal '(("MEMORY_FILE_PATH" . "persona-memory.json"))
+                          captured-environment))))))
+
 (fiveam:test test-merge-mcp-server-environments-inherits-and-overrides
   (let ((merged (merge-mcp-server-environments
                  '("PATH=C:\\Windows\\System32" "MEMORY_FILE_PATH=default.json")

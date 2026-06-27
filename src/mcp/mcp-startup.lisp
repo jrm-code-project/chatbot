@@ -169,6 +169,15 @@ Supports two formats:
      (cdr (car config)))
     (t config)))
 
+(defun built-in-mcp-server-definition (server-name)
+  "Returns a built-in raw MCP server definition for SERVER-NAME, when one exists."
+  (cond
+    ((string= server-name "memory")
+    '(:name "memory"
+      :command "npx"
+      :args ("-y" "@modelcontextprotocol/server-memory")))
+    (t nil)))
+
 (defun find-configured-mcp-server-definition (server-name &optional (config (read-mcp-config)))
   "Returns the raw configured MCP server definition matching SERVER-NAME."
   (find server-name
@@ -179,9 +188,15 @@ Supports two formats:
 
 (defun initialize-configured-mcp-server (server-name &key environment)
   "Starts and initializes the configured MCP server named SERVER-NAME."
-  (let ((server-def (find-configured-mcp-server-definition server-name)))
+  (let* ((configured-server-def (find-configured-mcp-server-definition server-name))
+        (server-def (or configured-server-def
+                        (built-in-mcp-server-definition server-name))))
     (unless server-def
      (error "Configured MCP server not found: ~A" server-name))
+    (unless configured-server-def
+     (log-prefixed-message "MCP INFO"
+                           (format nil "Using built-in MCP server definition for ~A."
+                                   server-name)))
     (multiple-value-bind (name command args required-p configured-environment system-instruction)
        (parse-mcp-server-def server-def)
      (declare (ignore required-p system-instruction))
