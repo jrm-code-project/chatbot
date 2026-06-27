@@ -178,9 +178,9 @@ Unknown backends fall back to the Gemini default."
   (require-non-empty-string *gemini-api-revision* "Gemini API revision"))
 
 (defvar *mcp-config-path* nil
-  "Compatibility-only ambient override path for the MCP configuration file.
-Prefer MAKE-RUNTIME-CONTEXT with :MCP-CONFIG-PATH and explicit :RUNTIME-CONTEXT
-arguments on public entry points.")
+  "Deprecated compatibility alias for the MCP configuration override path.
+Runtime contexts no longer consult this special; use MAKE-RUNTIME-CONTEXT with
+:MCP-CONFIG-PATH and explicit :RUNTIME-CONTEXT arguments instead.")
 
 (defvar *warn-on-legacy-runtime-globals-p*
   (let ((value (funcall *getenv-function* "CHATBOT_WARN_LEGACY_RUNTIME_GLOBALS")))
@@ -224,46 +224,51 @@ runtime globals are used to override the default runtime context.")
                  :test #'string=))))
 
 (defvar *startup-chatbot* nil
-  "Compatibility-only ambient shared chatbot instance used to own startup MCP servers.
-Prefer INITIALIZE-STARTUP-CHATBOT and explicit runtime contexts over mutating this
-special directly.")
+  "Deprecated compatibility alias for the shared startup chatbot.
+Runtime contexts own startup MCP state; use INITIALIZE-STARTUP-CHATBOT and
+explicit runtime contexts instead of mutating this special directly.")
 
 (defvar *auto-initialize-startup-mcp-servers-p* (eager-mcp-startup-enabled-p)
-  "Compatibility-only ambient flag for eager shared MCP startup.
-Prefer MAKE-RUNTIME-CONTEXT with :AUTO-INITIALIZE-STARTUP-MCP-SERVERS-P.
-Defaults to the CHATBOT_EAGER_MCP_STARTUP environment variable for migration compatibility.")
+  "Deprecated compatibility alias for eager shared MCP startup.
+Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
+:AUTO-INITIALIZE-STARTUP-MCP-SERVERS-P instead.")
 
 (defvar *logging-enabled-p* t
-  "Compatibility-only ambient flag controlling Chatbot logging.
-Prefer MAKE-RUNTIME-CONTEXT with :LOGGING-ENABLED-P.")
+  "Deprecated compatibility alias controlling Chatbot logging.
+Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
+:LOGGING-ENABLED-P.")
 
 (defvar *log-level* :info
-  "Compatibility-only ambient minimum log level.
-Prefer MAKE-RUNTIME-CONTEXT with :LOG-LEVEL.")
+  "Deprecated compatibility alias for the Chatbot minimum log level.
+Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with :LOG-LEVEL.")
 
 (defvar *log-stream* *error-output*
-  "Compatibility-only ambient destination stream for Chatbot log output.
-Prefer MAKE-RUNTIME-CONTEXT with :LOG-STREAM.")
+  "Deprecated compatibility alias for the Chatbot log output stream.
+Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with :LOG-STREAM.")
 
 (defvar *http-connect-timeout* 15
-  "Compatibility-only ambient HTTP connection timeout in seconds.
-Prefer MAKE-RUNTIME-CONTEXT with :HTTP-CONNECT-TIMEOUT.")
+  "Deprecated compatibility alias for the HTTP connection timeout.
+Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
+:HTTP-CONNECT-TIMEOUT.")
 
 (defvar *http-read-timeout* 120
-  "Compatibility-only ambient HTTP response timeout in seconds.
-Prefer MAKE-RUNTIME-CONTEXT with :HTTP-READ-TIMEOUT.")
+  "Deprecated compatibility alias for the HTTP response timeout.
+Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
+:HTTP-READ-TIMEOUT.")
 
 (defvar *default-conversation* nil
   "Compatibility-only ambient default conversation used by CHAT when none is specified.
 Prefer passing :CONVERSATION explicitly or using a runtime context.")
 
 (defvar *agentic-loop-default-backend* nil
-  "Compatibility-only ambient default backend for new agentic loops.
-Prefer MAKE-RUNTIME-CONTEXT with :AGENTIC-LOOP-DEFAULT-BACKEND.")
+  "Deprecated compatibility alias for the agentic-loop default backend.
+Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
+:AGENTIC-LOOP-DEFAULT-BACKEND.")
 
 (defvar *agentic-loop-default-model* nil
-  "Compatibility-only ambient default model for new agentic loops.
-Prefer MAKE-RUNTIME-CONTEXT with :AGENTIC-LOOP-DEFAULT-MODEL.")
+  "Deprecated compatibility alias for the agentic-loop default model.
+Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
+:AGENTIC-LOOP-DEFAULT-MODEL.")
 
 (defvar *default-runtime-context* nil
   "Canonical runtime context used for legacy no-context entry points.")
@@ -275,7 +280,9 @@ Prefer MAKE-RUNTIME-CONTEXT with :AGENTIC-LOOP-DEFAULT-MODEL.")
   "Conversation currently being processed by CHAT, when any.")
 
 (defparameter *runtime-context-legacy-global-specs*
-  '()
+  '((:symbol *default-conversation*
+     :accessor runtime-context-default-conversation
+     :warn-p t))
   "Authoritative compatibility-global mirror specification for runtime contexts.")
 
 (defun runtime-context-legacy-global-symbol (spec)
@@ -347,7 +354,7 @@ compatibility-only ambient special variables."
                      :mcp-config-path (inherit mcp-config-path-p
                                                mcp-config-path
                                                #'runtime-context-mcp-config-path
-                                               *mcp-config-path*)
+                                               nil)
                      :startup-chatbot (if startup-chatbot-p
                                           startup-chatbot
                                           nil)
@@ -355,27 +362,27 @@ compatibility-only ambient special variables."
                      (inherit auto-init-p
                               auto-initialize-startup-mcp-servers-p
                               #'runtime-context-auto-initialize-startup-mcp-servers-p
-                              *auto-initialize-startup-mcp-servers-p*)
+                              (eager-mcp-startup-enabled-p))
                      :logging-enabled-p (inherit logging-enabled-p-p
                                                  logging-enabled-p
                                                  #'runtime-context-logging-enabled-p
-                                                 *logging-enabled-p*)
+                                                 t)
                      :log-level (inherit log-level-p
                                          log-level
                                          #'runtime-context-log-level
-                                         *log-level*)
+                                         :info)
                      :log-stream (inherit log-stream-p
                                           log-stream
                                           #'runtime-context-log-stream
-                                          *log-stream*)
+                                          *error-output*)
                      :http-connect-timeout (inherit http-connect-timeout-p
                                                     http-connect-timeout
                                                     #'runtime-context-http-connect-timeout
-                                                    *http-connect-timeout*)
+                                                    15)
                      :http-read-timeout (inherit http-read-timeout-p
                                                  http-read-timeout
                                                  #'runtime-context-http-read-timeout
-                                                 *http-read-timeout*)
+                                                 120)
                      :getenv-function (inherit getenv-function-p
                                                getenv-function
                                                #'runtime-context-getenv-function
@@ -403,17 +410,17 @@ compatibility-only ambient special variables."
                                                       *eval-approval-function*)
                      :default-conversation (if default-conversation-p
                                                default-conversation
-                                               nil)
+                                               *default-conversation*)
                      :agentic-loop-default-backend
                      (inherit agentic-loop-default-backend-p
                               agentic-loop-default-backend
                               #'runtime-context-agentic-loop-default-backend
-                              *agentic-loop-default-backend*)
+                              nil)
                      :agentic-loop-default-model
                      (inherit agentic-loop-default-model-p
                               agentic-loop-default-model
                               #'runtime-context-agentic-loop-default-model
-                              *agentic-loop-default-model*)))))
+                              nil)))))
 
 (defun sync-runtime-context-from-legacy-globals (context &key (warn-p t))
   "Copies legacy global runtime values into CONTEXT."
@@ -575,67 +582,94 @@ compatibility-only ambient special variables."
                                           ',legacy-symbol
                                           :default-uses-legacy-p ,default-uses-legacy-p))))
 
+(defun runtime-context-owned-value (context accessor)
+  "Returns ACCESSOR from the resolved runtime context, preferring the active context."
+  (let ((resolved-context (resolve-runtime-context context)))
+    (and resolved-context
+        (runtime-context-accessor-value resolved-context accessor))))
+
+(defun set-runtime-context-owned-value (value context accessor legacy-symbol)
+  "Stores VALUE through ACCESSOR on the resolved runtime context.
+When the canonical default runtime context is updated, keep LEGACY-SYMBOL in sync
+as a compatibility alias."
+  (let ((resolved-context (or (resolve-runtime-context context)
+                             *default-runtime-context*)))
+    (when resolved-context
+      (set-runtime-context-accessor-value resolved-context accessor value)
+      (when (default-runtime-context-p resolved-context)
+       (setf (symbol-value legacy-symbol) value))))
+  value)
+
+(defmacro define-context-owned-runtime-context-helper (name accessor legacy-symbol getter-doc setter-doc)
+  `(progn
+     (defun ,name (&optional context)
+       ,getter-doc
+       (runtime-context-owned-value context ',accessor))
+     (defun (setf ,name) (value &optional context)
+       ,setter-doc
+       (set-runtime-context-owned-value value context ',accessor ',legacy-symbol))))
+
 (define-mirrored-runtime-context-helper current-default-conversation
   runtime-context-default-conversation
   *default-conversation*
   "Returns the ambient default conversation for CONTEXT."
   "Sets the ambient default conversation for CONTEXT.")
 
-(define-mirrored-runtime-context-helper current-mcp-config-path
+(define-context-owned-runtime-context-helper current-mcp-config-path
   runtime-context-mcp-config-path
   *mcp-config-path*
   "Returns the ambient MCP configuration override path for CONTEXT."
   "Sets the ambient MCP configuration override path for CONTEXT.")
 
-(define-mirrored-runtime-context-helper current-startup-chatbot
+(define-context-owned-runtime-context-helper current-startup-chatbot
   runtime-context-startup-chatbot
   *startup-chatbot*
   "Returns the shared startup chatbot for CONTEXT."
   "Sets the shared startup chatbot for CONTEXT.")
 
-(define-mirrored-runtime-context-helper current-auto-initialize-startup-mcp-servers-p
+(define-context-owned-runtime-context-helper current-auto-initialize-startup-mcp-servers-p
   runtime-context-auto-initialize-startup-mcp-servers-p
   *auto-initialize-startup-mcp-servers-p*
   "Returns whether startup MCP auto-initialization is enabled for CONTEXT."
   "Sets whether startup MCP auto-initialization is enabled for CONTEXT.")
 
-(define-mirrored-runtime-context-helper current-logging-enabled-p
+(define-context-owned-runtime-context-helper current-logging-enabled-p
   runtime-context-logging-enabled-p
   *logging-enabled-p*
   "Returns whether logging is enabled for CONTEXT."
   "Sets whether logging is enabled for CONTEXT.")
 
-(define-mirrored-runtime-context-helper current-log-level
+(define-context-owned-runtime-context-helper current-log-level
   runtime-context-log-level
   *log-level*
   "Returns the current log level for CONTEXT."
   "Sets the current log level for CONTEXT.")
 
-(define-mirrored-runtime-context-helper current-log-stream
+(define-context-owned-runtime-context-helper current-log-stream
   runtime-context-log-stream
   *log-stream*
   "Returns the current log stream for CONTEXT."
   "Sets the current log stream for CONTEXT.")
 
-(define-mirrored-runtime-context-helper current-http-connect-timeout
+(define-context-owned-runtime-context-helper current-http-connect-timeout
   runtime-context-http-connect-timeout
   *http-connect-timeout*
   "Returns the current HTTP connect timeout for CONTEXT."
   "Sets the current HTTP connect timeout for CONTEXT.")
 
-(define-mirrored-runtime-context-helper current-http-read-timeout
+(define-context-owned-runtime-context-helper current-http-read-timeout
   runtime-context-http-read-timeout
   *http-read-timeout*
   "Returns the current HTTP read timeout for CONTEXT."
   "Sets the current HTTP read timeout for CONTEXT.")
 
-(define-mirrored-runtime-context-helper current-agentic-loop-default-backend
+(define-context-owned-runtime-context-helper current-agentic-loop-default-backend
   runtime-context-agentic-loop-default-backend
   *agentic-loop-default-backend*
   "Returns the default backend for new agentic loops in CONTEXT."
   "Sets the default backend for new agentic loops in CONTEXT.")
 
-(define-mirrored-runtime-context-helper current-agentic-loop-default-model
+(define-context-owned-runtime-context-helper current-agentic-loop-default-model
   runtime-context-agentic-loop-default-model
   *agentic-loop-default-model*
   "Returns the default model for new agentic loops in CONTEXT."
@@ -680,7 +714,9 @@ compatibility-only ambient special variables."
   :default-uses-legacy-p t)
 
 (defun call-with-runtime-context (context thunk)
-  "Calls THUNK with legacy special variables rebound from CONTEXT when CONTEXT is non-nil."
+  "Calls THUNK with the resolved runtime context active.
+Only *DEFAULT-CONVERSATION* still requires legacy special rebinding; all other
+runtime settings are read from the runtime context directly."
   (let* ((resolved-context (resolve-runtime-context context :sync-from-globals-p t))
          (default-context-p (default-runtime-context-p resolved-context)))
     (if (null resolved-context)

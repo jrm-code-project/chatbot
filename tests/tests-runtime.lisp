@@ -57,7 +57,7 @@
       :timeout-context "test stream"))
     (fiveam:is (< (/ (- (get-internal-real-time) start) units) 2.0))))
 
-(fiveam:test test-legacy-timeout-globals-sync-through-default-runtime-context
+(fiveam:test test-legacy-timeout-globals-do-not-override-default-runtime-context
   (let* ((conv (new-chat :backend :google))
          (captured-connect-timeout nil)
          (captured-read-timeout nil)
@@ -75,13 +75,16 @@
             (setf captured-read-timeout (getf args :read-timeout))
             (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from globals\"}], \"role\": \"model\"}}]}" 200)))
     (unwind-protect
-         (let ((*http-connect-timeout* 21)
-               (*http-read-timeout* 84))
-           (fiveam:is (string= "Hello from globals" (chat "Hi" :conversation conv)))
-           (fiveam:is (= 21 captured-connect-timeout))
-           (fiveam:is (= 84 captured-read-timeout))
-           (fiveam:is (= 21 (runtime-context-http-connect-timeout *default-runtime-context*)))
-           (fiveam:is (= 84 (runtime-context-http-read-timeout *default-runtime-context*))))
+         (progn
+           (setf (runtime-context-http-connect-timeout *default-runtime-context*) 17)
+           (setf (runtime-context-http-read-timeout *default-runtime-context*) 71)
+           (let ((*http-connect-timeout* 21)
+                 (*http-read-timeout* 84))
+             (fiveam:is (string= "Hello from globals" (chat "Hi" :conversation conv)))
+             (fiveam:is (= 17 captured-connect-timeout))
+             (fiveam:is (= 71 captured-read-timeout))
+             (fiveam:is (= 17 (current-http-connect-timeout)))
+             (fiveam:is (= 71 (current-http-read-timeout)))))
       (setf *gemini-api-key-function* original-gemini-api-key-function)
       (setf *http-post-function* original-post-function)
       (setf *http-connect-timeout* original-connect-timeout)
@@ -98,6 +101,15 @@
        (original-connect-timeout *http-connect-timeout*)
        (original-read-timeout *http-read-timeout*)
        (context *default-runtime-context*)
+       (original-context-path (runtime-context-mcp-config-path *default-runtime-context*))
+       (original-context-auto-init
+        (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*))
+       (original-context-logging-enabled
+        (runtime-context-logging-enabled-p *default-runtime-context*))
+       (original-context-log-level (runtime-context-log-level *default-runtime-context*))
+       (original-context-log-stream (runtime-context-log-stream *default-runtime-context*))
+       (original-context-connect (runtime-context-http-connect-timeout *default-runtime-context*))
+       (original-context-read (runtime-context-http-read-timeout *default-runtime-context*))
        (test-stream (make-string-output-stream)))
     (unwind-protect
         (progn
@@ -129,7 +141,13 @@
       (setf *log-stream* original-log-stream)
       (setf *http-connect-timeout* original-connect-timeout)
       (setf *http-read-timeout* original-read-timeout)
-      (sync-runtime-context-from-legacy-globals context))))
+      (setf (runtime-context-mcp-config-path context) original-context-path)
+      (setf (runtime-context-auto-initialize-startup-mcp-servers-p context) original-context-auto-init)
+      (setf (runtime-context-logging-enabled-p context) original-context-logging-enabled)
+      (setf (runtime-context-log-level context) original-context-log-level)
+      (setf (runtime-context-log-stream context) original-context-log-stream)
+      (setf (runtime-context-http-connect-timeout context) original-context-connect)
+      (setf (runtime-context-http-read-timeout context) original-context-read))))
 
 (fiveam:test test-continue-stateless-tool-recursion-updates-history-and-preserves-order
   (let* ((conversation (new-chat :backend :openai))
@@ -273,21 +291,16 @@
       (fiveam:is (= 19 (runtime-context-http-connect-timeout context)))
       (fiveam:is (= 88 (runtime-context-http-read-timeout context))))))
 
-(fiveam:test test-legacy-runtime-global-warning-is-opt-in-and-once
-  (let ((*warn-on-legacy-runtime-globals-p* t)
-        (*legacy-runtime-global-warnings-issued* nil)
-        (original-read-timeout *http-read-timeout*)
+(fiveam:test test-deprecated-runtime-globals-no-longer-override-current-helpers
+  (let ((original-read-timeout *http-read-timeout*)
         (original-context-read (runtime-context-http-read-timeout *default-runtime-context*)))
     (unwind-protect
-         (let ((*error-output* (make-string-output-stream)))
+         (progn
+           (setf (runtime-context-http-read-timeout *default-runtime-context*) 88)
            (setf *http-read-timeout* 141)
-           (current-http-read-timeout)
-           (fiveam:is (string= "" (get-output-stream-string *error-output*)))
-           (current-http-read-timeout)
-           (fiveam:is (string= "" (get-output-stream-string *error-output*))))
+           (fiveam:is (= 88 (current-http-read-timeout))))
       (setf *http-read-timeout* original-read-timeout)
-      (setf (runtime-context-http-read-timeout *default-runtime-context*) original-context-read)
-      (setf *legacy-runtime-global-warnings-issued* nil))))
+      (setf (runtime-context-http-read-timeout *default-runtime-context*) original-context-read))))
 
 (fiveam:test test-explicit-runtime-context-does-not-warn-about-legacy-globals
   (let* ((context (make-runtime-context :http-connect-timeout 7))
@@ -919,38 +932,44 @@ After fence.")
     (fiveam:is-false (search "continuation text~%that should also stay" output))))
 
 (fiveam:test test-log-message-level-filtering
-  (let ((*logging-enabled-p* t)
-        (*log-level* :warn))
-    (let ((output (with-output-to-string (s)
-                    (let ((*log-stream* s))
-                      (log-message :info "skip me")
-                      (log-message :error "keep me")))))
-      (fiveam:is (null (search "skip me" output)))
-      (fiveam:is (search "keep me" output)))))
+  (let ((output (with-output-to-string (s)
+                  (let ((context (make-runtime-context :logging-enabled-p t
+                                                       :log-level :warn
+                                                       :log-stream s)))
+                    (call-with-runtime-context
+                     context
+                     (lambda ()
+                       (log-message :info "skip me")
+                       (log-message :error "keep me")))))))
+    (fiveam:is (null (search "skip me" output)))
+    (fiveam:is (search "keep me" output))))
 
 (fiveam:test test-log-backend-response-stats
-  (let ((*logging-enabled-p* t)
-        (*log-level* :info))
-    (let ((output (with-output-to-string (s)
-                    (let ((*log-stream* s))
-                      (log-backend-response-stats
-                       :google
-                       :http-status 200
-                       :response-id "resp-123"
-                       :model "gemini-3.5-flash"
-                       :finish-reason "STOP"
-                       :usage '((:prompt-token-count . 12)
-                                (:candidates-token-count . 7)
-                                (:thoughts-token-count . 3)
-                                (:total-token-count . 22)))))))
-      (fiveam:is (search "Backend response stats" output))
-      (fiveam:is (search "backend: google" output))
-      (fiveam:is (search "http-status: 200" output))
-      (fiveam:is (search "response-id: resp-123" output))
-      (fiveam:is (search "prompt-tokens: 12" output))
-      (fiveam:is (search "completion-tokens: 7" output))
-      (fiveam:is (search "thought-tokens: 3" output))
-      (fiveam:is (search "total-tokens: 22" output)))))
+  (let ((output (with-output-to-string (s)
+                  (let ((context (make-runtime-context :logging-enabled-p t
+                                                       :log-level :info
+                                                       :log-stream s)))
+                    (call-with-runtime-context
+                     context
+                     (lambda ()
+                       (log-backend-response-stats
+                        :google
+                        :http-status 200
+                        :response-id "resp-123"
+                        :model "gemini-3.5-flash"
+                        :finish-reason "STOP"
+                        :usage '((:prompt-token-count . 12)
+                                 (:candidates-token-count . 7)
+                                 (:thoughts-token-count . 3)
+                                 (:total-token-count . 22)))))))))
+    (fiveam:is (search "Backend response stats" output))
+    (fiveam:is (search "backend: google" output))
+    (fiveam:is (search "http-status: 200" output))
+    (fiveam:is (search "response-id: resp-123" output))
+    (fiveam:is (search "prompt-tokens: 12" output))
+    (fiveam:is (search "completion-tokens: 7" output))
+    (fiveam:is (search "thought-tokens: 3" output))
+    (fiveam:is (search "total-tokens: 22" output))))
 
 (fiveam:test test-write-turn-token-summary-supports-interactions-usage-keys
   (reset-global-token-grand-totals)
@@ -1025,11 +1044,7 @@ After fence.")
                       (current-global-token-grand-totals)))))
 
 (fiveam:test test-post-web-request-logging-redacts-secrets
-  (let ((*logging-enabled-p* t)
-        (*log-level* :info)
-        (*http-connect-timeout* 15)
-        (*http-read-timeout* 120)
-        (captured-url nil)
+  (let ((captured-url nil)
         (captured-headers nil)
         (captured-content nil)
         (captured-connect-timeout nil)
@@ -1044,15 +1059,24 @@ After fence.")
             (setf captured-read-timeout (getf args :read-timeout))
             (values "{\"ok\":true}" 200)))
     (unwind-protect
-         (let ((log-output (with-output-to-string (s)
-                             (let ((*log-stream* s))
-                               (post-web-request "https://example.com/test?key=secret-value"
-                                                 '(("Authorization" . "Bearer secret-token")
-                                                   ("Content-Type" . "application/json"))
-                                                 "{\"hello\":\"world\"}")))))
+         (let ((log-output
+                 (with-output-to-string (s)
+                   (let ((context (make-runtime-context :logging-enabled-p t
+                                                       :log-level :info
+                                                       :log-stream s
+                                                       :http-post-function *http-post-function*
+                                                       :http-connect-timeout 15
+                                                       :http-read-timeout 120)))
+                     (call-with-runtime-context
+                      context
+                      (lambda ()
+                        (post-web-request "https://example.com/test?key=secret-value"
+                                         '(("Authorization" . "Bearer secret-token")
+                                           ("Content-Type" . "application/json"))
+                                         "{\"hello\":\"world\"}")))))))
            (fiveam:is (string= "https://example.com/test?key=secret-value" captured-url))
            (fiveam:is (equal '(("Authorization" . "Bearer secret-token")
-                               ("Content-Type" . "application/json"))
+                              ("Content-Type" . "application/json"))
                              captured-headers))
            (fiveam:is (string= "{\"hello\":\"world\"}" captured-content))
            (fiveam:is (= 15 captured-connect-timeout))
@@ -1152,12 +1176,14 @@ data: [DONE]")
       (fiveam:is (string= "Hello done" (chat "Hi done" :conversation conv))))))
 
 (fiveam:test test-new-chat-reuses-startup-mcp-servers
-  (let ((*startup-chatbot* nil))
+  (let ((original-startup-chatbot *startup-chatbot*)
+        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*)))
     (let ((*initialize-mcp-servers-for-chatbot-function*
            (lambda (bot &key strict-required-p)
-              (declare (ignore strict-required-p))
-              (setf (chatbot-mcp-servers bot) '(:shared-server))
-              bot)))
+             (declare (ignore strict-required-p))
+             (setf (chatbot-mcp-servers bot) '(:shared-server))
+             bot)))
+      (setf *startup-chatbot* nil)
       (setf (runtime-context-startup-chatbot *default-runtime-context*) nil)
       (initialize-startup-chatbot)
       (let* ((conv (new-chat))
@@ -1167,7 +1193,9 @@ data: [DONE]")
         (fiveam:is (eq *startup-chatbot*
                        (runtime-context-startup-chatbot *default-runtime-context*)))
         (fiveam:is (eq (chatbot-mcp-servers bot)
-                       (chatbot-mcp-servers *startup-chatbot*)))))))
+                       (chatbot-mcp-servers *startup-chatbot*))))
+      (setf *startup-chatbot* original-startup-chatbot)
+      (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot))))
 
 (fiveam:test test-explicit-runtime-context-isolates-startup-mcp-servers
   (let* ((context-a (make-runtime-context))
@@ -1192,16 +1220,21 @@ data: [DONE]")
         (fiveam:is (null (chatbot-mcp-servers (conversation-chatbot conv-default))))))))
 
 (fiveam:test test-new-chat-does-not-start-mcp-servers
-  (let ((*startup-chatbot* nil)
+  (let ((original-startup-chatbot *startup-chatbot*)
+        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
         (init-calls 0))
     (let ((*initialize-mcp-servers-for-chatbot-function*
            (lambda (bot &key strict-required-p)
              (declare (ignore bot strict-required-p))
              (incf init-calls))))
+      (setf *startup-chatbot* nil)
+      (setf (runtime-context-startup-chatbot *default-runtime-context*) nil)
       (let* ((conv (new-chat))
-            (bot (conversation-chatbot conv)))
+             (bot (conversation-chatbot conv)))
         (fiveam:is (= 0 init-calls))
-        (fiveam:is (null (chatbot-mcp-servers bot)))))))
+        (fiveam:is (null (chatbot-mcp-servers bot))))
+      (setf *startup-chatbot* original-startup-chatbot)
+      (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot))))
 
 (fiveam:test test-new-chat-auto-initializes-startup-mcp-servers-when-enabled
   (let* ((context (make-runtime-context :auto-initialize-startup-mcp-servers-p t))
@@ -1222,67 +1255,101 @@ data: [DONE]")
                       (chatbot-mcp-servers (current-startup-chatbot context))))))))
 
 (fiveam:test test-auto-startup-chatbot-defaults-to-noop
-  (let ((*startup-chatbot* nil)
-       (*auto-initialize-startup-mcp-servers-p* nil)
-       (init-calls 0))
+  (let ((original-startup-chatbot *startup-chatbot*)
+        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
+        (original-auto-init *auto-initialize-startup-mcp-servers-p*)
+        (original-context-auto-init
+         (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*))
+        (init-calls 0))
     (let ((*initialize-mcp-servers-for-chatbot-function*
            (lambda (bot &key strict-required-p)
              (declare (ignore bot strict-required-p))
              (incf init-calls))))
+      (setf *startup-chatbot* nil)
+      (setf (runtime-context-startup-chatbot *default-runtime-context*) nil)
+      (setf *auto-initialize-startup-mcp-servers-p* nil)
+      (setf (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*) nil)
       (maybe-auto-initialize-startup-chatbot)
       (fiveam:is (= 0 init-calls))
-      (fiveam:is-false (startup-chatbot-initialized-p)))))
+      (fiveam:is-false (startup-chatbot-initialized-p))
+      (setf *startup-chatbot* original-startup-chatbot)
+      (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot)
+      (setf *auto-initialize-startup-mcp-servers-p* original-auto-init)
+      (setf (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*)
+            original-context-auto-init))))
 
 (fiveam:test test-auto-startup-chatbot-honors-compatibility-flag
-  (let ((*startup-chatbot* nil)
-        (*auto-initialize-startup-mcp-servers-p* t))
+  (let ((original-startup-chatbot *startup-chatbot*)
+        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
+        (original-auto-init *auto-initialize-startup-mcp-servers-p*)
+        (original-context-auto-init
+         (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*)))
     (let ((*initialize-mcp-servers-for-chatbot-function*
            (lambda (bot &key strict-required-p)
              (declare (ignore strict-required-p))
              (setf (chatbot-mcp-servers bot) '(:shared-server))
              bot)))
+      (setf *startup-chatbot* nil)
+      (setf (runtime-context-startup-chatbot *default-runtime-context*) nil)
+      (setf *auto-initialize-startup-mcp-servers-p* t)
+      (setf (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*) t)
       (maybe-auto-initialize-startup-chatbot)
       (fiveam:is-true (startup-chatbot-initialized-p))
       (fiveam:is (equal '(:shared-server)
-                       (chatbot-mcp-servers *startup-chatbot*))))))
+                        (chatbot-mcp-servers *startup-chatbot*)))
+      (setf *startup-chatbot* original-startup-chatbot)
+      (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot)
+      (setf *auto-initialize-startup-mcp-servers-p* original-auto-init)
+      (setf (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*)
+            original-context-auto-init))))
 
 (fiveam:test test-startup-chatbot-exposes-partial-startup-status
-  (let ((*startup-chatbot* nil))
+  (let ((original-startup-chatbot *startup-chatbot*)
+        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*)))
     (let ((*read-mcp-config-function*
-            (lambda ()
-              '((:name "healthy-server" :command "sbcl" :args ("--script" "healthy.lisp"))
-                (:name "optional-failure" :command "sbcl" :args ("--script" "broken.lisp")))))
+           (lambda ()
+             '((:name "healthy-server" :command "sbcl" :args ("--script" "healthy.lisp"))
+               (:name "optional-failure" :command "sbcl" :args ("--script" "broken.lisp")))))
           (*start-mcp-server-function*
-            (lambda (name command args)
-              (declare (ignore command args))
-              (if (string= name "optional-failure")
-                  (error "launch failed")
-                  (make-instance 'mcp-server :name name))))
+           (lambda (name command args)
+             (declare (ignore command args))
+             (if (string= name "optional-failure")
+                 (error "launch failed")
+                 (make-instance 'mcp-server :name name))))
           (*mcp-initialize-function* (lambda (server) server)))
+      (setf *startup-chatbot* nil)
+      (setf (runtime-context-startup-chatbot *default-runtime-context*) nil)
       (initialize-startup-chatbot)
       (let ((status (startup-chatbot-mcp-status)))
         (fiveam:is-true (startup-chatbot-initialized-p))
         (fiveam:is (typep status 'mcp-startup-status))
         (fiveam:is-true (mcp-startup-status-partial-failure-p status))
-        (fiveam:is (= 1 (mcp-startup-status-failed-count status)))))))
+        (fiveam:is (= 1 (mcp-startup-status-failed-count status))))
+      (setf *startup-chatbot* original-startup-chatbot)
+      (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot))))
 
 (fiveam:test test-startup-chatbot-does-not-initialize-on-strict-required-failure
-  (let ((*startup-chatbot* nil))
+  (let ((original-startup-chatbot *startup-chatbot*)
+        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*)))
     (let ((*read-mcp-config-function*
-            (lambda ()
-              '((:name "required-failure"
-                 :command "sbcl"
-                 :args ("--script" "broken.lisp")
-                 :required t))))
+           (lambda ()
+             '((:name "required-failure"
+                :command "sbcl"
+                :args ("--script" "broken.lisp")
+                :required t))))
           (*start-mcp-server-function*
-            (lambda (name command args)
-              (declare (ignore name command args))
-              (error "launch failed")))
+           (lambda (name command args)
+             (declare (ignore name command args))
+             (error "launch failed")))
           (*mcp-initialize-function* (lambda (server) server)))
+      (setf *startup-chatbot* nil)
+      (setf (runtime-context-startup-chatbot *default-runtime-context*) nil)
       (fiveam:signals mcp-startup-error
-        (initialize-startup-chatbot nil :strict-required-p t)))
-    (fiveam:is-false (startup-chatbot-initialized-p))
-    (fiveam:is-false (startup-chatbot-mcp-status))))
+        (initialize-startup-chatbot nil :strict-required-p t))
+      (fiveam:is-false (startup-chatbot-initialized-p))
+      (fiveam:is-false (startup-chatbot-mcp-status))
+      (setf *startup-chatbot* original-startup-chatbot)
+      (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot))))
 
 (fiveam:test test-shutdown-chatbot-preserves-shared-startup-servers
   (let* ((context (make-runtime-context))

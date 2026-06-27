@@ -61,9 +61,7 @@
   (let* ((temp-dir (uiop:default-temporary-directory))
          (mock-home (merge-pathnames "mock-home-preload-log/" temp-dir))
          (personas-dir (merge-pathnames ".Personas/" mock-home))
-         (test-persona-dir (merge-pathnames "persona-preload-log/" personas-dir))
-         (*logging-enabled-p* t)
-         (*log-level* :info))
+         (test-persona-dir (merge-pathnames "persona-preload-log/" personas-dir)))
     (ensure-directories-exist test-persona-dir)
     (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
                        :direction :output
@@ -76,8 +74,13 @@
     (unwind-protect
          (let ((*user-homedir-pathname-function* (lambda () mock-home)))
            (let ((output (with-output-to-string (s)
-                           (let ((*log-stream* s))
-                             (new-chat-persona "persona-preload-log")))))
+                           (let ((context (make-runtime-context :logging-enabled-p t
+                                                                :log-level :info
+                                                                :log-stream s)))
+                             (call-with-runtime-context
+                              context
+                              (lambda ()
+                                (new-chat-persona "persona-preload-log")))))))
              (fiveam:is (search "Loading persona memory preload" output))
              (fiveam:is (search "source: compressed-memory.txt" output))))
       (uiop:delete-directory-tree mock-home :validate t))))

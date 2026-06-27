@@ -37,8 +37,11 @@
     response))
 
 (fiveam:test test-mcp-config-resolution
-  (let ((*mcp-config-path* "test-mcp-config.lisp"))
-    (fiveam:is (string= "test-mcp-config.lisp" (get-mcp-config-path)))))
+  (let ((context (make-runtime-context :mcp-config-path "test-mcp-config.lisp")))
+    (call-with-runtime-context
+     context
+     (lambda ()
+       (fiveam:is (string= "test-mcp-config.lisp" (get-mcp-config-path)))))))
 
 (fiveam:test test-mcp-tool-translation
   (let ((mcp-tool '((:name . "calculate_sum")
@@ -153,14 +156,18 @@
                                    '((:result . "ok"))))))))
     (unwind-protect
          (let ((output (with-output-to-string (s)
-                         (let ((*log-stream* s)
-                               (*logging-enabled-p* t))
-                           (fiveam:is (equal '((:result . "ok"))
-                                             (default-mcp-send-request
-                                              server
-                                              "tools/call"
-                                              '((:name . "echo_tool")
-                                                (:arguments . ((:value . "payload")))))))))))
+                         (let ((context (make-runtime-context :logging-enabled-p t
+                                                              :log-level :info
+                                                              :log-stream s)))
+                           (call-with-runtime-context
+                            context
+                            (lambda ()
+                              (fiveam:is (equal '((:result . "ok"))
+                                                (default-mcp-send-request
+                                                 server
+                                                 "tools/call"
+                                                 '((:name . "echo_tool")
+                                                   (:arguments . ((:value . "payload")))))))))))))
            (fiveam:is (search "Request ID 1: tools/call (echo_tool)" output))
            (fiveam:is (search "Response ID 1 received (echo_tool)" output)))
       (sb-thread:join-thread worker))))
