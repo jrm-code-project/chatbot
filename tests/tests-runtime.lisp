@@ -850,10 +850,19 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
       (setf (chatbot-system-instruction-storage-kind bot) :markdown-file)
       (fiveam:is (string= "Handled empty args" (chat "Inspect directives" :conversation conv)))
       (fiveam:is (= 2 call-count))
-      (let ((second-payload (first captured-payloads)))
-        (fiveam:is (search "\"name\":\"readSystemInstructions\"" second-payload))
-        (fiveam:is (search "\\\"paragraphs\\\":[\\\"Directive one.\\\",\\\"Directive two.\\\"]"
-                           second-payload))))))
+      (let* ((second-payload (decode-test-json (first captured-payloads)))
+             (input (interaction-payload-input second-payload))
+             (result-step (first input))
+             (result-parts (test-json-elements
+                            (test-json-value-any result-step '("result" :result))))
+             (result-text (decode-test-json
+                           (test-json-value-any (first result-parts) '("text" :text)))))
+        (assert-json-field= second-payload "previous_interaction_id" "session-1")
+        (assert-json-field= result-step "type" "function_result")
+        (assert-json-field= result-step "name" "readSystemInstructions")
+        (fiveam:is (equal '("Directive one." "Directive two.")
+                          (test-json-elements
+                           (test-json-value-any result-text '("paragraphs" :paragraphs)))))))))
 
 (fiveam:test test-text-formatting
   (let ((wrapped (wrap-text "This is a test of the line wrapping utility." :width 15)))

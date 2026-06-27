@@ -576,14 +576,16 @@ data: [DONE]")
                   (chat "Run tool" :conversation conv))))
         (fiveam:is (string= "Handled tool error" res))
         (fiveam:is (= 2 (length captured-payloads)))
-        (let* ((second-payload (cl-json:decode-json-from-string (second captured-payloads)))
-              (messages (cdr (assoc :messages second-payload)))
+        (let* ((second-payload (decode-test-json (second captured-payloads)))
+              (messages (test-json-elements
+                         (test-json-value-any second-payload '(:messages "messages"))))
               (tool-msg (fourth messages))
-              (tool-content (cdr (assoc :content tool-msg))))
-         (fiveam:is (string= "tool" (cdr (assoc :role tool-msg))))
-         (fiveam:is (search "\"type\":\"tool_error\"" tool-content))
-         (fiveam:is (search "\"toolName\":\"echo_tool\"" tool-content))
-         (fiveam:is (search "\"message\":\"Mock tool failure\"" tool-content)))))))
+              (tool-content (decode-test-json
+                             (test-json-value-any tool-msg '(:content "content")))))
+         (assert-json-field= tool-msg :role "tool")
+         (assert-json-field= tool-content "type" "tool_error")
+         (assert-json-field= tool-content "toolName" "echo_tool")
+         (assert-json-field= tool-content "message" "Mock tool failure"))))))
 
 (fiveam:test test-openai-tool-recursion-depth-is-capped
   (let ((conv (new-chat :backend :openai :system-instruction "Be helpful"))
