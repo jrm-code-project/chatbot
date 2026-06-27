@@ -177,6 +177,36 @@
      (fiveam:is (search "[Tokens] prompt: 2" output))
      (fiveam:is (string= "Shared reply" callback-text)))))
 
+(fiveam:test test-emit-chat-response-text-prints-short-thoughts
+  (reset-global-token-grand-totals)
+  (let ((stream (make-string-output-stream)))
+    (let ((*standard-output* stream))
+     (emit-chat-response-text
+      "Shared reply"
+      :usage '(("total_input_tokens" . 2)
+               ("total_output_tokens" . 3)
+               ("total_thought_tokens" . 4)
+               ("total_tokens" . 9))
+      :thought-text "Tiny chain of thought"))
+    (let ((output (get-output-stream-string stream)))
+     (fiveam:is (search "[Thoughts]" output))
+     (fiveam:is (search "Tiny chain of thought" output)))))
+
+(fiveam:test test-emit-chat-response-text-does-not-print-long-thoughts
+  (reset-global-token-grand-totals)
+  (let ((stream (make-string-output-stream)))
+    (let ((*standard-output* stream))
+     (emit-chat-response-text
+      "Shared reply"
+      :usage '(("total_input_tokens" . 2)
+               ("total_output_tokens" . 3)
+               ("total_thought_tokens" . 16)
+               ("total_tokens" . 21))
+      :thought-text "Do not print this"))
+    (let ((output (get-output-stream-string stream)))
+     (fiveam:is (null (search "[Thoughts]" output)))
+     (fiveam:is (null (search "Do not print this" output))))))
+
 (fiveam:test test-finish-stateless-text-turn-emits-and-persists-history
   (let* ((conversation (new-chat :backend :google))
         (history-messages (list (list (cons "role" "user")
@@ -918,6 +948,19 @@ After fence.")
     (fiveam:is (search "thought: 3" output))
     (fiveam:is (search "total: 22" output))
     (fiveam:is (search "[Tokens Total] prompt: 12 completion: 7 thought: 3 total: 22" output))))
+
+(fiveam:test test-write-turn-token-summary-uses-embedded-thought-text
+  (reset-global-token-grand-totals)
+  (let ((output (with-output-to-string (s)
+                  (write-turn-token-summary
+                   '(("total_input_tokens" . 12)
+                     ("total_output_tokens" . 7)
+                     ("total_thought_tokens" . 3)
+                     ("total_tokens" . 22)
+                     ("thoughtText" . "Visible thought"))
+                   :stream s))))
+    (fiveam:is (search "[Thoughts]" output))
+    (fiveam:is (search "Visible thought" output))))
 
 (fiveam:test test-write-turn-token-summary-accumulates-process-wide-grand-totals
   (reset-global-token-grand-totals)

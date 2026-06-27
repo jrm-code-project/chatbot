@@ -3,6 +3,12 @@
 
 (in-package "CHATBOT")
 
+(defun gemini-thought-delta-type-p (delta-type)
+  "Returns true when DELTA-TYPE represents streamed thought text."
+  (member delta-type
+          '("reasoning" "thinking" "thought")
+          :test #'string-equal))
+
 (defun gemini-fallback-to-google-enabled-p (bot)
   "Returns true when BOT should fall back to Google generateContent on Interactions 404 errors."
   (chatbot-gemini-fallback-to-google-p bot))
@@ -47,6 +53,7 @@
                           (cons "Content-Type" "application/json")))
            (stream-read-timeout (current-http-read-timeout))
            (full-text (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t))
+           (full-thought-text (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t))
            (active-fn-call nil)
            (function-calls-to-run nil)
            (completed-usage nil)
@@ -89,6 +96,10 @@
                                                 do (vector-push-extend char full-text))
                                           (when callback
                                             (funcall callback delta-text)))
+                                         ((and (gemini-thought-delta-type-p delta-type)
+                                               (stringp delta-text))
+                                          (loop for char across delta-text
+                                                do (vector-push-extend char full-thought-text)))
                                          ((and active-fn-call delta-args)
                                           (loop for char across delta-args
                                                 do (vector-push-extend char (cdr (assoc :arguments active-fn-call))))))))
@@ -188,4 +199,5 @@
                  :effective-generation-config effective-generation-config
                  :recursion-depth recursion-depth)))
             (emit-chat-response-text (coerce full-text 'string)
-                                     :usage completed-usage))))))
+                                     :usage completed-usage
+                                     :thought-text (coerce full-thought-text 'string)))))))

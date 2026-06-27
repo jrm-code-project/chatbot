@@ -192,24 +192,61 @@
                   :usage usage)))
     (log-message :info "Backend response stats" :context context)))
 
-(defun write-turn-token-summary (usage &key (stream *standard-output*))
+(defun normalize-thought-text (value)
+  "Returns VALUE as a printable thought-text string when possible."
+  (labels ((trimmed-string (text)
+            (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) text)))
+              (and (> (length trimmed) 0)
+                   trimmed))))
+    (typecase value
+     (null nil)
+     (string (trimmed-string value))
+     (vector (normalize-thought-text (coerce value 'list)))
+     (list (let ((pieces (remove nil (mapcar #'normalize-thought-text value)
+                                 :test #'equal)))
+             (when pieces
+               (format nil "~{~A~^~%~%~}" pieces))))
+     (t (normalize-thought-text (princ-to-string value))))))
+
+(defun usage-thought-text (usage)
+  "Returns printable thought text embedded in USAGE, when present."
+  (when usage
+    (normalize-thought-text
+    (assoc-value-any usage
+                     '(:thought-text
+                       :thoughts-text
+                       :thoughts
+                       :reasoning
+                       :thinking
+                       "thoughtText"
+                       "thoughtsText"
+                       "thoughts"
+                       "reasoning"
+                       "thinking")))))
+
+(defun write-turn-token-summary (usage &key (stream *standard-output*) thought-text)
   "Writes a concise token summary after a completed assistant turn."
   (let* ((turn-totals (canonical-usage-token-totals usage))
-         (prompt (getf turn-totals :prompt))
-         (completion (getf turn-totals :completion))
-         (thought (getf turn-totals :thought))
-         (total (getf turn-totals :total)))
+        (prompt (getf turn-totals :prompt))
+        (completion (getf turn-totals :completion))
+        (thought (getf turn-totals :thought))
+        (total (getf turn-totals :total))
+        (thought-text (or (normalize-thought-text thought-text)
+                          (usage-thought-text usage))))
     (when (or prompt completion thought total)
-      (let ((grand-totals (accumulate-global-token-grand-totals usage)))
-      (format stream "[Tokens] prompt: ~A completion: ~A thought: ~A total: ~A~%"
-              (or prompt "-")
-              (or completion "-")
-              (or thought "-")
-              (or total "-"))
-      (format stream "[Tokens Total] prompt: ~A completion: ~A thought: ~A total: ~A~%"
-              (getf grand-totals :prompt)
-              (getf grand-totals :completion)
-              (getf grand-totals :thought)
-              (getf grand-totals :total))
-      )
-      (force-output stream))))
+     (let ((grand-totals (accumulate-global-token-grand-totals usage)))
+       (format stream "[Tokens] prompt: ~A completion: ~A thought: ~A total: ~A~%"
+               (or prompt "-")
+               (or completion "-")
+               (or thought "-")
+               (or total "-"))
+       (format stream "[Tokens Total] prompt: ~A completion: ~A thought: ~A total: ~A~%"
+               (getf grand-totals :prompt)
+               (getf grand-totals :completion)
+               (getf grand-totals :thought)
+               (getf grand-totals :total))
+       (when (and thought
+                  (< thought 16)
+                  thought-text)
+         (format stream "[Thoughts]~%~A~%~%" thought-text)))
+     (force-output stream))))

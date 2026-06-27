@@ -24,6 +24,45 @@
       (mcp-val :stop_reason value)
       (mcp-val "stopReason" value)))
 
+(defun google-json-true-p (value)
+  "Returns true when VALUE represents a JSON true boolean."
+  (typecase value
+    (null nil)
+    (number (not (zerop value)))
+    (string (not (member (string-downcase value)
+                         '("" "0" "false" "nil")
+                         :test #'string=)))
+    (symbol (not (member value '(nil false :false) :test #'eq)))
+    (t t)))
+
+(defun google-part-text (part)
+  "Returns the text payload stored in PART, when present."
+  (cdr (assoc :text part)))
+
+(defun google-part-function-call (part)
+  "Returns the function-call payload stored in PART, when present."
+  (or (cdr (assoc :function-call part))
+      (cdr (assoc :function--call part))))
+
+(defun google-part-thought-signature (part)
+  "Returns the thought signature stored in PART, when present."
+  (or (cdr (assoc :thought-signature part))
+      (cdr (assoc :thoughtSignature part :test #'string=))))
+
+(defun google-part-thought-p (part)
+  "Returns true when PART is marked as a thought fragment."
+  (google-json-true-p
+   (or (cdr (assoc :thought part))
+       (cdr (assoc "thought" part :test #'string=)))))
+
+(defun join-google-part-texts (parts)
+  "Returns a single string combining non-empty text fragments from PARTS."
+  (let ((texts (remove nil
+                       (mapcar #'google-part-text parts)
+                       :test #'equal)))
+    (when texts
+      (format nil "~{~A~^~%~%~}" texts))))
+
 (defun retry-on-google-gemini-pro-latest (bot input conversation callback
                                             &key file-attachments request-contents history-messages
                                               effective-generation-config
@@ -109,12 +148,15 @@
                         (finish-reason (cdr (assoc :finish-reason first-candidate)))
                         (content (cdr (assoc :content first-candidate)))
                         (parts (cdr (assoc :parts content)))
-                        (first-part (car parts))
-                        (fn-call (or (cdr (assoc :function-call first-part))
-                                     (cdr (assoc :function--call first-part))))
-                        (thought-signature (or (cdr (assoc :thought-signature first-part))
-                                               (cdr (assoc :thoughtSignature first-part :test #'string=))))
-                        (final-str (cdr (assoc :text first-part))))
+                        (function-call-part (find-if #'google-part-function-call parts))
+                        (fn-call (and function-call-part
+                                      (google-part-function-call function-call-part)))
+                        (thought-signature (and function-call-part
+                                                (google-part-thought-signature function-call-part)))
+                        (thought-text (join-google-part-texts
+                                       (remove-if-not #'google-part-thought-p parts)))
+                        (final-str (join-google-part-texts
+                                    (remove-if #'google-part-thought-p parts))))
                    (log-backend-response-stats
                     :google
                     :http-status status
@@ -205,7 +247,8 @@
                                                   "model"
                                                   final-str
                                                   :callback callback
-                                                  :usage usage)))))))
+                                                  :usage usage
+                                                  :thought-text thought-text)))))))
           (agentic-loop-interrupted (e)
             (error e))
           (chatbot-tool-recursion-limit-error (e)

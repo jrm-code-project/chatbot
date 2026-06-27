@@ -419,6 +419,23 @@
                            captured-second-request))
         (fiveam:is (string= "Handled tool error" res))))))
 
+(fiveam:test test-google-chat-prints-short-thought-parts
+  (reset-global-token-grand-totals)
+  (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
+         (conv (make-instance 'conversation :chatbot bot))
+         (stream (make-string-output-stream)))
+    (let ((*standard-output* stream)
+          (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+          (*http-post-function*
+            (lambda (url &rest args)
+              (declare (ignore url args))
+              (values "{\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":3,\"thoughtsTokenCount\":4,\"totalTokenCount\":9},\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Tiny chain of thought\",\"thought\":true},{\"text\":\"Visible answer\"}],\"role\":\"model\"}}]}" 200))))
+      (fiveam:is (string= "Visible answer" (chat-google bot "Hi Google" conv nil))))
+    (let ((output (get-output-stream-string stream)))
+      (fiveam:is (search "[Thoughts]" output))
+      (fiveam:is (search "Tiny chain of thought" output))
+      (fiveam:is (search "Visible answer" output)))))
+
 (fiveam:test test-google-chat-no-arg-function-call-uses-empty-args-object
   (let* ((bot (make-instance 'chatbot
                            :backend :google
