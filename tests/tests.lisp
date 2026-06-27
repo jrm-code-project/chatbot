@@ -33,6 +33,13 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
       (cl-json:decode-json-from-string value)
       value))
 
+(defun decode-test-json-lines (text)
+  "Returns decoded JSON objects from newline-delimited TEXT."
+  (loop for line in (cl-ppcre:split "\\r?\\n" text)
+        for trimmed = (string-trim '(#\Space #\Tab #\Return #\Linefeed) line)
+        unless (string= trimmed "")
+          collect (decode-test-json trimmed)))
+
 (defun normalized-test-json-key-name (key)
   "Returns KEY normalized for punctuation-insensitive JSON assertions."
   (coerce

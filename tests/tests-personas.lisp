@@ -710,18 +710,37 @@ Paragraph two." s))
           (let* ((memory-path (merge-pathnames "memory.json" test-persona-dir))
                  (conv (new-chat-persona "persona-memory-server"))
                  (bot (conversation-chatbot conv))
-                 (memory-file-text (uiop:read-file-string memory-path)))
-            (fiveam:is (search "\"entities\":" (conversation-persona-memory conv)))
-            (fiveam:is (= 1 (length (chatbot-mcp-servers bot))))
-            (fiveam:is (string= "memory"
-                                (mcp-server-name (car (chatbot-mcp-servers bot)))))
-            (fiveam:is (string= (namestring memory-path)
-                                (cdr (assoc "MEMORY_FILE_PATH"
-                                            captured-environment
-                                            :test #'string=))))
-            (fiveam:is (search "\"type\":\"entity\"" memory-file-text))
-            (fiveam:is (search "\"likes Lisp\"" memory-file-text))
-            (fiveam:is (null (search "\"entities\"" memory-file-text)))))
+                (memory-preload (decode-test-json (conversation-persona-memory conv)))
+                (preload-entities (test-json-elements
+                                   (test-json-value-any memory-preload '("entities" :entities))))
+                (preload-relations (test-json-elements
+                                    (test-json-value-any memory-preload '("relations" :relations))))
+                (memory-file-records (decode-test-json-lines
+                                      (uiop:read-file-string memory-path)))
+                (entity-record (first memory-file-records)))
+           (fiveam:is (= 1 (length preload-entities)))
+           (fiveam:is (null preload-relations))
+           (assert-json-field= (first preload-entities) "name" "Joe")
+           (assert-json-field= (first preload-entities) "entityType" "person")
+           (fiveam:is (equal '("likes Lisp")
+                             (test-json-elements
+                              (test-json-value-any (first preload-entities)
+                                                   '("observations" :observations)))))
+           (fiveam:is (= 1 (length (chatbot-mcp-servers bot))))
+           (fiveam:is (string= "memory"
+                               (mcp-server-name (car (chatbot-mcp-servers bot)))))
+           (fiveam:is (string= (namestring memory-path)
+                               (cdr (assoc "MEMORY_FILE_PATH"
+                                           captured-environment
+                                           :test #'string=))))
+           (fiveam:is (= 1 (length memory-file-records)))
+           (assert-json-field= entity-record "type" "entity")
+           (assert-json-field= entity-record "name" "Joe")
+           (assert-json-field= entity-record "entityType" "person")
+           (fiveam:is (equal '("likes Lisp")
+                             (test-json-elements
+                              (test-json-value-any entity-record
+                                                   '("observations" :observations)))))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
 (fiveam:test test-save-compressed-persona-memory-from-graph-json
