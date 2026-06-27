@@ -69,10 +69,10 @@
                         ".COM;.EXE;.BAT;.CMD"))))
     (if (pathname-type (pathname command))
         (list command)
-        (cons command
-             (mapcar (lambda (extension)
-                       (concatenate 'string command (string-downcase extension)))
-                     extensions)))))
+        (append (mapcar (lambda (extension)
+                         (concatenate 'string command (string-downcase extension)))
+                       extensions)
+               (list command)))))
 
 (defun resolve-command-from-search-path (command &key path pathext)
   "Returns an executable pathname for COMMAND when it can be found on PATH."

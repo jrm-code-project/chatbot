@@ -159,6 +159,23 @@
                                                       :pathext ".CMD;.EXE")))
       (uiop:delete-directory-tree bin-dir :validate t))))
 
+(fiveam:test test-resolve-mcp-launch-command-prefers-pathext-over-extensionless-shim
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (bin-dir (merge-pathnames "mock-mcp-bin-prefers-ext/" temp-dir))
+         (bare-path (merge-pathnames "npx" bin-dir))
+         (cmd-path (merge-pathnames "npx.cmd" bin-dir)))
+    (ensure-directories-exist cmd-path)
+    (with-open-file (stream bare-path :direction :output :if-exists :supersede)
+      (write-line "shell shim" stream))
+    (with-open-file (stream cmd-path :direction :output :if-exists :supersede)
+      (write-line "@echo off" stream))
+    (unwind-protect
+         (fiveam:is (equal (namestring cmd-path)
+                          (resolve-mcp-launch-command "npx"
+                                                      :path (namestring bin-dir)
+                                                      :pathext ".CMD;.EXE")))
+      (uiop:delete-directory-tree bin-dir :validate t))))
+
 (fiveam:test test-resolve-mcp-launch-command-preserves-explicit-paths
   (fiveam:is (equal "C:\\tools\\npx.cmd"
                    (resolve-mcp-launch-command "C:\\tools\\npx.cmd"
