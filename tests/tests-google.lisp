@@ -245,25 +245,16 @@
       (fiveam:is (string= "First reply" (chat "First turn" :conversation conv)))
       (fiveam:is (string= "Second reply" (chat "Second turn" :conversation conv)))
       (fiveam:is (= 2 (length captured-payloads)))
-      (let* ((first-payload (cl-json:decode-json-from-string (first captured-payloads)))
-             (first-contents (cdr (assoc :contents first-payload)))
-             (second-payload (cl-json:decode-json-from-string (second captured-payloads)))
-             (second-contents (cdr (assoc :contents second-payload))))
+      (let* ((first-payload (decode-test-json (first captured-payloads)))
+             (first-contents (google-payload-contents first-payload))
+             (second-payload (decode-test-json (second captured-payloads)))
+             (second-contents (google-payload-contents second-payload)))
         (fiveam:is (= 1 (length first-contents)))
-        (fiveam:is (string= "First turn"
-                           (cdr (assoc :text
-                                       (car (cdr (assoc :parts (first first-contents))))))))
+        (assert-google-message-texts (first first-contents) "user" '("First turn"))
         (fiveam:is (= 3 (length second-contents)))
-        (fiveam:is (string= "First turn"
-                           (cdr (assoc :text
-                                       (car (cdr (assoc :parts (first second-contents))))))))
-        (fiveam:is (string= "model" (cdr (assoc :role (second second-contents)))))
-        (fiveam:is (string= "First reply"
-                           (cdr (assoc :text
-                                       (car (cdr (assoc :parts (second second-contents))))))))
-        (fiveam:is (string= "Second turn"
-                           (cdr (assoc :text
-                                       (car (cdr (assoc :parts (third second-contents))))))))
+        (assert-google-message-texts (first second-contents) "user" '("First turn"))
+        (assert-google-message-texts (second second-contents) "model" '("First reply"))
+        (assert-google-message-texts (third second-contents) "user" '("Second turn"))
         (fiveam:is (= 4 (length (conversation-messages conv))))))))
 
 (fiveam:test test-google-persona-preload-is-sent-as-model-history
@@ -282,26 +273,25 @@
                       :if-exists :supersede)
       (write-line "Stored persona memory." s))
     (unwind-protect
-         (let ((*user-homedir-pathname-function* (lambda () mock-home))
-               (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
-               (*http-post-function*
-                 (lambda (url &rest args)
-                   (declare (ignore url))
-                   (setf captured-content (getf args :content))
-                   (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}"
-                           200))))
-           (let ((conv (new-chat-persona "google-persona")))
-             (fiveam:is (string= "Stored persona memory."
-                                 (conversation-persona-memory conv)))
-             (chat "First live turn" :conversation conv)
-             (let* ((payload (cl-json:decode-json-from-string captured-content))
-                    (contents (cdr (assoc :contents payload)))
-                    (preloaded-model-msg (second contents)))
-               (fiveam:is (= 3 (length contents)))
-               (fiveam:is (string= "model" (cdr (assoc :role preloaded-model-msg))))
-               (fiveam:is (string= "Stored persona memory."
-                                   (cdr (assoc :text
-                                              (car (cdr (assoc :parts preloaded-model-msg))))))))))
+        (let ((*user-homedir-pathname-function* (lambda () mock-home))
+              (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+              (*http-post-function*
+                (lambda (url &rest args)
+                  (declare (ignore url))
+                  (setf captured-content (getf args :content))
+                  (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}"
+                          200))))
+          (let ((conv (new-chat-persona "google-persona")))
+            (fiveam:is (string= "Stored persona memory."
+                                (conversation-persona-memory conv)))
+            (chat "First live turn" :conversation conv)
+            (let* ((payload (decode-test-json captured-content))
+                   (contents (google-payload-contents payload))
+                   (preloaded-model-msg (second contents)))
+              (fiveam:is (= 3 (length contents)))
+              (assert-google-message-texts preloaded-model-msg
+                                           "model"
+                                           '("Stored persona memory.")))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
 (fiveam:test test-google-chat-includes-preloaded-diary-history
@@ -601,21 +591,20 @@
         (fiveam:is (equal '("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
                             "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-latest:generateContent")
                           (nreverse captured-urls)))
-        (let* ((first-payload (cl-json:decode-json-from-string (second captured-payloads)))
-               (first-contents (cdr (assoc :contents first-payload)))
-               (retry-payload (cl-json:decode-json-from-string (first captured-payloads)))
-               (retry-contents (cdr (assoc :contents retry-payload)))
+        (let* ((first-payload (decode-test-json (second captured-payloads)))
+               (first-contents (google-payload-contents first-payload))
+               (retry-payload (decode-test-json (first captured-payloads)))
+               (retry-contents (google-payload-contents retry-payload))
                (stored-history (conversation-messages conv)))
-          (fiveam:is (string= "[08:46 first] [model: gemini-3.5-flash] Retry me"
-                              (cdr (assoc :text
-                                          (car (cdr (assoc :parts (first first-contents))))))))
-          (fiveam:is (string= "[08:46 retry] [model: gemini-pro-latest] Retry me"
-                              (cdr (assoc :text
-                                          (car (cdr (assoc :parts (first retry-contents))))))))
+          (assert-google-message-texts (first first-contents)
+                                      "user"
+                                      '("[08:46 first] [model: gemini-3.5-flash] Retry me"))
+          (assert-google-message-texts (first retry-contents)
+                                      "user"
+                                      '("[08:46 retry] [model: gemini-pro-latest] Retry me"))
           (fiveam:is-false
            (search "[model: gemini-3.5-flash]"
-                   (cdr (assoc :text
-                              (car (cdr (assoc :parts (first retry-contents))))))))
+                   (first (message-part-texts (first retry-contents)))))
           (fiveam:is (= 2 (length stored-history)))
           (fiveam:is (string= "Retry me"
                               (cdr (assoc "content" (first stored-history) :test #'string=))))
