@@ -159,6 +159,34 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
   "Returns Interactions-format input steps from PAYLOAD."
   (test-json-elements (test-json-value-any payload '(:input "input"))))
 
+(defun interaction-tool-names (tools)
+  "Returns the tool names from Interactions-format TOOLS."
+  (mapcar (lambda (tool)
+            (test-json-value-any tool '("name" :name)))
+          (test-json-elements tools)))
+
+(defun openai-tool-names (tools)
+  "Returns the function names from OpenAI-format TOOLS."
+  (mapcar (lambda (tool)
+            (test-json-value-any
+             (test-json-value-any tool '("function" :function))
+             '("name" :name)))
+          (test-json-elements tools)))
+
+(defun google-tool-declarations (tools)
+  "Returns the flattened function declaration list from Google-format TOOLS."
+  (mapcan (lambda (tool-group)
+            (test-json-elements
+             (test-json-value-any tool-group
+                                  '("functionDeclarations" :function-declarations))))
+          (test-json-elements tools)))
+
+(defun google-tool-names (tools)
+  "Returns the function declaration names from Google-format TOOLS."
+  (mapcar (lambda (tool)
+            (test-json-value-any tool '("name" :name)))
+          (google-tool-declarations tools)))
+
 (defun interaction-step-content-texts (step)
   "Returns text values from an Interactions API STEP content list."
   (mapcar (lambda (part)

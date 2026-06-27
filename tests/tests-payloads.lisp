@@ -476,8 +476,9 @@
                             (cdr (assoc "name"
                                         (cdr (assoc "function" tool :test #'string=))
                                         :test #'string=)))))
-    (fiveam:is (search "\"readFileLines\""
-                       (cl-json:encode-json-to-string google-tools)))
+    (fiveam:is (member "readFileLines"
+                       (google-tool-names google-tools)
+                       :test #'string=))
     (fiveam:is (find "directory"
                      interaction-tools
                      :test #'string=
@@ -490,8 +491,9 @@
                             (cdr (assoc "name"
                                         (cdr (assoc "function" tool :test #'string=))
                                         :test #'string=)))))
-    (fiveam:is (search "\"directory\""
-                       (cl-json:encode-json-to-string google-tools)))
+    (fiveam:is (member "directory"
+                       (google-tool-names google-tools)
+                       :test #'string=))
     (fiveam:is (find "writeFile"
                      interaction-tools
                      :test #'string=
@@ -504,8 +506,9 @@
                             (cdr (assoc "name"
                                         (cdr (assoc "function" tool :test #'string=))
                                         :test #'string=)))))
-    (fiveam:is (search "\"writeFile\""
-                       (cl-json:encode-json-to-string google-tools)))
+    (fiveam:is (member "writeFile"
+                       (google-tool-names google-tools)
+                       :test #'string=))
     (fiveam:is (find "deleteFile"
                      interaction-tools
                      :test #'string=
@@ -518,8 +521,9 @@
                             (cdr (assoc "name"
                                         (cdr (assoc "function" tool :test #'string=))
                                         :test #'string=)))))
-    (fiveam:is (search "\"deleteFile\""
-                       (cl-json:encode-json-to-string google-tools)))))
+    (fiveam:is (member "deleteFile"
+                       (google-tool-names google-tools)
+                       :test #'string=))))
 
 (fiveam:test test-payload-builders-exclude-read-file-lines-when-disabled
   (let* ((bot (make-instance 'chatbot
@@ -537,8 +541,9 @@
                                   (cdr (assoc "name"
                                               (cdr (assoc "function" tool :test #'string=))
                                               :test #'string=)))))
-    (fiveam:is-false (search "\"readFileLines\""
-                             (cl-json:encode-json-to-string (generate-content-request-tools bot))))))
+    (fiveam:is-false (member "readFileLines"
+                             (google-tool-names (generate-content-request-tools bot))
+                             :test #'string=))))
 
 (fiveam:test test-payload-builders-include-eval-when-enabled
   (let* ((bot (make-instance 'chatbot
@@ -559,8 +564,9 @@
                            (cdr (assoc "name"
                                        (cdr (assoc "function" tool :test #'string=))
                                        :test #'string=)))))
-    (fiveam:is (search "\"eval\""
-                      (cl-json:encode-json-to-string google-tools)))))
+    (fiveam:is (member "eval"
+                      (google-tool-names google-tools)
+                      :test #'string=))))
 
 (fiveam:test test-payload-builders-include-web-grounding-tools-when-enabled
   (let* ((bot (make-instance 'chatbot
@@ -593,7 +599,9 @@
                            (cdr (assoc "name"
                                        (cdr (assoc "function" tool :test #'string=))
                                        :test #'string=)))))
-    (fiveam:is (search "\"webSearch\""
-                      (cl-json:encode-json-to-string google-tools)))
-    (fiveam:is (search "\"hyperspecSearch\""
-                      (cl-json:encode-json-to-string google-tools)))))
+    (fiveam:is (member "webSearch"
+                       (google-tool-names google-tools)
+                       :test #'string=))
+    (fiveam:is (member "hyperspecSearch"
+                       (google-tool-names google-tools)
+                       :test #'string=))))
