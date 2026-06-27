@@ -384,9 +384,16 @@
       (let ((res (chat-google bot "What time is it now?" conv nil)))
         (fiveam:is (= 2 call-count))
         (fiveam:is (string= "America/Los_Angeles" (cdr (assoc :timezone captured-tool-args))))
-        (fiveam:is (search "\"thoughtSignature\":\"sig\"" captured-second-request))
-        (fiveam:is (search "\"functionCall\":{\"name\":\"get_current_time\",\"args\":{\"timezone\":\"America\\/Los_Angeles\"}"
-                           captured-second-request))
+        (let* ((payload (decode-test-json captured-second-request))
+               (contents (google-payload-contents payload))
+               (model-message (second contents))
+               (function-call-part (google-function-call-part model-message))
+               (function-call (assert-google-function-call-part function-call-part
+                                                                "get_current_time"
+                                                                :thought-signature "sig")))
+          (assert-json-field= (test-json-value-any function-call '("args" :args))
+                              "timezone"
+                              "America/Los_Angeles"))
         (fiveam:is (string= "It is 12:34 PM in Los Angeles." res))))))
 
 (fiveam:test test-google-chat-function-call-errors-are-reported-back-to-the-model
@@ -416,9 +423,21 @@
                     (values "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Handled tool error\"}],\"role\":\"model\"}}]}" 200))))))
       (let ((res (chat-google bot "What time is it now?" conv nil)))
         (fiveam:is (= 2 call-count))
-        (fiveam:is (search "\"thoughtSignature\":\"sig\"" captured-second-request))
-        (fiveam:is (search "\"response\":{\"type\":\"tool_error\",\"toolName\":\"get_current_time\",\"message\":\"Mock tool failure\"}"
-                           captured-second-request))
+        (let* ((payload (decode-test-json captured-second-request))
+               (contents (google-payload-contents payload))
+               (model-message (second contents))
+               (response-message (third contents))
+               (function-call-part (google-function-call-part model-message))
+               (function-response-part (google-function-response-part response-message))
+               (function-response (assert-google-function-response-part function-response-part
+                                                                       "get_current_time")))
+          (assert-google-function-call-part function-call-part
+                                            "get_current_time"
+                                            :thought-signature "sig")
+          (let ((response (test-json-value-any function-response '("response" :response))))
+            (assert-json-field= response "type" "tool_error")
+            (assert-json-field= response "toolName" "get_current_time")
+            (assert-json-field= response "message" "Mock tool failure")))
         (fiveam:is (string= "Handled tool error" res))))))
 
 (fiveam:test test-google-chat-prints-short-thought-parts
@@ -458,10 +477,21 @@
                    (values "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Read sampling ok\"}],\"role\":\"model\"}}]}" 200))))))
       (let ((res (chat-google bot "Inspect sampling" conv nil)))
         (fiveam:is (= 2 call-count))
-        (fiveam:is (search "\"functionCall\":{\"name\":\"readSamplingParameters\",\"args\":{}"
-                          captured-second-request))
-        (fiveam:is (search "\"response\":{\"result\":\"{\\\"temperature\\\":0.2"
-                          captured-second-request))
+        (let* ((payload (decode-test-json captured-second-request))
+               (contents (google-payload-contents payload))
+               (model-message (second contents))
+               (response-message (third contents))
+               (function-call-part (google-function-call-part model-message))
+               (function-response-part (google-function-response-part response-message))
+               (function-call (assert-google-function-call-part function-call-part
+                                                                "readSamplingParameters"))
+               (function-response (assert-google-function-response-part function-response-part
+                                                                       "readSamplingParameters"))
+               (result (decode-test-json
+                        (test-json-value-any (test-json-value-any function-response '("response" :response))
+                                             '("result" :result)))))
+          (fiveam:is (null (test-json-elements (test-json-value-any function-call '("args" :args)))))
+          (assert-sampling-parameters result :temperature 0.2d0))
         (fiveam:is (string= "Read sampling ok" res))))))
 
 (fiveam:test test-google-chat-sanitizes-stored-no-arg-function-call-history
@@ -485,8 +515,12 @@
              (setf captured-content (getf args :content))
              (values "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"History sanitized\"}],\"role\":\"model\"}}]}" 200))))
       (let ((res (chat-google bot "Next turn" conv nil)))
-        (fiveam:is (search "\"functionCall\":{\"name\":\"readSamplingParameters\",\"args\":{}}"
-                          captured-content))
+        (let* ((payload (decode-test-json captured-content))
+               (contents (google-payload-contents payload))
+               (function-call-part (google-function-call-part (first contents)))
+               (function-call (assert-google-function-call-part function-call-part
+                                                                "readSamplingParameters")))
+          (fiveam:is (null (test-json-elements (test-json-value-any function-call '("args" :args))))))
         (fiveam:is (string= "History sanitized" res))))))
 
 (fiveam:test test-google-chat-tool-recursion-depth-is-capped

@@ -23,6 +23,6 @@ This file records the highest-signal technical debt items found during a repo wa
    - **Remediation direction:** Extract a shared turn runner that centralizes recursive tool continuation and completion/error finalization while leaving payload translation and provider-specific wire formats in the backend modules.
 
 5. **Tests remain tightly coupled to literal payload and JSON structure**
-   - **Why this is debt:** Shared payload assertion helpers now cover representative OpenAI, Google, interaction-payload, and sampling-parameter tests, which reduced more of the direct string-fragment and `assoc`/shape assertions. Even so, many tests still depend on exact nested payload structure and serialized fragments, so benign internal representation changes can still trigger disproportionate test churn.
-   - **Evidence:** `tests/tests.lisp:24-74`, `tests/tests-openai.lisp`, `tests/tests-google.lisp`, `tests/tests-payloads.lisp`, `tests/tests-mcp.lisp`
+   - **Why this is debt:** Shared payload assertion helpers now also cover Google recursive tool-call request assertions in addition to representative OpenAI, Google, interaction-payload, and sampling-parameter tests. That reduces more of the direct string-fragment and nested `assoc`/shape assertions, but many tests still depend on exact serialized fragments and payload layout, so benign internal representation changes can still trigger disproportionate test churn.
+   - **Evidence:** `tests/tests.lisp`, `tests/tests-openai.lisp`, `tests/tests-google.lisp`, `tests/tests-payloads.lisp`, `tests/tests-mcp.lisp`
    - **Remediation direction:** Continue migrating remaining payload-heavy tests to semantic helpers and reserve exact structural comparisons for a smaller set of translation-focused golden tests.

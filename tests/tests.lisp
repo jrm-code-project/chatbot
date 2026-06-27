@@ -97,6 +97,40 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
             (mcp-val :text part))
           (test-json-elements (mcp-val :parts message))))
 
+(defun google-payload-contents (payload)
+  "Returns Google-format request contents from PAYLOAD."
+  (test-json-elements (test-json-value-any payload '(:contents "contents"))))
+
+(defun google-message-parts (message)
+  "Returns the normalized part list from a Google-format MESSAGE."
+  (test-json-elements (test-json-value-any message '(:parts "parts"))))
+
+(defun google-function-call-part (message)
+  "Returns the functionCall part from a Google-format MESSAGE."
+  (find-if (lambda (part)
+             (test-json-value-any part '("functionCall" :function-call :function--call)))
+           (google-message-parts message)))
+
+(defun google-function-response-part (message)
+  "Returns the functionResponse part from a Google-format MESSAGE."
+  (find-if (lambda (part)
+             (test-json-value-any part '("functionResponse" :function-response)))
+           (google-message-parts message)))
+
+(defun assert-google-function-call-part (part name &key thought-signature)
+  "Asserts semantic fields on Google functionCall PART."
+  (let ((function-call (test-json-value-any part '("functionCall" :function-call :function--call))))
+    (assert-json-field= function-call "name" name)
+    (when thought-signature
+      (assert-json-field= part "thoughtSignature" thought-signature))
+    function-call))
+
+(defun assert-google-function-response-part (part name)
+  "Asserts semantic fields on Google functionResponse PART."
+  (let ((function-response (test-json-value-any part '("functionResponse" :function-response))))
+    (assert-json-field= function-response "name" name)
+    function-response))
+
 (defun assert-google-message-texts (message role expected-texts)
   "Asserts Google-format MESSAGE has ROLE and EXPECTED-TEXTS parts."
   (assert-json-field= message :role role)
