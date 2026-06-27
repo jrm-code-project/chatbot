@@ -48,11 +48,56 @@
   "Returns the current process environment in a UIOP-compatible shape."
   (sb-ext:posix-environ))
 
+(defun explicit-command-path-p (command)
+  "Returns true when COMMAND already names an explicit path."
+  (or (find #\/ command)
+      (find #\\ command)
+      (and (> (length command) 1)
+           (char= #\: (char command 1)))))
+
+(defun split-windows-path-variable (value)
+  "Splits a Windows PATH-like VALUE into non-empty components."
+  (remove ""
+          (uiop:split-string (or value "") :separator '(#\;))
+          :test #'string=))
+
+(defun windows-command-extension-candidates (command &optional pathext)
+  "Returns executable-name candidates for COMMAND using PATHEXT."
+  (let ((extensions (split-windows-path-variable
+                    (or pathext
+                        (uiop:getenv "PATHEXT")
+                        ".COM;.EXE;.BAT;.CMD"))))
+    (if (pathname-type (pathname command))
+        (list command)
+        (cons command
+             (mapcar (lambda (extension)
+                       (concatenate 'string command (string-downcase extension)))
+                     extensions)))))
+
+(defun resolve-command-from-search-path (command &key path pathext)
+  "Returns an executable pathname for COMMAND when it can be found on PATH."
+  (let ((directories (split-windows-path-variable (or path (uiop:getenv "PATH")))))
+    (some (lambda (directory)
+           (let ((base-directory (uiop:ensure-directory-pathname directory)))
+             (some (lambda (candidate)
+                     (probe-file (merge-pathnames candidate base-directory)))
+                   (windows-command-extension-candidates command pathext))))
+          directories)))
+
+(defun resolve-mcp-launch-command (command &key path pathext)
+  "Returns the best launchable command path for COMMAND in the current environment."
+  (if (or (not (uiop:os-windows-p))
+          (explicit-command-path-p command))
+      command
+      (let ((resolved (resolve-command-from-search-path command :path path :pathext pathext)))
+        (if resolved
+           (namestring resolved)
+           command))))
+
 (defun default-start-mcp-server (name command args &optional environment)
   "Launches an MCP server subprocess and starts its reader thread."
-  (log-prefixed-message "MCP INFO" (format nil "Launching server ~A" name))
-  (log-prefixed-message "MCP DEBUG" (format nil "Command: ~A ~A" command args))
-  (let* ((launch-options (list :input :stream
+  (let* ((resolved-command (resolve-mcp-launch-command command))
+         (launch-options (list :input :stream
                               :output :stream
                               :error-output :stream))
          (normalized-environment
@@ -61,8 +106,11 @@
                 (merge-mcp-server-environments (current-process-environment)
                                                environment)
                 nil)))
+         (log-command (if (string= resolved-command command)
+                         command
+                         (format nil "~A (resolved from ~A)" resolved-command command)))
          (process-info (apply #'uiop:launch-program
-                             (cons (cons command args)
+                             (cons (cons resolved-command args)
                                    (if normalized-environment
                                        (append launch-options
                                                (list :environment normalized-environment))
@@ -75,6 +123,8 @@
                                 :process process-info
                                 :input-stream input
                                 :output-stream output)))
+    (log-prefixed-message "MCP INFO" (format nil "Launching server ~A" name))
+    (log-prefixed-message "MCP DEBUG" (format nil "Command: ~A ~A" log-command args))
     ;; Spawn an error monitoring thread
     (sb-thread:make-thread
      (lambda ()
@@ -132,4 +182,3 @@
   (if *stop-mcp-server-function*
       (funcall *stop-mcp-server-function* server)
       (default-stop-mcp-server server)))
-

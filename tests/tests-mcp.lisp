@@ -145,9 +145,29 @@
                         ("HOME" . "C:\\Users\\bitdi"))
                       merged))))
 
+(fiveam:test test-resolve-mcp-launch-command-finds-windows-pathext-script
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (bin-dir (merge-pathnames "mock-mcp-bin/" temp-dir))
+         (npx-path (merge-pathnames "npx.cmd" bin-dir)))
+    (ensure-directories-exist npx-path)
+    (with-open-file (stream npx-path :direction :output :if-exists :supersede)
+      (write-line "@echo off" stream))
+    (unwind-protect
+         (fiveam:is (equal (namestring npx-path)
+                          (resolve-mcp-launch-command "npx"
+                                                      :path (namestring bin-dir)
+                                                      :pathext ".CMD;.EXE")))
+      (uiop:delete-directory-tree bin-dir :validate t))))
+
+(fiveam:test test-resolve-mcp-launch-command-preserves-explicit-paths
+  (fiveam:is (equal "C:\\tools\\npx.cmd"
+                   (resolve-mcp-launch-command "C:\\tools\\npx.cmd"
+                                               :path "C:\\ignored"
+                                               :pathext ".CMD"))))
+
 (fiveam:test test-mcp-request-json-encodes-tool-arguments-as-records
   (let* ((payload `((:jsonrpc . "2.0")
-                    (:id . 1)
+                   (:id . 1)
                     (:method . "tools/call")
                     (:params . ((:name . "add_observations")
                                 (:arguments . ((:observations ((:entityName . "Boss")
