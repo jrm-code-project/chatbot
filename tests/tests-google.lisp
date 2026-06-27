@@ -196,23 +196,27 @@
           (fiveam:is (string= "Hello from Google non-streaming"
                               (chat "No files now" :conversation conv)))
           (fiveam:is (= 2 (length captured-payloads)))
-          (let* ((first-payload (cl-json:decode-json-from-string (first captured-payloads)))
-                 (first-contents (cdr (assoc :contents first-payload)))
-                 (first-parts (cdr (assoc :parts (first first-contents))))
-                 (inline-data (cdr (assoc :inline-data (second first-parts))))
-                 (second-payload (cl-json:decode-json-from-string (second captured-payloads)))
-                 (second-contents (cdr (assoc :contents second-payload)))
-                 (stored-history (conversation-messages conv)))
+          (let* ((first-payload (decode-test-json (first captured-payloads)))
+                (first-message (first (google-payload-contents first-payload)))
+                (first-parts (google-message-parts first-message))
+                (inline-data-part (find-if (lambda (part)
+                                             (test-json-value-any part '("inlineData" :inline-data)))
+                                           first-parts))
+                (inline-data (and inline-data-part
+                                  (test-json-value-any inline-data-part
+                                                       '("inlineData" :inline-data))))
+                (second-payload (decode-test-json (second captured-payloads)))
+                (second-message (first (google-payload-contents second-payload)))
+                (second-parts (google-message-parts second-message))
+                (stored-history (conversation-messages conv)))
             (fiveam:is (= 2 (length first-parts)))
-            (fiveam:is (string= "Summarize"
-                                (cdr (assoc :text (first first-parts)))))
-            (fiveam:is (string= "text/plain"
-                                (cdr (assoc :mime-type inline-data))))
-            (fiveam:is (string= "Summarize"
-                                (cdr (assoc :text (car (cdr (assoc :parts (first second-contents))))))))
-            (fiveam:is (notany (lambda (content)
-                                 (search ":INLINE-DATA" (princ-to-string content)))
-                               second-contents))
+            (assert-json-field= first-message :role "user")
+            (assert-json-field= (first first-parts) "text" "Summarize")
+            (assert-json-field= inline-data "mimeType" "text/plain")
+            (assert-google-message-texts second-message "user" '("Summarize"))
+            (fiveam:is (notany (lambda (part)
+                                 (test-json-value-any part '("inlineData" :inline-data)))
+                               second-parts))
             (fiveam:is (= 4 (length stored-history)))
             (fiveam:is (string= "Summarize"
                                 (cdr (assoc "content" (first stored-history) :test #'string=))))
