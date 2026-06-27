@@ -7,8 +7,8 @@ This file records the highest-signal technical debt items found during a repo wa
    - **Evidence:** `src/core/vars.lisp:156-186`, `src/core/vars.lisp:244-322`, `src/core/vars.lisp:394-705`, `src/core/package.lisp:56-72`
    - **Remediation direction:** Continue migrating public entry points to explicit runtime contexts, then prune the mirrored-global bridge and collapse the legacy sync helpers once the compatibility surface is small enough.
 
-2. **Agentic-loop orchestration still mixes process-global state with forceful thread control**
-   - **Why this is debt:** The new loop engine works, but loop registration is still process-global rather than owned by a runtime context, and emergency interruption still falls back to `sb-thread:terminate-thread`. That weakens isolation between independent runtimes and leaves the hardest cancellation path dependent on abrupt thread termination rather than purely cooperative shutdown.
+2. **Agentic-loop thread control is still dependent on forceful thread termination**
+   - **Why this is debt:** Loop registration has been successfully scoped under `runtime-context` ownership, eliminating process-global registry state. However, emergency interruption still falls back to `sb-thread:terminate-thread` rather than a purely cooperative shutdown mechanism. That leaves the hardest cancellation path dependent on abrupt thread termination instead of gentle cooperative signals.
    - **Evidence:** `src/orchestration/agentic-loops.lisp:204-227`, `src/orchestration/agentic-loops.lisp:318-364`, `src/orchestration/agentic-loops.lisp:522-563`
    - **Remediation direction:** Move loop registries under runtime-context ownership, add clearer lifecycle cleanup, and shrink the situations that require hard thread termination.
 
