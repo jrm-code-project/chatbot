@@ -618,8 +618,6 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
             (second-payload (decode-test-json (first captured-payloads))))
         (assert-json-field= first-payload "model" "gemini-pro-latest")
         (assert-json-field= first-payload "input" "First turn")
-        (fiveam:is-false (search "\\$First turn"
-                                 (princ-to-string (test-json-value-any first-payload '("input" :input)))))
         (assert-json-field= second-payload "model" "gemini-3.5-flash")
         (assert-json-field= second-payload "input" "Second turn")
         (fiveam:is (string= "gemini-3.5-flash" (chatbot-model (conversation-chatbot conv))))))))
@@ -668,8 +666,9 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
           (assert-google-message-texts (first (google-payload-contents google-payload))
                                        "user"
                                        '("[08:46 retry] [model: gemini-pro-latest] Retry this"))
-          (fiveam:is-false (search "[model: gemini-3.5-flash] Retry this"
-                                   (princ-to-string google-payload))))
+          (fiveam:is (notany (lambda (text)
+                               (search "[model: gemini-3.5-flash] Retry this" text))
+                             (google-payload-texts google-payload))))
         (fiveam:is (null (conversation-interaction-id conv)))
         (let ((stored-history (conversation-messages conv)))
           (fiveam:is (= 2 (length stored-history)))
