@@ -272,21 +272,18 @@
 
 (fiveam:test test-built-in-sampling-parameter-tools-update-runtime-state
   (let* ((bot (make-instance 'chatbot
-                           :backend :gemini
-                           :temperature 0.2d0
-                           :top-p 0.3d0))
+                          :backend :gemini
+                          :temperature 0.2d0
+                          :top-p 0.3d0))
         (initial (execute-chatbot-tool-by-name bot "readSamplingParameters" '()))
         (updated (execute-chatbot-tool-by-name bot
                                                "setSamplingParameters"
                                                '(("temperature" . 0.8d0)
                                                  ("topP" . 0.9d0))))
         (reset (execute-chatbot-tool-by-name bot "resetSamplingParameters" '())))
-    (fiveam:is (search "\"temperature\":0.2" initial))
-    (fiveam:is (search "\"topP\":0.3" initial))
-    (fiveam:is (search "\"temperature\":0.8" updated))
-    (fiveam:is (search "\"topP\":0.9" updated))
-    (fiveam:is (search "\"temperature\":null" reset))
-    (fiveam:is (search "\"topP\":null" reset))))
+    (assert-sampling-parameters initial :temperature 0.2d0 :top-p 0.3d0)
+    (assert-sampling-parameters updated :temperature 0.8d0 :top-p 0.9d0 :saved t)
+    (assert-sampling-parameters reset :temperature nil :top-p nil :saved t)))
 
 (fiveam:test test-execute-chatbot-tool-by-name-normalizes-mcp-argument-keys-from-schema
   (let ((*find-mcp-server-and-tool-function*

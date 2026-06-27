@@ -101,8 +101,10 @@ data: [DONE]")
                                 :conversation conv
                                 :temperature 0.8d0
                                 :top-p 0.95d0)))
-      (fiveam:is (search "\"temperature\":0.8" captured-payload))
-      (fiveam:is (search "\"top_p\":0.95" captured-payload))
+      (let ((payload (decode-test-json captured-payload)))
+        (assert-json-field= payload "temperature" 0.8d0)
+        (assert-json-value= (test-json-value-any payload '("top_p" :top-p))
+                            0.95d0))
       (let ((parameters (sampling-parameters conv)))
         (fiveam:is (= 0.3d0 (getf parameters :temperature)))
         (fiveam:is (= 0.4d0 (getf parameters :top-p)))))))

@@ -69,9 +69,11 @@
                            :runtime-context context)))
       (fiveam:is (string= "Hello from Google non-streaming"
                           (chat "Hi Google" :conversation conv)))
-      (fiveam:is (search "\"generationConfig\"" captured-content))
-      (fiveam:is (search "\"temperature\":0.6" captured-content))
-      (fiveam:is (search "\"topP\":0.85" captured-content)))))
+      (let ((generation-config (test-json-value-any (decode-test-json captured-content)
+                                                    '("generationConfig" :generation-config))))
+        (assert-json-field= generation-config "temperature" 0.6d0)
+        (assert-json-value= (test-json-value-any generation-config '("topP" "top_p" :top-p))
+                            0.85d0)))))
 
 (fiveam:test test-google-chat-flow-supports-models-prefix
   (let ((captured-url nil))
