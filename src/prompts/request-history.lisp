@@ -3,7 +3,7 @@
 
 (in-package "CHATBOT")
 
-(defparameter +max-chatbot-tool-recursion-depth+ 16
+(defparameter +max-chatbot-tool-recursion-depth+ 32
   "Maximum number of recursive tool-calling backend continuations allowed in one turn.")
 
 (define-condition chatbot-tool-recursion-limit-error (error)
@@ -21,10 +21,11 @@
                                             &optional (max-depth +max-chatbot-tool-recursion-depth+))
   "Signals a clean condition when RECURSION-DEPTH has reached MAX-DEPTH."
   (when (>= recursion-depth max-depth)
-    (error 'chatbot-tool-recursion-limit-error
-           :backend backend
-           :depth recursion-depth
-           :max-depth max-depth))
+    (cerror "Continue despite the tool recursion depth limit."
+            'chatbot-tool-recursion-limit-error
+            :backend backend
+            :depth recursion-depth
+            :max-depth max-depth))
   recursion-depth)
 
 (defun next-chatbot-tool-recursion-depth (backend recursion-depth

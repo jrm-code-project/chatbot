@@ -762,6 +762,22 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (chat "Run tool loop" :conversation conv))
       (fiveam:is (= +max-chatbot-tool-recursion-depth+ call-count)))))
 
+(fiveam:test test-tool-recursion-limit-error-is-continuable
+  (let ((seen-condition nil))
+    (fiveam:is
+     (= (1+ +max-chatbot-tool-recursion-depth+)
+       (handler-bind
+           ((chatbot-tool-recursion-limit-error
+              (lambda (condition)
+                (setf seen-condition condition)
+                (invoke-restart 'continue))))
+         (next-chatbot-tool-recursion-depth :openai +max-chatbot-tool-recursion-depth+))))
+    (fiveam:is (typep seen-condition 'chatbot-tool-recursion-limit-error))
+    (fiveam:is (eq :openai
+                  (chatbot-tool-recursion-limit-error-backend seen-condition)))
+    (fiveam:is (= +max-chatbot-tool-recursion-depth+
+                 (chatbot-tool-recursion-limit-error-depth seen-condition)))))
+
 (fiveam:test test-gemini-built-in-no-arg-tool-accepts-empty-arguments
   (let ((conv (new-chat :backend :gemini))
         (captured-payloads nil)
