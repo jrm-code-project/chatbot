@@ -33,34 +33,28 @@ data: [DONE]")
         (fiveam:is (= 1 (length captured-payloads)))
         (let* ((payload (cl-json:decode-json-from-string (first captured-payloads)))
               (messages (cdr (assoc :messages payload))))
-          (fiveam:is (= 2 (length messages)))
-          (fiveam:is (string= "system" (cdr (assoc :role (first messages)))))
-          (fiveam:is (string= "Be helpful" (cdr (assoc :content (first messages)))))
-          (fiveam:is (string= "user" (cdr (assoc :role (second messages)))))
-          (fiveam:is (string= "Hi there" (cdr (assoc :content (second messages)))))))
+          (assert-role/content-sequence
+           messages
+           '(("system" "Be helpful")
+             ("user" "Hi there")))))
       (let ((res2 (chat "How are you?" :conversation conv)))
         (fiveam:is (string= "Hello OpenAI" res2))
         (fiveam:is (= 2 (length captured-payloads)))
         (let* ((payload (cl-json:decode-json-from-string (first captured-payloads)))
               (messages (cdr (assoc :messages payload))))
-          (fiveam:is (= 4 (length messages)))
-          (fiveam:is (string= "system" (cdr (assoc :role (first messages)))))
-          (fiveam:is (string= "user" (cdr (assoc :role (second messages)))))
-          (fiveam:is (string= "Hi there" (cdr (assoc :content (second messages)))))
-          (fiveam:is (string= "assistant" (cdr (assoc :role (third messages)))))
-          (fiveam:is (string= "Hello OpenAI" (cdr (assoc :content (third messages)))))
-          (fiveam:is (string= "user" (cdr (assoc :role (fourth messages)))))
-          (fiveam:is (string= "How are you?" (cdr (assoc :content (fourth messages)))))))
+          (assert-role/content-sequence
+           messages
+           '(("system" "Be helpful")
+             ("user" "Hi there")
+             ("assistant" "Hello OpenAI")
+             ("user" "How are you?")))))
       (let ((stored-history (conversation-messages conv)))
-        (fiveam:is (= 4 (length stored-history)))
-        (fiveam:is (string= "user" (cdr (assoc "role" (first stored-history) :test #'string=))))
-        (fiveam:is (string= "Hi there" (cdr (assoc "content" (first stored-history) :test #'string=))))
-        (fiveam:is (string= "assistant" (cdr (assoc "role" (second stored-history) :test #'string=))))
-        (fiveam:is (string= "Hello OpenAI" (cdr (assoc "content" (second stored-history) :test #'string=))))
-        (fiveam:is (string= "user" (cdr (assoc "role" (third stored-history) :test #'string=))))
-        (fiveam:is (string= "How are you?" (cdr (assoc "content" (third stored-history) :test #'string=))))
-        (fiveam:is (string= "assistant" (cdr (assoc "role" (fourth stored-history) :test #'string=))))
-        (fiveam:is (string= "Hello OpenAI" (cdr (assoc "content" (fourth stored-history) :test #'string=))))))))
+        (assert-role/content-sequence
+         stored-history
+         '(("user" "Hi there")
+           ("assistant" "Hello OpenAI")
+           ("user" "How are you?")
+           ("assistant" "Hello OpenAI")))))))
 
 (fiveam:test test-openai-chat-joins-system-instruction-paragraph-vectors
   (let ((captured-payload nil))
@@ -81,8 +75,10 @@ data: [DONE]")
       (let* ((payload (cl-json:decode-json-from-string captured-payload))
              (messages (cdr (assoc :messages payload)))
              (expected (format nil "First paragraph.~%~%Second paragraph.")))
-        (fiveam:is (string= expected
-                            (cdr (assoc :content (first messages)))))))))
+        (assert-role/content-sequence
+         messages
+         `(("system" ,expected)
+           ("user" "Hi there")))))))
 
 (fiveam:test test-openai-chat-includes-effective-sampling-parameters
   (let ((captured-payload nil))

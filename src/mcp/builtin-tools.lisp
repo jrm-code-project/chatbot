@@ -159,7 +159,11 @@
                       (:properties . (("goal" . ((:type . "string")
                                                  (:description . "The loop goal to pursue autonomously.")))
                                       ("maxIterations" . ((:type . "integer")
-                                                          (:description . "Maximum autonomous iterations before stopping.")))))
+                                                          (:description . "Maximum autonomous iterations before stopping.")))
+                                      ("backend" . ((:type . "string")
+                                                    (:description . "Optional backend override for the loop, for example gemini, google, openai, or lm-studio.")))
+                                      ("model" . ((:type . "string")
+                                                  (:description . "Optional model override for the loop.")))))
                       (:required . ("goal"))))))
 
 (defun builtin-list-agentic-loops-tool ()

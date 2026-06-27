@@ -10,17 +10,17 @@
                             :google-search-p t
                             :code-execution-p nil)))
     (let ((payload (make-interaction-payload bot "Hello" :previous-interaction-id "session-123" :stream t)))
-      (fiveam:is (string= "gemini-3.5-flash" (cdr (assoc "model" payload :test #'string=))))
-      (fiveam:is (string= "Hello" (cdr (assoc "input" payload :test #'string=))))
-      (fiveam:is (eq t (cdr (assoc "stream" payload :test #'string=))))
-      (fiveam:is (string= "session-123" (cdr (assoc "previous_interaction_id" payload :test #'string=))))
-      (fiveam:is (string= "Be helpful" (cdr (assoc "system_instruction" payload :test #'string=))))
-      (let ((tools (cdr (assoc "tools" payload :test #'string=))))
+      (assert-json-field= payload "model" "gemini-3.5-flash")
+      (assert-json-field= payload "input" "Hello")
+      (assert-json-field= payload "stream" t)
+      (assert-json-field= payload "previous_interaction_id" "session-123")
+      (assert-json-field= payload "system_instruction" "Be helpful")
+      (let ((tools (mcp-val "tools" payload)))
         (fiveam:is (find "google_search"
                          tools
                          :test #'string=
                          :key (lambda (tool)
-                                (cdr (assoc "type" tool :test #'string=)))))))))
+                                (mcp-val "type" tool))))))))
 
 (fiveam:test test-resolve-effective-generation-config-prefers-turn-overrides
   (let ((bot (make-instance 'chatbot
@@ -41,18 +41,17 @@
          (payload (make-interaction-payload bot
                                             "Hello"
                                             :effective-generation-config '(:temperature 0.7d0 :top-p 0.9d0)))
-         (generation-config (cdr (assoc "generation_config" payload :test #'string=))))
-    (fiveam:is (= 0.7d0 (cdr (assoc "temperature" generation-config :test #'string=))))
-    (fiveam:is (= 0.9d0 (cdr (assoc "top_p" generation-config :test #'string=))))))
+         (generation-config (mcp-val "generation_config" payload)))
+    (assert-json-field= generation-config "temperature" 0.7d0)
+    (assert-json-field= generation-config "top_p" 0.9d0)))
 
 (fiveam:test test-interaction-payload-joins-system-instruction-paragraph-vectors
   (let ((bot (make-instance 'chatbot
-                           :model "gemini-3.5-flash"
-                           :system-instruction #("First paragraph." "Second paragraph."))))
+                          :model "gemini-3.5-flash"
+                          :system-instruction #("First paragraph." "Second paragraph."))))
     (let ((payload (make-interaction-payload bot "Hello" :previous-interaction-id "session-123" :stream t))
           (expected (format nil "First paragraph.~%~%Second paragraph.")))
-      (fiveam:is (string= expected
-                         (cdr (assoc "system_instruction" payload :test #'string=)))))))
+      (assert-json-field= payload "system_instruction" expected))))
 
 (fiveam:test test-initial-interaction-payload-includes-preloaded-messages
   (let ((bot (make-instance 'chatbot :model "gemini-3.5-flash")))
@@ -60,22 +59,16 @@
                                              :messages nil
                                              :persona-memory "Stored persona memory."
                                              :stream t))
-           (input (cdr (assoc "input" payload :test #'string=)))
+           (input (mcp-val "input" payload))
            (first-step (aref input 0))
            (second-step (aref input 1))
            (third-step (aref input 2)))
       (fiveam:is (= 3 (length input)))
-      (fiveam:is (string= "user_input" (cdr (assoc "type" first-step :test #'string=))))
-      (fiveam:is (string= "model_output" (cdr (assoc "type" second-step :test #'string=))))
-      (fiveam:is (string= "user_input" (cdr (assoc "type" third-step :test #'string=))))
-      (fiveam:is (string= "Stored persona memory."
-                          (cdr (assoc "text"
-                                      (aref (cdr (assoc "content" second-step :test #'string=)) 0)
-                                      :test #'string=))))
-      (fiveam:is (string= "Hello"
-                          (cdr (assoc "text"
-                                      (aref (cdr (assoc "content" third-step :test #'string=)) 0)
-                                      :test #'string=)))))))
+      (assert-json-field= first-step "type" "user_input")
+      (assert-json-field= second-step "type" "model_output")
+      (assert-json-field= third-step "type" "user_input")
+      (assert-json-field= (aref (mcp-val "content" second-step) 0) "text" "Stored persona memory.")
+      (assert-json-field= (aref (mcp-val "content" third-step) 0) "text" "Hello"))))
 
 (fiveam:test test-resolve-chat-input-files-expands-directories-wildcards-and-deduplicates
   (let* ((temp-dir (uiop:default-temporary-directory))

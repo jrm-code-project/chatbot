@@ -1,8 +1,0 @@
-(ql:quickload :cl-json)
-(let ((alist '((:model . "gemini-3.5-flash")
-               (:stream . t)
-               (:store . t)
-               (:some-false . :false)
-               (:some-nil . nil))))
-  (format t "Alist result: ~S~%" (cl-json:encode-json-to-string alist)))
-(uiop:quit)

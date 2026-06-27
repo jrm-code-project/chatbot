@@ -53,12 +53,35 @@
     (cond
       ((null backend)
        (if (eq (safe-getf config :googleapi) :google-api)
-           :google
-           :gemini))
-      ((member backend '(:gemini :google :openai :lm-studio))
-       backend)
+          :google
+          :gemini))
       (t
-       (error "Unsupported persona backend: ~S" backend)))))
+       (normalize-chatbot-backend backend "persona")))))
+
+(defun persona-config-agentic-loop-default-backend (config)
+  "Returns the optional default agentic loop backend implied by persona CONFIG."
+  (normalize-chatbot-backend (safe-getf config :agentic-loop-default-backend)
+                            "persona agentic loop default"
+                            :allow-nil-p t))
+
+(defun persona-config-agentic-loop-default-model (config)
+  "Returns the optional default agentic loop model implied by persona CONFIG."
+  (let ((model (safe-getf config :agentic-loop-default-model)))
+    (when model
+      (require-non-empty-string model "Persona agentic loop default model"))))
+
+(defun persona-config-runtime-context (config runtime-context)
+  "Returns the effective runtime context for a persona using CONFIG and RUNTIME-CONTEXT."
+  (let* ((base-context (resolve-runtime-context runtime-context :sync-from-globals-p t))
+        (loop-default-backend (persona-config-agentic-loop-default-backend config))
+        (loop-default-model (persona-config-agentic-loop-default-model config)))
+    (if (or loop-default-backend loop-default-model)
+       (call-with-runtime-context
+        base-context
+        (lambda ()
+          (make-runtime-context :agentic-loop-default-backend loop-default-backend
+                                :agentic-loop-default-model loop-default-model)))
+       base-context)))
 
 (defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context)
   "Creates a new chatbot instance and returns an initialized conversation object.
@@ -123,7 +146,8 @@ Use NEW-CHAT instead when no persona should be loaded."
            (include-model-p (safe-getf config :include-model))
            (enable-eval-p (safe-getf config :enable-eval))
            (filesystem-tools-p (safe-getf config :enable-filesystem-tools))
-           (backend (persona-config-backend config)))
+           (backend (persona-config-backend config))
+           (persona-runtime-context (persona-config-runtime-context config runtime-context)))
       (declare (ignore googleapi))
       (let ((conversation
               (preload-persona-conversation-diary
@@ -146,7 +170,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                           :filesystem-root-directory persona-dir
                           :filesystem-allowed-directories (persona-filesystem-allowlist-directories persona-dir)
                           :filesystem-allowlist-path (persona-filesystem-allowlist-path persona-dir)
-                          :runtime-context runtime-context)
+                          :runtime-context persona-runtime-context)
                 persona-dir)
                persona-dir)))
         (setf conversation (attach-persona-memory-mcp-server conversation persona-dir))

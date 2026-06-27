@@ -28,14 +28,10 @@
         (fiveam:is (string= "mocked-google-api-key" (cdr (assoc "x-goog-api-key" captured-headers :test #'string=))))
         (fiveam:is (string= "application/json" (cdr (assoc "Content-Type" captured-headers :test #'string=))))
         (let* ((payload (cl-json:decode-json-from-string captured-content))
-              (contents (cdr (assoc :contents payload)))
-              (sys-inst (cdr (assoc :system-instruction payload)))
-              (first-msg (car contents))
-              (parts (cdr (assoc :parts first-msg))))
+              (contents (mcp-val :contents payload)))
           (fiveam:is (= 1 (length contents)))
-          (fiveam:is (string= "user" (cdr (assoc :role first-msg))))
-          (fiveam:is (string= "Hi Google" (cdr (assoc :text (car parts)))))
-          (fiveam:is (string= "Be concise" (cdr (assoc :text (car (cdr (assoc :parts sys-inst))))))))))))
+          (assert-google-message-texts (first contents) "user" '("Hi Google"))
+          (assert-google-system-instruction-texts payload '("Be concise")))))))
 
 (fiveam:test test-google-chat-preserves-system-instruction-paragraph-vectors
   (let ((captured-content nil))
@@ -53,11 +49,9 @@
       (fiveam:is (string= "Hello from Google non-streaming"
                          (chat "Hi Google" :conversation conv)))
       (let* ((payload (cl-json:decode-json-from-string captured-content))
-            (sys-inst (cdr (assoc :system-instruction payload)))
-            (parts (cdr (assoc :parts sys-inst))))
-        (fiveam:is (= 2 (length parts)))
-        (fiveam:is (string= "First paragraph." (cdr (assoc :text (first parts)))))
-        (fiveam:is (string= "Second paragraph." (cdr (assoc :text (second parts)))))))))
+             (parts (message-part-texts (mcp-val :system-instruction payload))))
+        (fiveam:is (equal '("First paragraph." "Second paragraph.")
+                          parts)))))) 
 
 (fiveam:test test-google-chat-includes-generation-config
   (let ((captured-content nil))

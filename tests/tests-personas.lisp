@@ -187,9 +187,48 @@ Second instruction paragraph." s))
             (fiveam:is (< (abs (- (getf parameters :top-p) 0.9d0)) 1d-5))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
+(fiveam:test test-persona-config-overrides-agentic-loop-default-profile
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-persona-loop-defaults/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-loop-defaults/" personas-dir))
+        (observed-backend nil)
+        (observed-model nil)
+        (*agentic-loop-chat-function*
+         (lambda (prompt &key conversation callback file files temperature top-p)
+           (declare (ignore prompt callback file files temperature top-p))
+           (setf observed-backend (chatbot-backend (conversation-chatbot conversation)))
+           (setf observed-model (chatbot-model (conversation-chatbot conversation)))
+           "FINAL: persona loop defaults applied")))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "(:backend :google" s)
+      (write-line " :model \"gemini-3.5-flash\"" s)
+      (write-line " :agentic-loop-default-backend \"openai\"" s)
+      (write-line " :agentic-loop-default-model \"gpt-4o-mini\")" s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let* ((base-context (make-runtime-context :agentic-loop-default-backend :lm-studio
+                                                     :agentic-loop-default-model "base-loop-model"))
+                 (conv (new-chat-persona "persona-loop-defaults" :runtime-context base-context))
+                 (runtime-context (chatbot-runtime-context (conversation-chatbot conv))))
+            (fiveam:is (eq :openai (current-agentic-loop-default-backend runtime-context)))
+            (fiveam:is (string= "gpt-4o-mini"
+                                (current-agentic-loop-default-model runtime-context)))
+            (let ((loop (start-agentic-loop conv "Use persona loop defaults" :max-iterations 2)))
+              (fiveam:is (eq :completed
+                             (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
+              (fiveam:is (eq :openai observed-backend))
+              (fiveam:is (string= "gpt-4o-mini" observed-model)))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops)
+      (uiop:delete-directory-tree mock-home :validate t))))
+
 (fiveam:test test-system-instruction-crud-api-updates-paragraph-vectors
   (let* ((temp-dir (uiop:default-temporary-directory))
-        (mock-home (merge-pathnames "mock-home-system-instruction-crud/" temp-dir))
+       (mock-home (merge-pathnames "mock-home-system-instruction-crud/" temp-dir))
         (personas-dir (merge-pathnames ".Personas/" mock-home))
         (test-persona-dir (merge-pathnames "persona-system-instruction-crud/" personas-dir)))
     (ensure-directories-exist test-persona-dir)

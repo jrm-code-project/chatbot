@@ -59,6 +59,8 @@
            "*MCP-CONFIG-PATH*"
            "*AUTO-INITIALIZE-STARTUP-MCP-SERVERS-P*"
            "*DEFAULT-CONVERSATION*"
+           "*AGENTIC-LOOP-DEFAULT-BACKEND*"
+           "*AGENTIC-LOOP-DEFAULT-MODEL*"
            "*LOGGING-ENABLED-P*"
            "*LOG-LEVEL*"
            "*LOG-STREAM*"

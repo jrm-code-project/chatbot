@@ -64,6 +64,10 @@
     :initarg :chat-function
     :accessor agentic-loop-chat-function-override
     :initform nil)
+   (execution-profile
+    :initarg :execution-profile
+    :accessor agentic-loop-execution-profile
+    :initform nil)
    (step-history
     :initarg :step-history
     :accessor agentic-loop-step-history
@@ -127,6 +131,44 @@
                       :messages (and (conversation-messages conversation)
                                      (copy-tree (conversation-messages conversation)))
                       :interaction-id (conversation-interaction-id conversation)))
+
+(defun apply-agentic-loop-execution-profile (conversation &key backend model)
+  "Applies backend/model overrides to CONVERSATION and returns the effective profile."
+  (let* ((bot (conversation-chatbot conversation))
+         (runtime-context (chatbot-runtime-context bot))
+         (current-backend (chatbot-backend bot))
+         (default-backend-raw (current-agentic-loop-default-backend runtime-context))
+         (default-model-raw (current-agentic-loop-default-model runtime-context))
+         (default-backend (when default-backend-raw
+                            (normalize-chatbot-backend default-backend-raw
+                                                       "agentic loop default")))
+         (default-model (when default-model-raw
+                          (require-non-empty-string default-model-raw
+                                                    "Default agentic loop model")))
+         (effective-backend (cond
+                              (backend
+                               (normalize-chatbot-backend backend "agentic loop"))
+                              (default-backend
+                               default-backend)
+                              (t
+                               current-backend)))
+         (effective-model (cond
+                            (model
+                             (require-non-empty-string model "Agentic loop model"))
+                            (backend
+                             (backend-default-model effective-backend))
+                            (default-backend
+                             (or default-model
+                                 (backend-default-model effective-backend)))
+                            (default-model
+                             default-model)
+                            (t
+                             (or (chatbot-model bot)
+                                 (backend-default-model effective-backend))))))
+    (setf (chatbot-backend bot) effective-backend)
+    (setf (chatbot-model bot) effective-model)
+    (list :backend effective-backend
+          :model effective-model)))
 
 (defun snapshot-conversation-state (conversation)
   "Returns a restorable snapshot of CONVERSATION state."
@@ -324,27 +366,35 @@
 
 (defun agentic-loop-public-alist (loop)
   "Returns LOOP state as a JSON-encodable alist."
-  `(("id" . ,(agentic-loop-id loop))
-    ("goal" . ,(agentic-loop-goal loop))
-    ("status" . ,(string-downcase (string (agentic-loop-status loop))))
-    ("maxIterations" . ,(agentic-loop-max-iterations loop))
-    ("currentIteration" . ,(agentic-loop-current-iteration loop))
-    ("resultSummary" . ,(or (agentic-loop-result-summary loop) :null))
-    ("lastError" . ,(or (agentic-loop-last-error loop) :null))
-    ("threadAlive" . ,(if (agentic-loop-thread-alive-p loop) t :false))
-    ("createdAt" . ,(agentic-loop-created-at loop))
-    ("startedAt" . ,(or (agentic-loop-started-at loop) :null))
-    ("finishedAt" . ,(or (agentic-loop-finished-at loop) :null))
-    ("pendingApproval" . ,(or (agentic-loop-pending-approval loop) :null))
-    ("stepHistory" . ,(coerce (mapcar (lambda (entry)
-                                        `(("iteration" . ,(getf entry :iteration))
-                                          ("status" . ,(string-downcase (string (getf entry :status))))
-                                          ("prompt" . ,(or (getf entry :prompt) :null))
-                                          ("response" . ,(or (getf entry :response) :null))
-                                          ("note" . ,(or (getf entry :note) :null))
-                                          ("timestamp" . ,(getf entry :timestamp))))
-                                      (agentic-loop-step-history loop))
-                                  'vector))))
+  (let ((backend-name (string-downcase
+                       (string (or (getf (agentic-loop-execution-profile loop) :backend)
+                                   (chatbot-backend (conversation-chatbot (agentic-loop-conversation loop)))))))
+        (model-name (or (getf (agentic-loop-execution-profile loop) :model)
+                        (chatbot-model (conversation-chatbot (agentic-loop-conversation loop)))
+                        :null)))
+    `(("id" . ,(agentic-loop-id loop))
+      ("goal" . ,(agentic-loop-goal loop))
+      ("status" . ,(string-downcase (string (agentic-loop-status loop))))
+      ("executionProfile" . (("backend" . ,backend-name)
+                             ("model" . ,model-name)))
+      ("maxIterations" . ,(agentic-loop-max-iterations loop))
+      ("currentIteration" . ,(agentic-loop-current-iteration loop))
+      ("resultSummary" . ,(or (agentic-loop-result-summary loop) :null))
+      ("lastError" . ,(or (agentic-loop-last-error loop) :null))
+      ("threadAlive" . ,(if (agentic-loop-thread-alive-p loop) t :false))
+      ("createdAt" . ,(agentic-loop-created-at loop))
+      ("startedAt" . ,(or (agentic-loop-started-at loop) :null))
+      ("finishedAt" . ,(or (agentic-loop-finished-at loop) :null))
+      ("pendingApproval" . ,(or (agentic-loop-pending-approval loop) :null))
+      ("stepHistory" . ,(coerce (mapcar (lambda (entry)
+                                          `(("iteration" . ,(getf entry :iteration))
+                                            ("status" . ,(string-downcase (string (getf entry :status))))
+                                            ("prompt" . ,(or (getf entry :prompt) :null))
+                                            ("response" . ,(or (getf entry :response) :null))
+                                            ("note" . ,(or (getf entry :note) :null))
+                                            ("timestamp" . ,(getf entry :timestamp))))
+                                        (agentic-loop-step-history loop))
+                                    'vector)))))
 
 (defun agentic-loop-public-json (loop)
   "Returns LOOP state as a JSON string."
@@ -450,7 +500,7 @@
   (agentic-loop-log :info loop "started")
   loop)
 
-(defun start-agentic-loop (conversation goal &key (max-iterations 10))
+(defun start-agentic-loop (conversation goal &key (max-iterations 10) backend model)
   "Clones CONVERSATION and starts an autonomous loop for GOAL."
   (unless (typep conversation 'conversation)
     (error "Agentic loops require a CHATBOT conversation."))
@@ -466,6 +516,10 @@
                               :conversation loop-conversation
                               :runtime-context template-context
                               :chat-function (resolve-agentic-loop-chat-function))))
+    (setf (agentic-loop-execution-profile loop)
+          (apply-agentic-loop-execution-profile loop-conversation
+                                                :backend backend
+                                                :model model))
     (let ((loop-context (make-agentic-loop-runtime-context loop template-context loop-conversation)))
       (setf (agentic-loop-runtime-context loop) loop-context)
       (setf (chatbot-runtime-context (conversation-chatbot loop-conversation)) loop-context))

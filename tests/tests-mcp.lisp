@@ -147,7 +147,8 @@
                                    '((:result . "ok"))))))))
     (unwind-protect
          (let ((output (with-output-to-string (s)
-                         (let ((*standard-output* s))
+                         (let ((*log-stream* s)
+                               (*logging-enabled-p* t))
                            (fiveam:is (equal '((:result . "ok"))
                                              (default-mcp-send-request
                                               server

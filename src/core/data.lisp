@@ -77,7 +77,17 @@
     :initarg :default-conversation
     :accessor runtime-context-default-conversation
     :initform nil
-    :documentation "Default conversation associated with this runtime context.")))
+    :documentation "Default conversation associated with this runtime context.")
+   (agentic-loop-default-backend
+    :initarg :agentic-loop-default-backend
+    :accessor runtime-context-agentic-loop-default-backend
+    :initform nil
+    :documentation "Optional default backend for new agentic loops in this runtime context.")
+   (agentic-loop-default-model
+    :initarg :agentic-loop-default-model
+    :accessor runtime-context-agentic-loop-default-model
+    :initform nil
+    :documentation "Optional default model for new agentic loops in this runtime context.")))
 
 (defparameter +default-gemini-fallback-to-google-p+ nil
   "Authoritative default for the Gemini Interactions compatibility fallback.")

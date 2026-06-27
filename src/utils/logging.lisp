@@ -36,6 +36,14 @@
       (format stream "  ~A: ~A~%" (car entry) (cdr entry)))
     (force-output stream)))
 
+(defun log-prefixed-message (prefix message &key context (stream (current-log-stream)))
+  "Writes MESSAGE with a custom PREFIX through the shared logging stream."
+  (when (current-logging-enabled-p)
+    (format stream "[~A] ~A~%" prefix message)
+    (dolist (entry context)
+      (format stream "  ~A: ~A~%" (car entry) (cdr entry)))
+    (force-output stream)))
+
 (defun assoc-value-any (alist keys)
   "Returns the first value found in ALIST for any key in KEYS."
   (labels ((key-name (value)

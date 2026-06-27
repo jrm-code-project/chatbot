@@ -115,6 +115,30 @@ Unknown backends fall back to the Gemini default."
                        gemini-default)))
     (require-non-empty-string resolved (format nil "Default model for backend ~A" backend))))
 
+(defun normalize-chatbot-backend (backend context &key allow-nil-p)
+  "Normalizes BACKEND to a supported backend keyword for CONTEXT."
+  (when (null backend)
+    (if allow-nil-p
+        (return-from normalize-chatbot-backend nil)
+        (error "~A backend is required." context)))
+  (let ((normalized
+          (typecase backend
+            (keyword backend)
+            (string
+             (let ((downcased (string-downcase backend)))
+               (cond
+                 ((string= downcased "gemini") :gemini)
+                 ((string= downcased "google") :google)
+                 ((string= downcased "openai") :openai)
+                 ((or (string= downcased "lm-studio")
+                      (string= downcased "lm_studio"))
+                  :lm-studio)
+                 (t nil))))
+            (t nil))))
+    (unless (member normalized '(:gemini :google :openai :lm-studio))
+      (error "Unsupported ~A backend: ~S" context backend))
+    normalized))
+
 (defun openai-api-key ()
   "Returns the OpenAI API key. First checks *openai-api-key*, then the OPENAI_API_KEY environment variable."
   (or *openai-api-key*
@@ -179,6 +203,8 @@ runtime globals are used to override the default runtime context.")
     (*log-stream* . "MAKE-RUNTIME-CONTEXT with :LOG-STREAM")
     (*http-connect-timeout* . "MAKE-RUNTIME-CONTEXT with :HTTP-CONNECT-TIMEOUT")
     (*http-read-timeout* . "MAKE-RUNTIME-CONTEXT with :HTTP-READ-TIMEOUT")
+    (*agentic-loop-default-backend* . "MAKE-RUNTIME-CONTEXT with :AGENTIC-LOOP-DEFAULT-BACKEND")
+    (*agentic-loop-default-model* . "MAKE-RUNTIME-CONTEXT with :AGENTIC-LOOP-DEFAULT-MODEL")
     (*filesystem-access-approval-function* . "MAKE-RUNTIME-CONTEXT with :FILESYSTEM-ACCESS-APPROVAL-FUNCTION")
     (*eval-approval-function* . "MAKE-RUNTIME-CONTEXT with :EVAL-APPROVAL-FUNCTION"))
   "Compatibility-only ambient globals mapped to their preferred replacements.")
@@ -230,6 +256,14 @@ Prefer MAKE-RUNTIME-CONTEXT with :HTTP-READ-TIMEOUT.")
 (defvar *default-conversation* nil
   "Compatibility-only ambient default conversation used by CHAT when none is specified.
 Prefer passing :CONVERSATION explicitly or using a runtime context.")
+
+(defvar *agentic-loop-default-backend* nil
+  "Compatibility-only ambient default backend for new agentic loops.
+Prefer MAKE-RUNTIME-CONTEXT with :AGENTIC-LOOP-DEFAULT-BACKEND.")
+
+(defvar *agentic-loop-default-model* nil
+  "Compatibility-only ambient default model for new agentic loops.
+Prefer MAKE-RUNTIME-CONTEXT with :AGENTIC-LOOP-DEFAULT-MODEL.")
 
 (defvar *default-runtime-context* nil
   "Canonical runtime context used for legacy no-context entry points.")
@@ -296,7 +330,9 @@ Prefer passing :CONVERSATION explicitly or using a runtime context.")
                                   (gemini-api-key-function nil gemini-api-key-function-p)
                                   (filesystem-access-approval-function nil filesystem-access-approval-function-p)
                                   (eval-approval-function nil eval-approval-function-p)
-                                  (default-conversation nil default-conversation-p))
+                                  (default-conversation nil default-conversation-p)
+                                  (agentic-loop-default-backend nil agentic-loop-default-backend-p)
+                                  (agentic-loop-default-model nil agentic-loop-default-model-p))
   "Constructs the preferred public container for shared Chatbot runtime state.
 Use this with explicit :RUNTIME-CONTEXT arguments instead of mutating the
 compatibility-only ambient special variables."
@@ -367,7 +403,17 @@ compatibility-only ambient special variables."
                                                       *eval-approval-function*)
                      :default-conversation (if default-conversation-p
                                                default-conversation
-                                               nil)))))
+                                               nil)
+                     :agentic-loop-default-backend
+                     (inherit agentic-loop-default-backend-p
+                              agentic-loop-default-backend
+                              #'runtime-context-agentic-loop-default-backend
+                              *agentic-loop-default-backend*)
+                     :agentic-loop-default-model
+                     (inherit agentic-loop-default-model-p
+                              agentic-loop-default-model
+                              #'runtime-context-agentic-loop-default-model
+                              *agentic-loop-default-model*)))))
 
 (defun sync-runtime-context-from-legacy-globals (context &key (warn-p t))
   "Copies legacy global runtime values into CONTEXT."
@@ -582,6 +628,18 @@ compatibility-only ambient special variables."
   *http-read-timeout*
   "Returns the current HTTP read timeout for CONTEXT."
   "Sets the current HTTP read timeout for CONTEXT.")
+
+(define-mirrored-runtime-context-helper current-agentic-loop-default-backend
+  runtime-context-agentic-loop-default-backend
+  *agentic-loop-default-backend*
+  "Returns the default backend for new agentic loops in CONTEXT."
+  "Sets the default backend for new agentic loops in CONTEXT.")
+
+(define-mirrored-runtime-context-helper current-agentic-loop-default-model
+  runtime-context-agentic-loop-default-model
+  *agentic-loop-default-model*
+  "Returns the default model for new agentic loops in CONTEXT."
+  "Sets the default model for new agentic loops in CONTEXT.")
 
 (define-runtime-context-function-helper current-getenv-function
   runtime-context-getenv-function

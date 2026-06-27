@@ -63,6 +63,87 @@
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))
 
+(fiveam:test test-start-agentic-loop-applies-backend-and-model-overrides
+  (let* ((observed-backend nil)
+         (observed-model nil)
+         (*agentic-loop-chat-function*
+          (lambda (prompt &key conversation callback file files temperature top-p)
+            (declare (ignore prompt callback file files temperature top-p))
+            (setf observed-backend (chatbot-backend (conversation-chatbot conversation)))
+            (setf observed-model (chatbot-model (conversation-chatbot conversation)))
+            "FINAL: override applied"))
+         (conversation (new-chat :backend :google :model "gemini-3.5-flash")))
+    (unwind-protect
+         (let ((loop (start-agentic-loop conversation
+                                        "Use another provider"
+                                        :backend :openai
+                                        :model "gpt-4o-mini"
+                                        :max-iterations 2)))
+           (fiveam:is (eq :completed
+                         (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
+           (fiveam:is (eq :openai observed-backend))
+           (fiveam:is (string= "gpt-4o-mini" observed-model))
+           (fiveam:is (eq :openai (getf (agentic-loop-execution-profile loop) :backend)))
+           (fiveam:is (string= "gpt-4o-mini" (getf (agentic-loop-execution-profile loop) :model))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
+(fiveam:test test-start-agentic-loop-uses-runtime-context-default-backend-and-model
+  (let* ((observed-backend nil)
+         (observed-model nil)
+         (*agentic-loop-chat-function*
+          (lambda (prompt &key conversation callback file files temperature top-p)
+            (declare (ignore prompt callback file files temperature top-p))
+            (setf observed-backend (chatbot-backend (conversation-chatbot conversation)))
+            (setf observed-model (chatbot-model (conversation-chatbot conversation)))
+            "FINAL: default profile applied"))
+         (context (make-runtime-context :agentic-loop-default-backend :openai
+                                        :agentic-loop-default-model "gpt-4o-mini"))
+         (conversation (new-chat :backend :google
+                                 :model "gemini-3.5-flash"
+                                 :runtime-context context)))
+    (unwind-protect
+         (let ((loop (start-agentic-loop conversation
+                                        "Use the configured default loop profile"
+                                        :max-iterations 2)))
+           (fiveam:is (eq :completed
+                          (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
+           (fiveam:is (eq :openai observed-backend))
+           (fiveam:is (string= "gpt-4o-mini" observed-model))
+           (fiveam:is (eq :openai (getf (agentic-loop-execution-profile loop) :backend)))
+           (fiveam:is (string= "gpt-4o-mini" (getf (agentic-loop-execution-profile loop) :model))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
+(fiveam:test test-start-agentic-loop-explicit-overrides-win-over-defaults
+  (let* ((observed-backend nil)
+         (observed-model nil)
+         (*agentic-loop-chat-function*
+          (lambda (prompt &key conversation callback file files temperature top-p)
+            (declare (ignore prompt callback file files temperature top-p))
+            (setf observed-backend (chatbot-backend (conversation-chatbot conversation)))
+            (setf observed-model (chatbot-model (conversation-chatbot conversation)))
+            "FINAL: explicit profile applied"))
+         (context (make-runtime-context :agentic-loop-default-backend :openai
+                                        :agentic-loop-default-model "gpt-4o-mini"))
+         (conversation (new-chat :backend :google
+                                 :model "gemini-3.5-flash"
+                                 :runtime-context context)))
+    (unwind-protect
+         (let ((loop (start-agentic-loop conversation
+                                        "Override the configured default loop profile"
+                                        :backend :lm-studio
+                                        :model "custom-loop-model"
+                                        :max-iterations 2)))
+           (fiveam:is (eq :completed
+                          (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
+           (fiveam:is (eq :lm-studio observed-backend))
+           (fiveam:is (string= "custom-loop-model" observed-model))
+           (fiveam:is (eq :lm-studio (getf (agentic-loop-execution-profile loop) :backend)))
+           (fiveam:is (string= "custom-loop-model" (getf (agentic-loop-execution-profile loop) :model))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
 (fiveam:test test-start-agentic-loop-tool-uses-active-conversation
   (let ((*agentic-loop-chat-function*
          (lambda (prompt &key conversation callback file files temperature top-p)
@@ -75,11 +156,47 @@
                        (conversation-chatbot conversation)
                        "startAgenticLoop"
                        '(("goal" . "Tool-launched goal")
-                         ("maxIterations" . 2))))
+                        ("maxIterations" . 2)
+                        ("backend" . "openai")
+                        ("model" . "gpt-4o"))))
                 (payload (parse-json-or-error json :context "agentic loop tool result"))
                 (loop-id (mcp-val :id payload))
-                (loop (find-agentic-loop loop-id)))
+                (loop (find-agentic-loop loop-id))
+                (execution-profile (cdr (assoc :execution-profile payload))))
            (fiveam:is (typep loop 'agentic-loop))
-           (fiveam:is (string= "Tool-launched goal" (agentic-loop-goal loop))))
+           (fiveam:is (string= "Tool-launched goal" (agentic-loop-goal loop)))
+           (fiveam:is (eq :openai (getf (agentic-loop-execution-profile loop) :backend)))
+           (fiveam:is (string= "gpt-4o" (getf (agentic-loop-execution-profile loop) :model)))
+           (fiveam:is (string= "openai" (cdr (assoc :backend execution-profile))))
+           (fiveam:is (string= "gpt-4o" (cdr (assoc :model execution-profile)))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
+(fiveam:test test-start-agentic-loop-tool-uses-runtime-context-default-profile
+  (let* ((*agentic-loop-chat-function*
+          (lambda (prompt &key conversation callback file files temperature top-p)
+           (declare (ignore prompt conversation callback file files temperature top-p))
+           "FINAL: started by tool with defaults"))
+         (context (make-runtime-context :agentic-loop-default-backend :openai
+                                       :agentic-loop-default-model "gpt-4.1-mini"))
+         (conversation (new-chat :backend :google
+                                :model "gemini-3.5-flash"
+                                :runtime-context context)))
+    (unwind-protect
+         (let* ((*active-conversation* conversation)
+               (json (default-execute-builtin-chatbot-tool
+                      (conversation-chatbot conversation)
+                      "startAgenticLoop"
+                      '(("goal" . "Tool-launched goal with defaults")
+                        ("maxIterations" . 2))))
+               (payload (parse-json-or-error json :context "agentic loop tool result"))
+               (loop-id (mcp-val :id payload))
+               (loop (find-agentic-loop loop-id))
+               (execution-profile (cdr (assoc :execution-profile payload))))
+           (fiveam:is (typep loop 'agentic-loop))
+           (fiveam:is (eq :openai (getf (agentic-loop-execution-profile loop) :backend)))
+           (fiveam:is (string= "gpt-4.1-mini" (getf (agentic-loop-execution-profile loop) :model)))
+           (fiveam:is (string= "openai" (cdr (assoc :backend execution-profile))))
+           (fiveam:is (string= "gpt-4.1-mini" (cdr (assoc :model execution-profile)))))
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))

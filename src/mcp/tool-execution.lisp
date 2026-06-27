@@ -680,9 +680,19 @@ entries instead of aborting the full turn."
                               (if raw
                                   (normalize-builtin-tool-integer-argument raw "maxIterations" tool-name)
                                   10)))
+            (backend (let ((raw (or (mcp-val "backend" arguments)
+                                    (mcp-val :backend arguments))))
+                       (when raw
+                         (normalize-builtin-tool-string-argument raw "backend" tool-name))))
+            (model (let ((raw (or (mcp-val "model" arguments)
+                                  (mcp-val :model arguments))))
+                     (when raw
+                       (normalize-builtin-tool-string-argument raw "model" tool-name))))
             (loop (start-agentic-loop *active-conversation*
                                       goal
-                                      :max-iterations max-iterations)))
+                                      :max-iterations max-iterations
+                                      :backend backend
+                                      :model model)))
        (agentic-loop-public-json loop)))
     ((string= tool-name "listAgenticLoops")
      (agentic-loop-list-json))
