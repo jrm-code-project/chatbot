@@ -128,11 +128,11 @@
              (fiveam:is (null (conversation-messages (persona-conversation persona))))
              (query-all "Second prompt" :personas (list persona))
              (let* ((second-payload (cl-json:decode-json-from-string (second captured-payloads)))
-                    (second-contents (cdr (assoc :contents second-payload))))
+                   (second-contents (google-payload-contents second-payload)))
                (fiveam:is (= 1 (length second-contents)))
-               (fiveam:is (string= "Second prompt"
-                                   (cdr (assoc :text
-                                               (car (cdr (assoc :parts (first second-contents)))))))))))
+               (assert-google-message-texts (first second-contents)
+                                            "user"
+                                            '("Second prompt")))))
       (clear-personas))))
 
 (fiveam:test test-query-all-keeps_histories_isolated_and_prints_headers
@@ -175,21 +175,15 @@
                  (fiveam:is (search "Beta reply" output))))
              (query-all "Second turn" :personas (list alpha beta))
              (let* ((alpha-second (cl-json:decode-json-from-string (first alpha-payloads)))
-                    (alpha-contents (cdr (assoc :contents alpha-second)))
+                   (alpha-texts (google-payload-texts alpha-second))
                     (beta-second (cl-json:decode-json-from-string (first beta-payloads)))
-                    (beta-contents (cdr (assoc :contents beta-second))))
-               (fiveam:is (search "Kickoff"
-                                  (princ-to-string alpha-contents)))
-               (fiveam:is (search "Alpha reply"
-                                  (princ-to-string alpha-contents)))
-               (fiveam:is-false (search "Beta reply"
-                                        (princ-to-string alpha-contents)))
-               (fiveam:is (search "Kickoff"
-                                  (princ-to-string beta-contents)))
-               (fiveam:is (search "Beta reply"
-                                  (princ-to-string beta-contents)))
-               (fiveam:is-false (search "Alpha reply"
-                                        (princ-to-string beta-contents))))))
+                   (beta-texts (google-payload-texts beta-second)))
+               (fiveam:is (member "Kickoff" alpha-texts :test #'string=))
+               (fiveam:is (member "Alpha reply" alpha-texts :test #'string=))
+               (fiveam:is-false (member "Beta reply" alpha-texts :test #'string=))
+               (fiveam:is (member "Kickoff" beta-texts :test #'string=))
+               (fiveam:is (member "Beta reply" beta-texts :test #'string=))
+               (fiveam:is-false (member "Alpha reply" beta-texts :test #'string=)))))
       (clear-personas))))
 
 (fiveam:test test-query-all-replays-gemini-history-without-previous-interaction-id
@@ -216,12 +210,17 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"~A\",\
                     (persona (spawn-persona "Gem" :backend :gemini :runtime-context context)))
                (query-all "First turn" :personas (list persona))
                (query-all "Second turn" :personas (list persona))
-               (let ((second-payload (first payloads)))
-                 (fiveam:is-false (search "\"previous_interaction_id\"" second-payload))
-                 (fiveam:is (search "\"type\":\"user_input\"" second-payload))
-                 (fiveam:is (search "First turn" second-payload))
-                 (fiveam:is (search "Gemini reply" second-payload))
-                 (fiveam:is (search "Second turn" second-payload)))))
+               (let* ((second-payload (decode-test-json (first payloads)))
+                      (input (interaction-payload-input second-payload)))
+                 (fiveam:is-false (test-json-value-any second-payload '("previous_interaction_id" :previous-interaction-id)))
+                 (fiveam:is (equal '("user_input" "model_output" "user_input")
+                                   (mapcar (lambda (step)
+                                             (test-json-value-any step '("type" :type)))
+                                           input)))
+                 (fiveam:is (equal '(("First turn")
+                                     ("Gemini reply")
+                                     ("Second turn"))
+                                   (mapcar #'interaction-step-content-texts input))))))
         (clear-personas)))))
 
 (fiveam:test test-remove-persona-and-reset-all-personas-support_repl_workflows
@@ -358,11 +357,13 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"~A\",\
                  (fiveam:is (search "Beta reply" output))
                  (fiveam:is (search "[Your turn]" output))))
              (let* ((beta-first-payload (cl-json:decode-json-from-string (first beta-payloads)))
-                   (beta-contents (cdr (assoc :contents beta-first-payload))))
-               (fiveam:is (search "Alpha said: Alpha reply"
-                                 (princ-to-string beta-contents)))
-               (fiveam:is (search "What is your response, Beta?"
-                                 (princ-to-string beta-contents))))))
+                   (beta-texts (google-payload-texts beta-first-payload)))
+               (fiveam:is (find-if (lambda (text)
+                                     (search "Alpha said: Alpha reply" text))
+                                   beta-texts))
+               (fiveam:is (find-if (lambda (text)
+                                     (search "What is your response, Beta?" text))
+                                   beta-texts)))))
       (clear-personas))))
 
 (fiveam:test test-run-arena-supports_multiple_rounds_and_preserves_turn_order
@@ -376,20 +377,18 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"~A\",\
                                  :http-post-function
                                  (lambda (url &rest args)
                                    (declare (ignore url))
-                                   (let* ((payload (cl-json:decode-json-from-string (getf args :content)))
-                                          (contents (cdr (assoc :contents payload)))
-                                          (prompt-text (princ-to-string contents)))
-                                     (push prompt-text alpha-prompts))
+                                   (let ((prompt-texts (google-payload-texts
+                                                        (decode-test-json (getf args :content)))))
+                                     (push (format nil "~{~A~^ ~}" prompt-texts) alpha-prompts))
                                    (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Alpha reply\"}], \"role\": \"model\"}}]}" 200))))
                  (beta-context (make-runtime-context
                                 :gemini-api-key-function (lambda () "mocked-google-api-key")
                                 :http-post-function
                                 (lambda (url &rest args)
                                   (declare (ignore url))
-                                  (let* ((payload (cl-json:decode-json-from-string (getf args :content)))
-                                         (contents (cdr (assoc :contents payload)))
-                                         (prompt-text (princ-to-string contents)))
-                                    (push prompt-text beta-prompts))
+                                  (let ((prompt-texts (google-payload-texts
+                                                       (decode-test-json (getf args :content)))))
+                                    (push (format nil "~{~A~^ ~}" prompt-texts) beta-prompts))
                                   (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Beta reply\"}], \"role\": \"model\"}}]}" 200))))
                  (alpha (spawn-persona "Alpha"
                                        :backend :google

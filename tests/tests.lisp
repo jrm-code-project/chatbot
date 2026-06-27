@@ -120,6 +120,11 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
   "Returns Google-format request contents from PAYLOAD."
   (test-json-elements (test-json-value-any payload '(:contents "contents"))))
 
+(defun google-payload-texts (payload)
+  "Returns all text parts from Google-format PAYLOAD contents."
+  (mapcan #'message-part-texts
+          (google-payload-contents payload)))
+
 (defun google-message-parts (message)
   "Returns the normalized part list from a Google-format MESSAGE."
   (test-json-elements (test-json-value-any message '(:parts "parts"))))
@@ -149,6 +154,16 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
   (let ((function-response (test-json-value-any part '("functionResponse" :function-response))))
     (assert-json-field= function-response "name" name)
     function-response))
+
+(defun interaction-payload-input (payload)
+  "Returns Interactions-format input steps from PAYLOAD."
+  (test-json-elements (test-json-value-any payload '(:input "input"))))
+
+(defun interaction-step-content-texts (step)
+  "Returns text values from an Interactions API STEP content list."
+  (mapcar (lambda (part)
+            (test-json-value-any part '(:text "text")))
+          (test-json-elements (test-json-value-any step '(:content "content")))))
 
 (defun assert-google-message-texts (message role expected-texts)
   "Asserts Google-format MESSAGE has ROLE and EXPECTED-TEXTS parts."
