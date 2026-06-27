@@ -125,13 +125,19 @@
                     (:params . ((:name . "add_observations")
                                 (:arguments . ((:observations ((:entityName . "Boss")
                                                                (:contents "watching")))))))))
-         (json (cl-json:encode-json-to-string (json-encodable-value payload))))
-    (fiveam:is (search "\"arguments\":{\"observations\":[{"
-                       json))
-    (fiveam:is (search "\"contents\":[\"watching\"]"
-                       json))
-    (fiveam:is-false (search "\"arguments\":["
-                             json))))
+         (json (decode-test-json
+                (cl-json:encode-json-to-string (json-encodable-value payload))))
+         (params (test-json-value-any json '("params" :params)))
+         (arguments (test-json-value-any params '("arguments" :arguments)))
+         (observations (test-json-elements
+                        (test-json-value-any arguments '("observations" :observations))))
+         (first-observation (first observations))
+         (contents (test-json-elements
+                    (test-json-value-any first-observation '("contents" :contents)))))
+    (assert-json-field= params "name" "add_observations")
+    (fiveam:is (= 1 (length observations)))
+    (assert-json-field= first-observation "entityName" "Boss")
+    (fiveam:is (equal '("watching") contents))))
 
 (fiveam:test test-mcp-debug-logging-includes-tool-call-name
   (let* ((server (make-instance 'mcp-server
