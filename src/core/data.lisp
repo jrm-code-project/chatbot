@@ -198,6 +198,11 @@
     :accessor chatbot-filesystem-allowlist-path
     :initform nil
     :documentation "Persona-owned file path used to persist the filesystem allowlist.")
+   (filesystem-read-only-p
+    :initarg :filesystem-read-only-p
+    :accessor chatbot-filesystem-read-only-p
+    :initform nil
+    :documentation "Flag indicating whether filesystem tools are restricted to read-only access (directory and readFileLines).")
    (mcp-servers
     :initarg :mcp-servers
     :accessor chatbot-mcp-servers

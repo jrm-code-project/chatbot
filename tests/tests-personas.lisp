@@ -441,17 +441,96 @@ Paragraph two." s))
                       :direction :output
                       :if-exists :supersede)
       (write-line "Ordinary diary entry." s))
+    (with-open-file (s (merge-pathnames "2.txt" diary-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "Second diary entry." s))
     (with-open-file (s (merge-pathnames "1.txt" compressed-diary-dir)
                       :direction :output
                       :if-exists :supersede)
       (write-line "Compressed diary entry." s))
     (unwind-protect
-        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
-          (let* ((conv (new-chat-persona "persona-compressed-diary"))
-                 (entries (conversation-persona-diary-entries conv)))
-            (fiveam:is (= 1 (length entries)))
-            (fiveam:is (string= "Compressed diary entry."
-                                (cdr (assoc :content (first entries)))))))
+         (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+           (let* ((conv (new-chat-persona "persona-compressed-diary"))
+                  (entries (conversation-persona-diary-entries conv)))
+             (fiveam:is (= 2 (length entries)))
+             (fiveam:is (string= "Compressed diary entry."
+                                 (cdr (assoc :content (first entries)))))
+             (fiveam:is (string= "Second diary entry."
+                                 (cdr (assoc :content (second entries)))))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-auto-compress-diary-on-startup
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-auto-compress-diary/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "persona-auto-compress-diary/" personas-dir))
+         (diary-dir (merge-pathnames "Diary/" test-persona-dir))
+         (compressed-diary-dir (merge-pathnames "CompressedDiary/" test-persona-dir))
+         (captured-urls nil))
+    (ensure-directories-exist diary-dir)
+    (ensure-directories-exist compressed-diary-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "(:model \"models/gemini-mock-model\" :googleapi :google-api)" s))
+    (with-open-file (s (merge-pathnames "memory.json" test-persona-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "{\"entities\":[],\"relations\":[]}" s))
+    (with-open-file (s (merge-pathnames "1.txt" diary-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "Ordinary uncompressed diary entry." s))
+    (with-open-file (s (merge-pathnames "2.txt" diary-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "This file is already compressed." s))
+    (with-open-file (s (merge-pathnames "2.txt" compressed-diary-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "Compressed already-existing content." s))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home))
+               (*gemini-api-key-function* (lambda () "mocked-api-key"))
+               (*read-mcp-config-function*
+                 (lambda ()
+                   '((:name "memory"
+                      :command "npx"
+                      :args ("-y" "@modelcontextprotocol/server-memory")
+                      :env (("MEMORY_FILE_PATH" . "default-memory.json"))))))
+               (*start-mcp-server-function*
+                 (lambda (name command args &optional environment)
+                   (declare (ignore command args environment))
+                   (make-instance 'mcp-server :name name)))
+               (*mcp-initialize-function* (lambda (server) server))
+               (*persona-memory-compression-thread-function*
+                 (lambda (thunk thread-name)
+                   (declare (ignore thread-name))
+                   (funcall thunk)
+                   :ran-inline))
+               (*http-post-function*
+                 (lambda (url &rest args)
+                   (declare (ignore args))
+                   (push url captured-urls)
+                   (values
+                    (make-string-input-stream
+                     "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Compressed mock response content.\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"models/gemini-mock-model\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
+                    200))))
+           (let* ((conv (new-chat-persona "persona-auto-compress-diary"))
+                  (entries (conversation-persona-diary-entries conv)))
+             ;; Because we ran compression inline, Gopher should have automatically compressed 1.txt to CompressedDiary/1.txt
+             ;; Verify file exists in CompressedDiary/ with the mocked content
+             (let ((compressed-1-path (merge-pathnames "1.txt" compressed-diary-dir))
+                   (compressed-2-path (merge-pathnames "2.txt" compressed-diary-dir)))
+               (fiveam:is (not (null (probe-file compressed-1-path))))
+               (fiveam:is (string= "Compressed mock response content." (uiop:read-file-string compressed-1-path)))
+               ;; Verify 2.txt was NOT overwritten
+               (fiveam:is (string= "Compressed already-existing content."
+                                   (string-right-trim '(#\Space #\Tab #\Return #\Linefeed)
+                                                       (uiop:read-file-string compressed-2-path)))))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
 (fiveam:test test-persona-config-enables-filesystem-tools

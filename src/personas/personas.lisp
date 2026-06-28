@@ -189,8 +189,33 @@
             (or (car (last directory-components))
                 (namestring persona-dir)))))
 
+(defun compress-pending-diary-files (persona-dir runtime-context)
+  "Finds any files in Diary/ that do not have a matching file in CompressedDiary/, and compresses them using the LLM."
+  (let* ((diary-dir (uiop:directory-exists-p (merge-pathnames "Diary/" persona-dir)))
+         (comp-dir (merge-pathnames "CompressedDiary/" persona-dir)))
+    (when diary-dir
+      (ensure-directories-exist comp-dir)
+      (dolist (f (uiop:directory-files diary-dir))
+        (let* ((filename (file-namestring f))
+               (dest-path (merge-pathnames filename comp-dir)))
+          (unless (probe-file dest-path)
+            (handler-case
+                (let* ((content (uiop:read-file-string f))
+                       (prompt (format nil "Please compress and summarize the following diary entry to make it extremely concise and dense while retaining all key factual information, thoughts, and memories: ~%~%~A" content))
+                       (conv (new-chat :backend :gemini :runtime-context runtime-context))
+                       (response (chat prompt :conversation conv)))
+                  (with-open-file (stream dest-path :direction :output :if-exists :supersede :if-does-not-exist :create)
+                    (write-string response stream))
+                  (log-message :info "Successfully compressed diary file"
+                               :context `(("input" . ,(namestring f))
+                                          ("output" . ,(namestring dest-path)))))
+              (error (e)
+                (log-message :error "Failed to compress diary file"
+                             :context `(("input" . ,(namestring f))
+                                        ("error" . ,(princ-to-string e))))))))))))
+
 (defun start-persona-memory-compression-thread (conversation persona-dir)
-  "Starts background compressed-memory generation for PERSONA-DIR when memory.json exists."
+  "Starts background compressed-memory generation and diary compression for PERSONA-DIR."
   (let ((memory-json-path (persona-memory-json-path persona-dir)))
     (when memory-json-path
       (let ((runtime-context (chatbot-runtime-context (conversation-chatbot conversation))))
@@ -199,18 +224,36 @@
                    (call-with-runtime-context
                     runtime-context
                     (lambda ()
+                      ;; 1. Compress memory.json
                       (handler-case
                           (save-compressed-persona-memory persona-dir)
                         (error (condition)
                           (log-message :error "Failed to save compressed persona memory"
                                        :context `(("path" . ,(namestring memory-json-path))
+                                                  ("error" . ,(princ-to-string condition))))))
+                      ;; 2. Compress pending diary files
+                      (handler-case
+                          (compress-pending-diary-files persona-dir runtime-context)
+                        (error (condition)
+                          (log-message :error "Failed to compress diary files"
+                                       :context `(("path" . ,(namestring persona-dir))
                                                   ("error" . ,(princ-to-string condition)))))))))
                  (persona-memory-compression-thread-name persona-dir))))))
 
-(defun persona-diary-directory (persona-dir)
-  "Returns the preferred persona diary directory pathname when present."
-  (or (uiop:directory-exists-p (merge-pathnames "CompressedDiary/" persona-dir))
-      (uiop:directory-exists-p (merge-pathnames "Diary/" persona-dir))))
+(defun persona-diary-files (persona-dir)
+  "Returns a list of preferred diary file pathnames, preferring CompressedDiary/ over Diary/."
+  (let* ((diary-dir (uiop:directory-exists-p (merge-pathnames "Diary/" persona-dir)))
+         (comp-dir (uiop:directory-exists-p (merge-pathnames "CompressedDiary/" persona-dir)))
+         (files (make-hash-table :test #'equal)))
+    (when diary-dir
+      (dolist (f (uiop:directory-files diary-dir))
+        (setf (gethash (file-namestring f) files) f)))
+    (when comp-dir
+      (dolist (f (uiop:directory-files comp-dir))
+        (setf (gethash (file-namestring f) files) f)))
+    (let ((result nil))
+      (maphash (lambda (k v) (declare (ignore k)) (push v result)) files)
+      result)))
 
 (defun diary-filename-leading-integer (pathname)
   "Returns the leading integer from PATHNAME's stem, or NIL when absent."
@@ -249,19 +292,16 @@
 
 (defun persona-diary-entries (persona-dir)
   "Returns ordered diary preload entries for PERSONA-DIR."
-  (let ((diary-dir (persona-diary-directory persona-dir)))
-    (when diary-dir
-      (let ((files (stable-sort (copy-list (uiop:directory-files diary-dir))
-                                #'diary-file<)))
-        (when files
-          (log-message :info "Loading persona diary preload"
-                       :context `(("path" . ,(namestring diary-dir))
-                                  ("count" . ,(princ-to-string (length files))))))
-        (mapcar (lambda (path)
-                  `((:filename . ,(file-namestring path))
-                    (:content . ,(string-right-trim '(#\Space #\Tab #\Return #\Linefeed)
-                                                    (uiop:read-file-string path)))))
-                files)))))
+  (let ((files (stable-sort (persona-diary-files persona-dir) #'diary-file<)))
+    (when files
+      (log-message :info "Loading persona diary preload"
+                   :context `(("persona" . ,(namestring persona-dir))
+                              ("count" . ,(princ-to-string (length files)))))
+      (mapcar (lambda (path)
+                `((:filename . ,(file-namestring path))
+                  (:content . ,(string-right-trim '(#\Space #\Tab #\Return #\Linefeed)
+                                                  (uiop:read-file-string path)))))
+              files))))
 
 (defun json-array-elements (value)
   "Returns VALUE as a proper list when it represents a JSON array."

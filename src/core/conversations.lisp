@@ -83,7 +83,7 @@
                                 :agentic-loop-default-model loop-default-model)))
        base-context)))
 
-(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory)
+(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p)
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
@@ -121,7 +121,8 @@ configuration, instructions, or preloaded memory."
                                  :depth depth
                                  :token-budget token-budget
                                  :spent-tokens spent-tokens
-                                 :scoped-directory (or scoped-directory filesystem-root-directory))))
+                                 :scoped-directory (or scoped-directory filesystem-root-directory)
+                                 :filesystem-read-only-p filesystem-read-only-p)))
         (when (startup-chatbot-mcp-servers resolved-context)
           (setf (chatbot-mcp-servers bot)
                 (startup-chatbot-mcp-servers resolved-context))
@@ -129,7 +130,7 @@ configuration, instructions, or preloaded memory."
                 (startup-chatbot-mcp-status resolved-context)))
         (make-instance 'conversation :chatbot bot))))))
 
-(defun new-chat-persona (persona-name &key runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory)
+(defun new-chat-persona (persona-name &key runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory (web-tools-p nil web-tools-supplied-p) (filesystem-tools-p nil filesystem-tools-supplied-p) (filesystem-read-only-p nil filesystem-read-only-supplied-p))
   "Creates a new chat session for a given chatbot persona.
 The persona's configuration is read from ~/.Personas/<persona-name>/config.lisp
 and the system instructions are loaded from the persona's system-instruction file set.
@@ -147,12 +148,12 @@ Use NEW-CHAT instead when no persona should be loaded."
            (googleapi (safe-getf config :googleapi))
            (google-search-p (safe-getf config :google-search-p))
            (gemini-fallback-to-google-p (safe-getf config :gemini-fallback-to-google-p))
-           (web-tools-p (safe-getf config :enable-web-tools))
+           (config-web-tools-p (safe-getf config :enable-web-tools))
            (code-execution-p (safe-getf config :code-execution-p))
            (include-timestamp-p (safe-getf config :include-timestamp))
            (include-model-p (safe-getf config :include-model))
            (enable-eval-p (safe-getf config :enable-eval))
-           (filesystem-tools-p (safe-getf config :enable-filesystem-tools))
+           (config-filesystem-tools-p (safe-getf config :enable-filesystem-tools))
            (backend (persona-config-backend config))
            (persona-runtime-context (persona-config-runtime-context config runtime-context)))
       (declare (ignore googleapi))
@@ -168,12 +169,12 @@ Use NEW-CHAT instead when no persona should be loaded."
                           :top-p top-p
                           :google-search-p google-search-p
                           :gemini-fallback-to-google-p gemini-fallback-to-google-p
-                          :web-tools-p web-tools-p
+                          :web-tools-p (if web-tools-supplied-p web-tools-p config-web-tools-p)
                           :code-execution-p code-execution-p
                           :include-timestamp-p include-timestamp-p
                           :include-model-p include-model-p
                           :enable-eval-p enable-eval-p
-                          :filesystem-tools-p filesystem-tools-p
+                          :filesystem-tools-p (if filesystem-tools-supplied-p filesystem-tools-p config-filesystem-tools-p)
                           :filesystem-root-directory (or scoped-directory persona-dir)
                           :filesystem-allowed-directories (persona-filesystem-allowlist-directories persona-dir)
                           :filesystem-allowlist-path (persona-filesystem-allowlist-path persona-dir)
@@ -185,7 +186,8 @@ Use NEW-CHAT instead when no persona should be loaded."
                           :depth depth
                           :token-budget token-budget
                           :spent-tokens spent-tokens
-                          :scoped-directory (or scoped-directory persona-dir))
+                          :scoped-directory (or scoped-directory persona-dir)
+                          :filesystem-read-only-p (if filesystem-read-only-supplied-p filesystem-read-only-p nil))
                 persona-dir)
                persona-dir)))
         (setf conversation (attach-persona-memory-mcp-server conversation persona-dir))

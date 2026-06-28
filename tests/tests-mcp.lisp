@@ -1401,3 +1401,65 @@ data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Rep
                        (fiveam:is (search "Recovered from unexpected shutdown" (cdr (assoc "content" last-msg :test #'string=))))))))))))
       (when (uiop:directory-exists-p mock-home)
         (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-minion-web-tools-inheritance
+  (let* ((bot-with (conversation-chatbot (new-chat :backend :gemini :web-tools-p t)))
+         (bot-without (conversation-chatbot (new-chat :backend :gemini :web-tools-p nil))))
+    ;; 1. Spawn from parent with web-tools-p = t
+    ;; child should inherit t by default
+    (execute-chatbot-tool-by-name bot-with "spawnMinion" '(("name" . "Inherited-True")))
+    (let* ((child-conv (first (chatbot-subordinates bot-with)))
+           (child-bot (conversation-chatbot child-conv)))
+      (fiveam:is-true (chatbot-web-tools-p child-bot)))
+    
+    ;; 2. Spawn from parent with web-tools-p = t, but explicitly override to nil
+    (execute-chatbot-tool-by-name bot-with "spawnMinion" '(("name" . "Overridden-False") ("webTools" . nil)))
+    (let* ((child-conv (second (chatbot-subordinates bot-with)))
+           (child-bot (conversation-chatbot child-conv)))
+      (fiveam:is-false (chatbot-web-tools-p child-bot)))
+    
+    ;; 3. Spawn from parent with web-tools-p = nil
+    ;; child should inherit nil by default
+    (execute-chatbot-tool-by-name bot-without "spawnMinion" '(("name" . "Inherited-False")))
+    (let* ((child-conv (first (chatbot-subordinates bot-without)))
+           (child-bot (conversation-chatbot child-conv)))
+      (fiveam:is-false (chatbot-web-tools-p child-bot)))
+    
+    ;; 4. Spawn from parent with web-tools-p = nil, but explicitly override to t
+    (execute-chatbot-tool-by-name bot-without "spawnMinion" '(("name" . "Overridden-True") ("webTools" . t)))
+    (let* ((child-conv (second (chatbot-subordinates bot-without)))
+           (child-bot (conversation-chatbot child-conv)))
+      (fiveam:is-true (chatbot-web-tools-p child-bot)))))
+
+(fiveam:test test-minion-filesystem-sandbox-read-only
+  (let* ((parent-bot (conversation-chatbot (new-chat :backend :gemini)))
+         (temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-fs-sandbox/" temp-dir)))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home))
+               (*gemini-api-key-function* (lambda () "mocked-api-key")))
+           ;; 1. Spawn minion Gopher
+           (execute-chatbot-tool-by-name parent-bot "spawnMinion" '(("name" . "Gopher")))
+           (let* ((gopher-conv (first (chatbot-subordinates parent-bot)))
+                  (gopher-bot (conversation-chatbot gopher-conv)))
+             ;; Verify read-only and filesystem flag are set to T
+             (fiveam:is-true (chatbot-filesystem-tools-p gopher-bot))
+             (fiveam:is-true (chatbot-filesystem-read-only-p gopher-bot))
+             
+             ;; Verify read-only tools directory and readFileLines are registered
+             (multiple-value-bind (source tool) (find-chatbot-tool gopher-bot "directory")
+               (fiveam:is (eq :built-in source))
+               (fiveam:is (not (null tool))))
+             (multiple-value-bind (source tool) (find-chatbot-tool gopher-bot "readFileLines")
+               (fiveam:is (eq :built-in source))
+               (fiveam:is (not (null tool))))
+             
+             ;; Verify write/delete tools are NOT registered
+             (multiple-value-bind (source tool) (find-chatbot-tool gopher-bot "writeFile")
+               (fiveam:is (null source))
+               (fiveam:is (null tool)))
+             (multiple-value-bind (source tool) (find-chatbot-tool gopher-bot "deleteFile")
+               (fiveam:is (null source))
+               (fiveam:is (null tool)))))
+      (when (uiop:directory-exists-p mock-home)
+        (uiop:delete-directory-tree mock-home :validate t)))))

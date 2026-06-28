@@ -690,7 +690,10 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                         :parent-name (chatbot-persona-name bot)
                                         :depth child-depth
                                         :token-budget budget
-                                        :scoped-directory child-dir))
+                                        :scoped-directory child-dir
+                                        :web-tools-p (chatbot-web-tools-p bot)
+                                        :filesystem-tools-p t
+                                        :filesystem-read-only-p t))
                     (child-bot (conversation-chatbot sub-conv)))
                (setf (chatbot-persona-name child-bot) child-name)
                ;; Bootstrap system instructions
@@ -772,7 +775,13 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                   (and val (string/= val "") val)))
             (requested-budget (let ((val (or (mcp-val "budget" arguments)
                                              (mcp-val :budget arguments))))
-                                (and val (numberp val) val))))
+                                (and val (numberp val) val)))
+            (web-tools-p (let ((cell (or (assoc "webTools" arguments :test #'string-equal)
+                                         (assoc :web-tools-p arguments :test #'eq)
+                                         (assoc :webTools arguments :test #'eq))))
+                           (if cell
+                               (cdr cell)
+                               (chatbot-web-tools-p bot))))) ; Inherit from parent if omitted
        ;; Ensure name is unique
        (when (find name (chatbot-subordinates bot)
                    :key (lambda (c)
@@ -820,7 +829,10 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                        :parent-name (chatbot-persona-name bot)
                                        :depth child-depth
                                        :token-budget requested-budget
-                                       :scoped-directory child-dir)
+                                       :scoped-directory child-dir
+                                       :web-tools-p web-tools-p
+                                       :filesystem-tools-p t
+                                       :filesystem-read-only-p t)
                      (new-chat :backend backend-kw
                                :model model
                                :system-instruction system-instruction
@@ -828,7 +840,10 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                :parent-name (chatbot-persona-name bot)
                                :depth child-depth
                                :token-budget requested-budget
-                               :scoped-directory child-dir)))
+                               :scoped-directory child-dir
+                               :web-tools-p web-tools-p
+                               :filesystem-tools-p t
+                               :filesystem-read-only-p t)))
                 (child-bot (conversation-chatbot sub-conv)))
            ;; Override or set the persona name of the newly created chatbot to the minion's name
            (setf (chatbot-persona-name child-bot) name)
