@@ -660,9 +660,7 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                     (chatbot-persona-name (conversation-chatbot c)))
                              :test #'string-equal)))
         (cond
-          (existing
-           ;; If child already exists, return an error message to append
-           (format nil "~%[SYSTEM ERROR: Spawn failed: Subordinate '~A' already exists.]" child-name))
+          (existing nil)
           
           ;; 1. Depth guard
           ((> (1+ (chatbot-depth bot)) *max-minion-depth*)
@@ -697,6 +695,8 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                (setf (chatbot-persona-name child-bot) child-name)
                ;; Bootstrap system instructions
                (append-delegation-instructions child-bot child-name child-depth budget)
+               ;; Save child minion state to disk
+               (save-minion-state sub-conv)
                ;; Add to parent's subordinates list
                (setf (chatbot-subordinates bot)
                      (append (chatbot-subordinates bot) (list sub-conv)))
@@ -705,9 +705,16 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
 
 (defun recursively-dismiss-conversation (conv)
   "Recursively dismisses all subordinate conversations of CONV."
-  (let ((bot (conversation-chatbot conv)))
+  (let* ((bot (conversation-chatbot conv))
+         (name (chatbot-persona-name bot)))
     (dolist (sub (chatbot-subordinates bot))
       (recursively-dismiss-conversation sub))
+    ;; Delete checkpoint state file if it exists
+    (when name
+      (let* ((dir (minions-data-directory))
+             (file-path (merge-pathnames (format nil "~A.json" name) dir)))
+        (when (probe-file file-path)
+          (delete-file file-path))))
     (setf (chatbot-subordinates bot) nil)))
 
 (defun default-execute-builtin-chatbot-tool (bot tool-name arguments)
@@ -735,6 +742,8 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
        (let* ((response (chat prompt :conversation sub-conv))
               (sub-bot (conversation-chatbot sub-conv))
               (spawn-msg (parse-and-execute-spawn-trigger sub-bot response)))
+         ;; Auto-save state
+         (save-minion-state sub-conv)
          (if spawn-msg
              (format nil "~A~%~A" response spawn-msg)
              response))))
@@ -826,6 +835,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
            
            ;; Bootstrap the system instructions
            (append-delegation-instructions child-bot name child-depth requested-budget)
+           
+           ;; Save newly spawned minion state to disk
+           (save-minion-state sub-conv)
            
            ;; Add to subordinates list
            (setf (chatbot-subordinates bot)

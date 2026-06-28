@@ -29,6 +29,9 @@
            "MAKE-RUNTIME-CONTEXT"
            "NEW-CHAT"
            "NEW-CHAT-PERSONA"
+           "SAVE-MINION-STATE"
+           "RESTORE-MINIONS"
+           "MINIONS-DATA-DIRECTORY"
            "RUN-ALL-TESTS"
            "START-AGENTIC-LOOP"
            "LIST-AGENTIC-LOOPS"
@@ -58,6 +61,7 @@
            ;; MAKE-RUNTIME-CONTEXT plus explicit :RUNTIME-CONTEXT arguments.
            "*WARN-ON-LEGACY-RUNTIME-GLOBALS-P*"
            "*MCP-CONFIG-PATH*"
+           "*MCP-DEBUG-P*"
            "*AUTO-INITIALIZE-STARTUP-MCP-SERVERS-P*"
            "*DEFAULT-CONVERSATION*"
            "*AGENTIC-LOOP-DEFAULT-BACKEND*"

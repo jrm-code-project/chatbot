@@ -191,3 +191,171 @@ Use NEW-CHAT instead when no persona should be loaded."
         (setf conversation (attach-persona-memory-mcp-server conversation persona-dir))
         (start-persona-memory-compression-thread conversation persona-dir)
         conversation))))
+
+(defvar *minions-data-directory* nil
+  "Seam to override the dynamic minions storage directory in unit tests.")
+
+(defun minions-data-directory ()
+  "Returns the directory where minion checkpoint states are persisted."
+  (or *minions-data-directory*
+      (let* ((base-dir (or (and (find-package "ASDF")
+                                (asdf:system-source-directory "chatbot"))
+                           (uiop:getcwd)))
+             (path (merge-pathnames "data/minions/" base-dir)))
+        (uiop:ensure-directory-pathname path))))
+
+(defun save-minion-state (conversation)
+  "Serializes the critical state and telemetry of CONVERSATION to disk."
+  (let* ((bot (conversation-chatbot conversation))
+         (name (chatbot-persona-name bot)))
+    (when name
+      (let* ((dir (minions-data-directory))
+             (file-path (merge-pathnames (format nil "~A.json" name) dir))
+             (state-plist
+              (list :name name
+                    :backend (string-downcase (symbol-name (chatbot-backend bot)))
+                    :model (or (chatbot-model bot) "")
+                    :parent-name (chatbot-parent-name bot)
+                    :depth (chatbot-depth bot)
+                    :token-budget (chatbot-token-budget bot)
+                    :spent-tokens (chatbot-spent-tokens bot)
+                    :scoped-directory (and (chatbot-scoped-directory bot)
+                                           (namestring (chatbot-scoped-directory bot)))
+                    :system-instruction (let ((inst (chatbot-system-instruction bot)))
+                                          (cond
+                                            ((null inst) "")
+                                            ((stringp inst) inst)
+                                            ((vectorp inst) (coerce inst 'list))
+                                            (t "")))
+                    :interaction-id (or (conversation-interaction-id conversation) "")
+                    :messages (conversation-messages conversation))))
+        (ensure-directories-exist file-path)
+        (with-open-file (stream file-path
+                               :direction :output
+                               :if-exists :supersede
+                               :if-does-not-exist :create)
+          (write-string (cl-json:encode-json-to-string state-plist) stream))
+        (log-message :info "Freeze-dried minion state"
+                     :context `(("name" . ,name) ("file" . ,(namestring file-path))))
+        (namestring file-path)))))
+
+(defun get-string-plist-value (plist key)
+  "Gets the value associated with KEY (a string) in a string-keyed PLIST."
+  (loop for (k v) on plist by #'cddr
+        when (string-equal k key)
+        return v))
+
+(defun terminate-active-threads-by-name (name-substring)
+  "Finds and terminates any active SBCL threads whose name contains NAME-SUBSTRING case-insensitively."
+  #+sbcl
+  (let ((threads (sb-thread:list-all-threads))
+        (current sb-thread:*current-thread*))
+    (dolist (thread threads)
+      (unless (eq thread current)
+        (let ((name (sb-thread:thread-name thread)))
+          (when (and name (search name-substring name :test #'char-equal))
+            (handler-case
+                (progn
+                  (log-message :info "MCRS: Terminating pre-existing thread to prevent leak"
+                               :context `(("thread-name" . ,name) ("minion" . ,name-substring)))
+                  (sb-thread:terminate-thread thread))
+              (error (e)
+                (log-message :warn "MCRS: Failed to terminate thread"
+                             :context `(("thread-name" . ,name) ("error" . ,(princ-to-string e))))))))))))
+
+(defun restore-minions (root-bot)
+  "Scans data/minions/ directory and reconstructs the minion hierarchy under ROOT-BOT."
+  (let ((dir (minions-data-directory)))
+    (when (uiop:directory-exists-p dir)
+      (let ((files (uiop:directory-files dir "*.json"))
+            (minion-states nil))
+        (dolist (f files)
+          (handler-case
+              (let* ((raw-text (uiop:read-file-string f))
+                     (parsed (cl-json:decode-json-from-string raw-text)))
+                (push parsed minion-states))
+            (error (e)
+              (log-message :warn "Failed to parse minion state file"
+                           :context `(("file" . ,(namestring f))
+                                      ("error" . ,(princ-to-string e)))))))
+        
+        ;; Sort by depth ascending
+        (setf minion-states
+              (sort minion-states #'< :key (lambda (x)
+                                             (or (get-string-plist-value x "depth") 1))))
+        
+        ;; Now instantiate in order
+        (let ((restored-convs (make-hash-table :test #'equal)))
+          (dolist (state minion-states)
+            (let* ((name (get-string-plist-value state "name"))
+                   (backend-str (get-string-plist-value state "backend"))
+                   (backend-kw (if (and backend-str (string/= backend-str ""))
+                                   (intern (string-upcase backend-str) "KEYWORD")
+                                   :gemini))
+                   (model (get-string-plist-value state "model"))
+                   (parent-name (get-string-plist-value state "parentName"))
+                   (depth (or (get-string-plist-value state "depth") 1))
+                   (token-budget (get-string-plist-value state "tokenBudget"))
+                   (spent-tokens (or (get-string-plist-value state "spentTokens") 0))
+                   (scoped-dir-str (get-string-plist-value state "scopedDirectory"))
+                   (scoped-dir (and scoped-dir-str (uiop:ensure-directory-pathname scoped-dir-str)))
+                   (system-instruction-raw (get-string-plist-value state "systemInstruction"))
+                   (system-instruction (cond
+                                         ((null system-instruction-raw) nil)
+                                         ((stringp system-instruction-raw) system-instruction-raw)
+                                         ((listp system-instruction-raw) (coerce system-instruction-raw 'vector))
+                                         (t nil)))
+                   (interaction-id (get-string-plist-value state "interactionId"))
+                   (messages (get-string-plist-value state "messages")))
+              ;; Terminate any active pre-existing background threads matching the minion name
+              (when name
+                (terminate-active-threads-by-name name))
+              ;; Instantiate minion
+              (let* ((sub-conv (new-chat :backend backend-kw
+                                         :model model
+                                         :system-instruction system-instruction
+                                         :parent-name parent-name
+                                         :depth depth
+                                         :token-budget token-budget
+                                         :spent-tokens spent-tokens
+                                         :scoped-directory scoped-dir
+                                         :runtime-context (chatbot-runtime-context root-bot)))
+                     (sub-bot (conversation-chatbot sub-conv)))
+                (setf (chatbot-persona-name sub-bot) name)
+                
+                ;; Restore Gemini interaction-id and Stateless messages history
+                (when (and interaction-id (string/= interaction-id ""))
+                  (setf (conversation-interaction-id sub-conv) interaction-id))
+                
+                ;; Build messages alist structure back correctly
+                (when (and messages (listp messages))
+                  (setf (conversation-messages sub-conv)
+                        (mapcar (lambda (msg)
+                                  (list (cons "role" (get-string-plist-value msg "role"))
+                                        (cons "content" (get-string-plist-value msg "content"))))
+                                messages)))
+                
+                ;; 4. Crash-Recovery Handshake: Append a system recovery prompt to the end of the history
+                (let ((handshake "[SYSTEM: Recovered from unexpected shutdown. Please review your context and resume your last uncompleted task.]"))
+                  (setf (conversation-messages sub-conv)
+                        (append (conversation-messages sub-conv)
+                                (list (list (cons "role" "user")
+                                            (cons "content" handshake))))))
+                
+                ;; Store restored conversation in hash table for lookup
+                (setf (gethash name restored-convs) sub-conv)
+                
+                ;; Link to the resolved parent
+                (if (or (null parent-name) (string= parent-name "") (string-equal parent-name (chatbot-persona-name root-bot)))
+                    ;; Attach to root bot
+                    (setf (chatbot-subordinates root-bot)
+                          (append (chatbot-subordinates root-bot) (list sub-conv)))
+                    ;; Attach to its resolved parent minion
+                    (let ((parent-conv (gethash parent-name restored-convs)))
+                      (if parent-conv
+                          (let ((parent-bot (conversation-chatbot parent-conv)))
+                            (setf (chatbot-subordinates parent-bot)
+                                  (append (chatbot-subordinates parent-bot) (list sub-conv))))
+                          (log-message :warn "Orphaned minion: parent not found"
+                                       :context `(("name" . ,name) ("parent" . ,parent-name)))))))))))
+      (log-message :info "MCRS: Restoration bootloader completed successfully."))))

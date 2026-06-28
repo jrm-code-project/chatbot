@@ -60,6 +60,9 @@
 (defvar *mcp-send-request-function* nil
   "Optional test seam for sending an MCP JSON-RPC request.")
 
+(defvar *mcp-debug-p* nil
+  "Global flag controlling whether verbose MCP JSON-RPC and lifecycle debug messages are logged.")
+
 (defvar *mcp-initialize-function* nil
   "Optional test seam for performing the MCP initialize handshake.")
 

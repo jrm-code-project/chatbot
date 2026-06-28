@@ -219,7 +219,8 @@
          (let ((output (with-output-to-string (s)
                          (let ((context (make-runtime-context :logging-enabled-p t
                                                               :log-level :info
-                                                              :log-stream s)))
+                                                              :log-stream s))
+                               (*mcp-debug-p* t))
                            (call-with-runtime-context
                             context
                             (lambda ()
@@ -1331,3 +1332,72 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
              (fiveam:is (null (chatbot-subordinates bot)))))
       (when (uiop:directory-exists-p mock-home)
         (uiop:delete-directory-tree mock-home :validate t)))))
+
+(fiveam:test test-minion-checkpoint-and-recovery
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-mcrs/" temp-dir))
+         (mock-minions-dir (merge-pathnames "data/minions/" mock-home))
+         (bot (conversation-chatbot (new-chat :backend :gemini :persona-name "Top-Boss")))
+         (*minions-data-directory* mock-minions-dir)
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore url args))
+             (values
+              (make-string-input-stream
+               "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Reporting [SPAWN-SUB: name=\\\"Sub-Minion\\\", budget=500]\"}}")
+              200))))
+    (ensure-directories-exist mock-minions-dir)
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home))
+               (*gemini-api-key-function* (lambda () "mocked-api-key")))
+           
+           ;; 1. Spawn a minion named Gopher
+           (execute-chatbot-tool-by-name bot "spawnMinion"
+                                         '(("name" . "Gopher")
+                                           ("budget" . 1000)))
+           
+           ;; Verify Gopher state file is created
+           (let ((gopher-file (merge-pathnames "Gopher.json" mock-minions-dir)))
+             (fiveam:is (not (null (probe-file gopher-file))))
+             
+             ;; 2. Prompt Gopher, which will trigger spawning Sub-Minion
+             (execute-chatbot-tool-by-name bot "promptSubordinate"
+                                           '(("name" . "Gopher")
+                                             ("prompt" . "Report state")))
+             
+             ;; Verify Sub-Minion state file is also created
+             (let ((sub-file (merge-pathnames "Sub-Minion.json" mock-minions-dir)))
+               (fiveam:is (not (null (probe-file sub-file))))
+               
+               ;; 3. Now simulate reboot and recover. We instantiate a fresh new bot.
+               (let* ((fresh-bot (conversation-chatbot (new-chat :backend :gemini :persona-name "Top-Boss")))
+                      (restored (restore-minions fresh-bot)))
+                 (declare (ignore restored))
+                 
+                 ;; Verify the parent-child structure and telemetry is perfectly restored!
+                 (let* ((subs (chatbot-subordinates fresh-bot))
+                        (restored-gopher-conv (first subs))
+                        (restored-gopher-bot (conversation-chatbot restored-gopher-conv)))
+                   (fiveam:is (= 1 (length subs)))
+                   (fiveam:is (string= "Gopher" (chatbot-persona-name restored-gopher-bot)))
+                   (fiveam:is (= 2 (chatbot-depth restored-gopher-bot)))
+                   (fiveam:is (= 1000 (chatbot-token-budget restored-gopher-bot)))
+                   (fiveam:is (= 500 (chatbot-spent-tokens restored-gopher-bot)))
+                   
+                   ;; Verify Sub-Minion is nested under Gopher
+                   (let* ((gopher-subs (chatbot-subordinates restored-gopher-bot))
+                          (restored-sub-conv (first gopher-subs))
+                          (restored-sub-bot (conversation-chatbot restored-sub-conv)))
+                     (fiveam:is (= 1 (length gopher-subs)))
+                     (fiveam:is (string= "Sub-Minion" (chatbot-persona-name restored-sub-bot)))
+                     (fiveam:is (= 3 (chatbot-depth restored-sub-bot)))
+                     (fiveam:is (= 500 (chatbot-token-budget restored-sub-bot)))
+                     
+                     ;; Verify recovery handshake message was appended
+                     (let* ((history (conversation-messages restored-sub-conv))
+                            (last-msg (car (last history))))
+                       (fiveam:is (string= "user" (cdr (assoc "role" last-msg :test #'string=))))
+                       (fiveam:is (search "Recovered from unexpected shutdown" (cdr (assoc "content" last-msg :test #'string=))))))))))))
+      (when (uiop:directory-exists-p mock-home)
+        (uiop:delete-directory-tree mock-home :validate t))))

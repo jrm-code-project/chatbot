@@ -38,7 +38,9 @@
 
 (defun log-prefixed-message (prefix message &key context (stream (current-log-stream)))
   "Writes MESSAGE with a custom PREFIX through the shared logging stream."
-  (when (current-logging-enabled-p)
+  (when (and (current-logging-enabled-p)
+             (or (not (string-equal prefix "MCP DEBUG"))
+                 *mcp-debug-p*))
     (format stream "[~A] ~A~%" prefix message)
     (dolist (entry context)
       (format stream "  ~A: ~A~%" (car entry) (cdr entry)))
