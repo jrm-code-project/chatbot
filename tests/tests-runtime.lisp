@@ -531,6 +531,18 @@
     (fiveam:is-false (chatbot-gemini-fallback-to-google-p bot))
     (fiveam:is-false (chatbot-gemini-fallback-to-google-p default-bot))))
 
+(fiveam:test test-new-chat-subordinates
+  (let* ((sub-conv-1 (new-chat))
+         (sub-conv-2 (new-chat))
+         (conv (new-chat :subordinates (list sub-conv-1 sub-conv-2)))
+         (bot (conversation-chatbot conv)))
+    (fiveam:is (typep conv 'conversation))
+    (fiveam:is (typep bot 'chatbot))
+    (fiveam:is (listp (chatbot-subordinates bot)))
+    (fiveam:is (= 2 (length (chatbot-subordinates bot))))
+    (fiveam:is (eq sub-conv-1 (first (chatbot-subordinates bot))))
+    (fiveam:is (eq sub-conv-2 (second (chatbot-subordinates bot))))))
+
 (fiveam:test test-gemini-chat-falls-back-on-interactions-404
   (let ((conv (new-chat :backend :gemini :gemini-fallback-to-google-p t))
        (calls '())

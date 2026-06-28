@@ -83,7 +83,7 @@
                                 :agentic-loop-default-model loop-default-model)))
        base-context)))
 
-(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context)
+(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory)
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
@@ -96,6 +96,7 @@ configuration, instructions, or preloaded memory."
       (let* ((chosen-model (or model
                                (backend-default-model backend)))
              (bot (make-instance 'chatbot
+                                 :persona-name persona-name
                                  :model chosen-model
                                  :backend backend
                                  :system-instruction system-instruction
@@ -111,10 +112,16 @@ configuration, instructions, or preloaded memory."
                                  :include-model-p include-model-p
                                  :enable-eval-p enable-eval-p
                                  :filesystem-tools-p filesystem-tools-p
-                                 :filesystem-root-directory filesystem-root-directory
+                                 :filesystem-root-directory (or scoped-directory filesystem-root-directory)
                                  :filesystem-allowed-directories filesystem-allowed-directories
                                  :filesystem-allowlist-path filesystem-allowlist-path
-                                 :runtime-context resolved-context)))
+                                 :runtime-context resolved-context
+                                 :subordinates subordinates
+                                 :parent-name parent-name
+                                 :depth depth
+                                 :token-budget token-budget
+                                 :spent-tokens spent-tokens
+                                 :scoped-directory (or scoped-directory filesystem-root-directory))))
         (when (startup-chatbot-mcp-servers resolved-context)
           (setf (chatbot-mcp-servers bot)
                 (startup-chatbot-mcp-servers resolved-context))
@@ -122,7 +129,7 @@ configuration, instructions, or preloaded memory."
                 (startup-chatbot-mcp-status resolved-context)))
         (make-instance 'conversation :chatbot bot))))))
 
-(defun new-chat-persona (persona-name &key runtime-context)
+(defun new-chat-persona (persona-name &key runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory)
   "Creates a new chat session for a given chatbot persona.
 The persona's configuration is read from ~/.Personas/<persona-name>/config.lisp
 and the system instructions are loaded from the persona's system-instruction file set.
@@ -167,10 +174,18 @@ Use NEW-CHAT instead when no persona should be loaded."
                           :include-model-p include-model-p
                           :enable-eval-p enable-eval-p
                           :filesystem-tools-p filesystem-tools-p
-                          :filesystem-root-directory persona-dir
+                          :filesystem-root-directory (or scoped-directory persona-dir)
                           :filesystem-allowed-directories (persona-filesystem-allowlist-directories persona-dir)
                           :filesystem-allowlist-path (persona-filesystem-allowlist-path persona-dir)
-                          :runtime-context persona-runtime-context)
+                          :runtime-context persona-runtime-context
+                          :subordinates (loop for sub-persona in (safe-getf config :subordinates)
+                                              collect (new-chat-persona sub-persona :runtime-context runtime-context))
+                          :persona-name persona-name
+                          :parent-name parent-name
+                          :depth depth
+                          :token-budget token-budget
+                          :spent-tokens spent-tokens
+                          :scoped-directory (or scoped-directory persona-dir))
                 persona-dir)
                persona-dir)))
         (setf conversation (attach-persona-memory-mcp-server conversation persona-dir))

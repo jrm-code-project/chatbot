@@ -894,3 +894,76 @@ Paragraph two." s))
             (fiveam:is-false (member shared-memory servers :test #'eq))))
       (setf (runtime-context-startup-chatbot context) nil)
       (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-persona-subordinates-spawning
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-subordinates/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (parent-dir (merge-pathnames "parent-persona/" personas-dir))
+         (sub1-dir (merge-pathnames "sub-persona-1/" personas-dir))
+         (sub2-dir (merge-pathnames "sub-persona-2/" personas-dir)))
+    (ensure-directories-exist parent-dir)
+    (ensure-directories-exist sub1-dir)
+    (ensure-directories-exist sub2-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" parent-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "(:model \"parent-model\" :subordinates (\"sub-persona-1\" \"sub-persona-2\"))" s))
+    (with-open-file (s (merge-pathnames "config.lisp" sub1-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "(:model \"sub1-model\")" s))
+    (with-open-file (s (merge-pathnames "config.lisp" sub2-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "(:model \"sub2-model\")" s))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home))
+               (*gemini-api-key-function* (lambda () "mocked-api-key"))
+               (*http-post-function*
+                 (lambda (url &rest args)
+                   (declare (ignore url args))
+                   (values
+                    (make-string-input-stream
+                     "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Subordinate persona replied.\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"sub1-model\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
+                    200))))
+           (let* ((conv (new-chat-persona "parent-persona"))
+                  (bot (conversation-chatbot conv))
+                  (subs (chatbot-subordinates bot)))
+             (fiveam:is (typep conv 'conversation))
+             (fiveam:is (typep bot 'chatbot))
+             (fiveam:is (= 2 (length subs)))
+             (let* ((sub-conv-1 (first subs))
+                    (sub-bot-1 (conversation-chatbot sub-conv-1))
+                    (sub-conv-2 (second subs))
+                    (sub-bot-2 (conversation-chatbot sub-conv-2)))
+               (fiveam:is (typep sub-conv-1 'conversation))
+               (fiveam:is (typep sub-bot-1 'chatbot))
+               (fiveam:is (string= "sub-persona-1" (chatbot-persona-name sub-bot-1)))
+               (fiveam:is (string= "sub1-model" (chatbot-model sub-bot-1)))
+               (fiveam:is (typep sub-conv-2 'conversation))
+               (fiveam:is (typep sub-bot-2 'chatbot))
+               (fiveam:is (string= "sub-persona-2" (chatbot-persona-name sub-bot-2)))
+               (fiveam:is (string= "sub2-model" (chatbot-model sub-bot-2)))
+               ;; Verify that the promptSubordinate tool is registered and can be executed
+               (multiple-value-bind (source tool) (find-chatbot-tool bot "promptSubordinate")
+                 (fiveam:is (eq :built-in source))
+                 (fiveam:is (string= "promptSubordinate" (mcp-val :name tool))))
+               ;; Execute the promptSubordinate tool
+               (let ((result (execute-chatbot-tool-by-name bot "promptSubordinate"
+                                                           '(("name" . "sub-persona-1")
+                                                             ("prompt" . "hello")))))
+                 (fiveam:is (string= "Subordinate persona replied." result)))
+               ;; Verify that matching is case-insensitive
+               (let ((result (execute-chatbot-tool-by-name bot "promptSubordinate"
+                                                           '(("name" . "SUB-PERSONA-1")
+                                                             ("prompt" . "hello")))))
+                 (fiveam:is (string= "Subordinate persona replied." result)))
+               ;; Verify error on non-existent subordinate name
+               (fiveam:signals error
+                 (execute-chatbot-tool-by-name bot "promptSubordinate"
+                                               '(("name" . "unknown-persona")
+                                                 ("prompt" . "hello")))))))
+      (uiop:delete-directory-tree mock-home :validate t))))

@@ -1156,3 +1156,178 @@
         (when (open-stream-p output-stream)
           (close output-stream))
         (uiop:delete-directory-tree root :validate t)))))
+
+(fiveam:test test-execute-chatbot-tool-dynamic-minions
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-dynamic-minions/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "test-minion-persona/" personas-dir))
+         (bot (conversation-chatbot (new-chat :backend :gemini)))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore args))
+             (cond
+               ((search "api.openai.com" url)
+                (values
+                 (make-string-input-stream
+                  "data: {\"choices\": [{\"delta\": {\"content\": \"Minion Bello here.\"}}]}
+data: [DONE]")
+                 200))
+               (t
+                (values
+                 (make-string-input-stream
+                  "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Minion Bello here.\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gpt-4o\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
+                 200))))))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                       :direction :output
+                       :if-exists :supersede)
+      (write-line "(:model \"persona-model\" :backend :openai)" s))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home))
+               (*gemini-api-key-function* (lambda () "mocked-api-key"))
+               (*openai-api-key* "mocked-openai-key"))
+           ;; 1. List minions initially (expect empty list / empty JSON array)
+           (let ((list-res (execute-chatbot-tool-by-name bot "listMinions" '())))
+             (fiveam:is (string= "[]" list-res)))
+           ;; 2. Spawn a custom minion named Bello
+           (let ((spawn-res (execute-chatbot-tool-by-name bot "spawnMinion"
+                                                          '(("name" . "Bello")
+                                                            ("backend" . "openai")
+                                                            ("model" . "gpt-4o")
+                                                            ("systemInstruction" . "You are Bello")))))
+             (fiveam:is (string= "Minion 'Bello' spawned successfully." spawn-res)))
+           ;; 3. List minions again (expect 1)
+           (let* ((list-res (execute-chatbot-tool-by-name bot "listMinions" '()))
+                  (parsed (cl-json:decode-json-from-string list-res)))
+             (fiveam:is (= 1 (length parsed)))
+             (fiveam:is (string-equal "Bello" (cdr (assoc :name (first parsed)))))
+             (fiveam:is (string-equal "openai" (cdr (assoc :backend (first parsed)))))
+             (fiveam:is (string-equal "gpt-4o" (cdr (assoc :model (first parsed))))))
+           ;; 4. Prompt the minion Bello
+           (let ((prompt-res (execute-chatbot-tool-by-name bot "promptSubordinate"
+                                                           '(("name" . "Bello")
+                                                             ("prompt" . "Hi Bello")))))
+             (fiveam:is (string= "Minion Bello here." prompt-res)))
+           ;; 5. Spawn a persona-based minion named Jerry
+           (let ((spawn-res (execute-chatbot-tool-by-name bot "spawnMinion"
+                                                          '(("name" . "Jerry")
+                                                            ("personaName" . "test-minion-persona")))))
+             (fiveam:is (string= "Minion 'Jerry' spawned successfully." spawn-res)))
+           ;; 6. List minions again (expect Jerry and Bello, total 2)
+           (let* ((list-res (execute-chatbot-tool-by-name bot "listMinions" '()))
+                  (parsed (cl-json:decode-json-from-string list-res)))
+             (fiveam:is (= 2 (length parsed)))
+             ;; jerry info
+             (let ((jerry-info (find "Jerry" parsed :key (lambda (x) (cdr (assoc :name x))) :test #'string-equal)))
+               (fiveam:is (not (null jerry-info)))
+               (fiveam:is (string-equal "openai" (cdr (assoc :backend jerry-info))))
+               (fiveam:is (string-equal "persona-model" (cdr (assoc :model jerry-info))))))
+           ;; 7. Dismiss Jerry and Bello
+           (let ((dismiss-res (execute-chatbot-tool-by-name bot "dismissMinion" '(("name" . "Bello")))))
+             (fiveam:is (string= "Minion 'Bello' and all of its subordinates dismissed successfully." dismiss-res)))
+           (let ((dismiss-res (execute-chatbot-tool-by-name bot "dismissMinion" '(("name" . "Jerry")))))
+             (fiveam:is (string= "Minion 'Jerry' and all of its subordinates dismissed successfully." dismiss-res)))
+           ;; 8. Verify list is empty again
+           (let ((list-res (execute-chatbot-tool-by-name bot "listMinions" '())))
+             (fiveam:is (string= "[]" list-res))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-recursive-minions-lifecycle
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-recursive-minions/" temp-dir))
+         (bot (conversation-chatbot (new-chat :backend :gemini :token-budget 2000 :depth 1)))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore url args))
+             (values
+              (make-string-input-stream
+               "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"I need to delegate. [SPAWN-SUB: name=\\\"Minion-L3\\\", budget=400]\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-3.5-flash\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
+              200))))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home))
+               (*gemini-api-key-function* (lambda () "mocked-api-key")))
+           
+           ;; 1. Spawn parent minion (Minion-L2) at depth 2 with budget 1000
+           (let ((spawn-res (execute-chatbot-tool-by-name bot "spawnMinion"
+                                                          '(("name" . "Minion-L2")
+                                                            ("budget" . 1000)))))
+             (fiveam:is (string= "Minion 'Minion-L2' spawned successfully." spawn-res)))
+           
+           (let* ((subs (chatbot-subordinates bot))
+                  (minion-l2-conv (first subs))
+                  (minion-l2-bot (conversation-chatbot minion-l2-conv)))
+             (fiveam:is (= 1 (length subs)))
+             (fiveam:is (string= "Minion-L2" (chatbot-persona-name minion-l2-bot)))
+             (fiveam:is (= 2 (chatbot-depth minion-l2-bot)))
+             (fiveam:is (= 1000 (chatbot-token-budget minion-l2-bot)))
+             (fiveam:is (= 1000 (chatbot-spent-tokens bot))) ; deducted from parent
+             
+             ;; 2. Prompt minion-l2-bot, which responds with a spawn trigger for Minion-L3
+             ;; This trigger should auto-spawn Minion-L3 at depth 3 with budget 400
+             (let ((prompt-res (execute-chatbot-tool-by-name bot "promptSubordinate"
+                                                             '(("name" . "Minion-L2")
+                                                               ("prompt" . "Delegate task")))))
+               (fiveam:is (not (null (search "Successfully spawned subordinate minion 'Minion-L3'" prompt-res))))
+               (fiveam:is (not (null (search "budget 400 at depth 3" prompt-res)))))
+             
+             ;; Verify Minion-L3 was created under Minion-L2
+             (let* ((l2-subs (chatbot-subordinates minion-l2-bot))
+                    (minion-l3-conv (first l2-subs))
+                    (minion-l3-bot (conversation-chatbot minion-l3-conv)))
+               (fiveam:is (= 1 (length l2-subs)))
+               (fiveam:is (string= "Minion-L3" (chatbot-persona-name minion-l3-bot)))
+               (fiveam:is (= 3 (chatbot-depth minion-l3-bot)))
+               (fiveam:is (= 400 (chatbot-token-budget minion-l3-bot)))
+               (fiveam:is (= 400 (chatbot-spent-tokens minion-l2-bot))) ; deducted from Minion-L2
+               
+               ;; 3. Depth Guard validation
+               ;; If we try to spawn under Minion-L3, depth would be 4, which exceeds *max-minion-depth* of 3.
+               ;; Let's try to prompt Minion-L2 again to trigger a spawn from Minion-L3 (which will attempt depth 4)
+               ;; Change mock response to trigger spawn from Minion-L3
+               (let ((*http-post-function*
+                       (lambda (url &rest args)
+                         (declare (ignore url args))
+                         (values
+                          (make-string-input-stream
+                           "data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Attempting depth 4. [SPAWN-SUB: name=\\\"Minion-L4\\\", budget=100]\"}}")
+                          200))))
+                 (let ((prompt-res (execute-chatbot-tool-by-name minion-l2-bot "promptSubordinate"
+                                                                 '(("name" . "Minion-L3")
+                                                                   ("prompt" . "Delegate further")))))
+                   ;; Verify spawn failed with Maximum nesting depth exceeded message
+                   (fiveam:is (not (null (search "Spawn failed: Maximum nesting depth (3) exceeded" prompt-res))))))
+               
+               ;; 4. Budget Guard validation
+               ;; Minion-L2 has budget 1000, already spent 400, so remaining is 600.
+               ;; If it tries to spawn something with budget 700, it should fail.
+               (let ((*http-post-function*
+                       (lambda (url &rest args)
+                         (declare (ignore url args))
+                         (values
+                          (make-string-input-stream
+                           "data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Excessive budget. [SPAWN-SUB: name=\\\"Minion-Rich\\\", budget=700]\"}}")
+                          200))))
+                 (let ((prompt-res (execute-chatbot-tool-by-name bot "promptSubordinate"
+                                                                 '(("name" . "Minion-L2")
+                                                                   ("prompt" . "Delegate expensive")))))
+                   (fiveam:is (not (null (search "Spawn failed: Requested budget (700) exceeds remaining budget (600)" prompt-res))))))
+               
+               ;; 5. Sandbox Inheritance validation
+               ;; Validate that the scoped directory of Minion-L3 is a subdirectory of Minion-L2's scoped directory
+               (fiveam:is (not (null (chatbot-scoped-directory minion-l2-bot))))
+               (fiveam:is (not (null (chatbot-scoped-directory minion-l3-bot))))
+               (fiveam:is (filesystem-path-within-directory-p (chatbot-scoped-directory minion-l3-bot)
+                                                              (chatbot-scoped-directory minion-l2-bot))))
+             
+             ;; 6. Recursive Dismissal (Recursive Reaper) validation
+             ;; Dismissing Minion-L2 should recursively clean up Minion-L3 and remove Minion-L2 from the parent list
+             (let ((dismiss-res (execute-chatbot-tool-by-name bot "dismissMinion" '(("name" . "Minion-L2")))))
+               (fiveam:is (string= "Minion 'Minion-L2' and all of its subordinates dismissed successfully." dismiss-res)))
+             (fiveam:is (null (chatbot-subordinates bot)))))
+      (when (uiop:directory-exists-p mock-home)
+        (uiop:delete-directory-tree mock-home :validate t)))))

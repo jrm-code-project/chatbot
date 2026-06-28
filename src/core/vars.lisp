@@ -762,3 +762,6 @@ runtime settings are read from the runtime context directly."
               result)))))
 
 (setf *default-runtime-context* (make-runtime-context))
+
+(defvar *max-minion-depth* 3
+  "The global maximum nesting depth allowed for the minion hierarchy.")

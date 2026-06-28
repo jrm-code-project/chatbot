@@ -577,6 +577,7 @@
       (setf (chatbot-runtime-context (conversation-chatbot loop-conversation)) loop-context))
     (register-agentic-loop loop)
     (spawn-agentic-loop-thread loop)
+    (start-agentic-loop-monitor)
     loop))
 
 (defun abort-agentic-loop (loop-id &key force context)
@@ -630,3 +631,79 @@
             (setf (agentic-loop-status loop) :interrupted)
             (sb-thread:condition-broadcast (agentic-loop-approval-waitqueue loop)))))
     loop))
+
+
+
+(defvar *agentic-loop-monitor-thread* nil
+  "The active background thread monitoring agentic loops.")
+(defvar *agentic-loop-monitor-active* nil
+  "Flag indicating whether the agentic loop monitor should continue running.")
+(defvar *agentic-loop-monitor-lock* (sb-thread:make-mutex :name "agentic-loop-monitor-lock")
+  "Mutex protecting the monitor thread activation state.")
+
+(defun monitor-agentic-loops-once (&optional context)
+  "Scans all registered loops and pushes stuck, pending, or zombie loops into valid states."
+  (dolist (loop (list-agentic-loops context))
+    (let ((status (agentic-loop-status loop))
+          (alive (agentic-loop-thread-alive-p loop)))
+      (cond
+        ;; 1. Stuck in :pending (registered but worker thread never spawned/started)
+        ((eq status :pending)
+         (log-message :info (format nil "Monitor: Spawning pending loop ~A" (agentic-loop-id loop)))
+         (spawn-agentic-loop-thread loop))
+
+        ;; 2. Zombie state: status is :running or :awaiting-approval, but the worker thread is dead.
+        ;; We push it to :failed (aborted) to ensure it doesn't stay stuck forever.
+        ((and (member status '(:running :awaiting-approval)) (not alive))
+         (log-message :warn (format nil "Monitor: Detected zombie loop ~A (status: ~A, thread dead)" 
+                                    (agentic-loop-id loop) status))
+         (sb-thread:with-mutex ((agentic-loop-lock loop))
+           (setf (agentic-loop-status loop) :failed)
+           (setf (agentic-loop-last-error loop) "Worker thread terminated unexpectedly.")
+           (setf (agentic-loop-finished-at loop) (get-universal-time))))
+
+        ;; 3. Invalid/unrecognized states that are not completed or aborted should be pushed to failed.
+        ((not (member status '(:pending :running :awaiting-approval :completed :failed :limit-reached :interrupted)))
+         (log-message :error (format nil "Monitor: Detected loop ~A in invalid state: ~A. Aborting." 
+                                     (agentic-loop-id loop) status))
+         (sb-thread:with-mutex ((agentic-loop-lock loop))
+           (setf (agentic-loop-status loop) :failed)
+           (setf (agentic-loop-last-error loop) (format nil "Unrecognized loop status: ~A" status))
+           (setf (agentic-loop-finished-at loop) (get-universal-time))))))))
+
+(defun run-agentic-loop-monitor ()
+  "The execution loop for the background monitor."
+  (loop
+    while *agentic-loop-monitor-active*
+    do (handler-case
+           (progn
+             (monitor-agentic-loops-once)
+             (sleep 5))
+         (error (condition)
+           (log-message :error (format nil "Agentic loop monitor error: ~A" condition))
+           (sleep 5)))))
+
+(defun start-agentic-loop-monitor ()
+  "Starts the background monitor thread."
+  (sb-thread:with-mutex (*agentic-loop-monitor-lock*)
+    (unless *agentic-loop-monitor-active*
+      (setf *agentic-loop-monitor-active* t)
+      (setf *agentic-loop-monitor-thread*
+            (sb-thread:make-thread #'run-agentic-loop-monitor
+                                   :name "Agentic-Loop-Monitor"))
+      (log-message :info "Agentic loop monitor started.")))
+  *agentic-loop-monitor-thread*)
+
+(defun stop-agentic-loop-monitor ()
+  "Stops the background monitor thread."
+  (sb-thread:with-mutex (*agentic-loop-monitor-lock*)
+    (when *agentic-loop-monitor-active*
+      (setf *agentic-loop-monitor-active* nil)
+      (let ((thread *agentic-loop-monitor-thread*))
+        (when (and thread (sb-thread:thread-alive-p thread))
+          (sb-thread:join-thread thread :timeout 5)
+          (when (sb-thread:thread-alive-p thread)
+            (sb-thread:terminate-thread thread))))
+      (setf *agentic-loop-monitor-thread* nil)
+      (log-message :info "Agentic loop monitor stopped.")))
+  t)

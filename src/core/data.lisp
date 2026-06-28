@@ -103,7 +103,12 @@
   "Authoritative default for the Gemini Interactions compatibility fallback.")
 
 (defclass chatbot ()
-  ((model
+  ((persona-name
+    :initarg :persona-name
+    :accessor chatbot-persona-name
+    :initform nil
+    :documentation "Optional name of the persona associated with this chatbot.")
+   (model
     :initarg :model
     :accessor chatbot-model
     :initform nil
@@ -203,6 +208,36 @@
     :accessor chatbot-mcp-startup-status
     :initform nil
     :documentation "Structured MCP startup status for this chatbot, when initialization has been attempted.")
+   (subordinates
+    :initarg :subordinates
+    :accessor chatbot-subordinates
+    :initform nil
+    :documentation "A list of conversation objects or NIL.")
+   (parent-name
+    :initarg :parent-name
+    :accessor chatbot-parent-name
+    :initform nil
+    :documentation "Optional name of the parent chatbot that spawned this minion.")
+   (depth
+    :initarg :depth
+    :accessor chatbot-depth
+    :initform 1
+    :documentation "The hierarchical depth of this minion, where 1 is top-level.")
+   (token-budget
+    :initarg :token-budget
+    :accessor chatbot-token-budget
+    :initform nil
+    :documentation "The token budget representing the allowed usage limit for this minion.")
+   (spent-tokens
+    :initarg :spent-tokens
+    :accessor chatbot-spent-tokens
+    :initform 0
+    :documentation "The spent token usage tracked per prompt execution.")
+   (scoped-directory
+    :initarg :scoped-directory
+    :accessor chatbot-scoped-directory
+    :initform nil
+    :documentation "The localized sandbox directory where built-in filesystem tools may operate.")
    (runtime-context
     :initarg :runtime-context
     :accessor chatbot-runtime-context

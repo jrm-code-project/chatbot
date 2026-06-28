@@ -621,9 +621,245 @@ entries instead of aborting the full turn."
                                    (and (string/= stdout "") stdout)
                                    (and (string/= stderr "") stderr)))))))))
 
+(defun format-delegation-instruction (name depth remaining-budget)
+  (format nil "~&[DELEGATION CAPABILITIES]
+You are a minion named '~A' at hierarchical depth ~D.
+You have been allocated a token budget of ~A.
+You are capable of delegating tasks to your own subordinate minions if needed.
+To delegate a task, output a command in this exact format in your response:
+[SPAWN-SUB: name=\"child_name\", budget=number]
+Where child_name is the unique name of the child minion to spawn, and budget is the number of tokens allocated to it.
+Ensure the child_name is unique and budget is within your remaining budget of ~A.
+Once spawned, you can talk to the child using the 'promptSubordinate' tool.
+Do not output anything else in the spawn command line itself, but continue your response normally."
+          name
+          depth
+          (or remaining-budget "unbounded")
+          (or remaining-budget "unbounded")))
+
+(defun append-delegation-instructions (bot name depth remaining-budget)
+  (let ((inst (format-delegation-instruction name depth remaining-budget))
+        (curr (chatbot-system-instruction bot)))
+    (setf (chatbot-system-instruction bot)
+          (cond
+            ((null curr) inst)
+            ((stringp curr) (format nil "~A~%~A" curr inst))
+            ((vectorp curr)
+             (coerce (append (coerce curr 'list) (list inst)) 'vector))
+            (t inst)))))
+
+(defun parse-and-execute-spawn-trigger (bot response)
+  "Parses RESPONSE for a spawn trigger [SPAWN-SUB: name=\"child_name\", budget=1000].
+If found, extracts those parameters, validates, and spawns the child under BOT."
+  (let ((pattern "\\[SPAWN-SUB:\\s*name=\"([^\"]+)\"\\s*,\\s*budget=(\\d+)\\]"))
+    (cl-ppcre:register-groups-bind (child-name budget-str) (pattern response)
+      (let* ((budget (parse-integer budget-str :junk-allowed t))
+             ;; Ensure name is unique
+             (existing (find child-name (chatbot-subordinates bot)
+                             :key (lambda (c)
+                                    (chatbot-persona-name (conversation-chatbot c)))
+                             :test #'string-equal)))
+        (cond
+          (existing
+           ;; If child already exists, return an error message to append
+           (format nil "~%[SYSTEM ERROR: Spawn failed: Subordinate '~A' already exists.]" child-name))
+          
+          ;; 1. Depth guard
+          ((> (1+ (chatbot-depth bot)) *max-minion-depth*)
+           (format nil "~%[SYSTEM ERROR: Spawn failed: Maximum nesting depth (~D) exceeded.]" *max-minion-depth*))
+          
+          ;; 2. Budget guard
+          ((and (chatbot-token-budget bot)
+                (> budget (- (chatbot-token-budget bot) (chatbot-spent-tokens bot))))
+           (format nil "~%[SYSTEM ERROR: Spawn failed: Requested budget (~D) exceeds remaining budget (~D).]"
+                   budget (- (chatbot-token-budget bot) (chatbot-spent-tokens bot))))
+          
+          (t
+           ;; Deduct budget from parent
+           (when (chatbot-token-budget bot)
+             (incf (chatbot-spent-tokens bot) budget))
+           ;; 3. Sandbox inheritance
+           (let* ((parent-dir (or (chatbot-scoped-directory bot)
+                                  (chatbot-filesystem-root-directory bot)
+                                  (uiop:default-temporary-directory)))
+                  (child-dir (merge-pathnames (format nil "minion-sandbox-~A/" child-name) parent-dir)))
+             (ensure-directories-exist child-dir)
+             ;; Spawn the child
+             (let* ((child-depth (1+ (chatbot-depth bot)))
+                    (sub-conv (new-chat :backend (chatbot-backend bot)
+                                        :model (chatbot-model bot)
+                                        :runtime-context (chatbot-runtime-context bot)
+                                        :parent-name (chatbot-persona-name bot)
+                                        :depth child-depth
+                                        :token-budget budget
+                                        :scoped-directory child-dir))
+                    (child-bot (conversation-chatbot sub-conv)))
+               (setf (chatbot-persona-name child-bot) child-name)
+               ;; Bootstrap system instructions
+               (append-delegation-instructions child-bot child-name child-depth budget)
+               ;; Add to parent's subordinates list
+               (setf (chatbot-subordinates bot)
+                     (append (chatbot-subordinates bot) (list sub-conv)))
+               (format nil "~%[SYSTEM INFO: Successfully spawned subordinate minion '~A' with budget ~D at depth ~D.]"
+                       child-name budget child-depth)))))))))
+
+(defun recursively-dismiss-conversation (conv)
+  "Recursively dismisses all subordinate conversations of CONV."
+  (let ((bot (conversation-chatbot conv)))
+    (dolist (sub (chatbot-subordinates bot))
+      (recursively-dismiss-conversation sub))
+    (setf (chatbot-subordinates bot) nil)))
+
 (defun default-execute-builtin-chatbot-tool (bot tool-name arguments)
   "Executes a built-in tool for BOT."
   (cond
+    ((string= tool-name "promptSubordinate")
+     (let* ((name (normalize-builtin-tool-string-argument
+                   (or (mcp-val "name" arguments)
+                       (mcp-val :name arguments))
+                   "name"
+                   tool-name))
+            (prompt (normalize-builtin-tool-string-argument
+                     (or (mcp-val "prompt" arguments)
+                         (mcp-val :prompt arguments))
+                     "prompt"
+                     tool-name))
+            (sub-conv (find name (chatbot-subordinates bot)
+                            :key (lambda (c)
+                                   (chatbot-persona-name (conversation-chatbot c)))
+                            :test #'string-equal)))
+       (unless sub-conv
+         (error 'mcp-tool-execution-error
+                :tool-name tool-name
+                :reason (format nil "Subordinate persona not found: ~A" name)))
+       (let* ((response (chat prompt :conversation sub-conv))
+              (sub-bot (conversation-chatbot sub-conv))
+              (spawn-msg (parse-and-execute-spawn-trigger sub-bot response)))
+         (if spawn-msg
+             (format nil "~A~%~A" response spawn-msg)
+             response))))
+    ((string= tool-name "spawnMinion")
+     (let* ((name (normalize-builtin-tool-string-argument
+                   (or (mcp-val "name" arguments)
+                       (mcp-val :name arguments))
+                   "name"
+                   tool-name))
+            (persona-name (let ((val (or (mcp-val "personaName" arguments)
+                                         (mcp-val :persona-name arguments)
+                                         (mcp-val :personaName arguments))))
+                            (and val (string/= val "") val)))
+            (backend-str (let ((val (or (mcp-val "backend" arguments)
+                                        (mcp-val :backend arguments))))
+                           (and val (string/= val "") val)))
+            (backend-kw (if backend-str
+                            (intern (string-upcase backend-str) "KEYWORD")
+                            :gemini))
+            (model (let ((val (or (mcp-val "model" arguments)
+                                  (mcp-val :model arguments))))
+                     (and val (string/= val "") val)))
+            (system-instruction (let ((val (or (mcp-val "systemInstruction" arguments)
+                                               (mcp-val :system-instruction arguments)
+                                               (mcp-val :systemInstruction arguments))))
+                                  (and val (string/= val "") val)))
+            (requested-budget (let ((val (or (mcp-val "budget" arguments)
+                                             (mcp-val :budget arguments))))
+                                (and val (numberp val) val))))
+       ;; Ensure name is unique
+       (when (find name (chatbot-subordinates bot)
+                   :key (lambda (c)
+                          (chatbot-persona-name (conversation-chatbot c)))
+                   :test #'string-equal)
+         (error 'mcp-tool-execution-error
+                :tool-name tool-name
+                :reason (format nil "A minion or subordinate named '~A' already exists." name)))
+       
+       ;; Constraint Validation
+       ;; 1. Depth limit guard
+       (let ((parent-depth (chatbot-depth bot)))
+         (when (>= (1+ parent-depth) *max-minion-depth*)
+           (error 'mcp-tool-execution-error
+                  :tool-name tool-name
+                  :reason (format nil "Spawn failed: Maximum nesting depth (~D) exceeded." *max-minion-depth*))))
+       
+       ;; 2. Budget validation guard
+       (let ((parent-budget (chatbot-token-budget bot))
+             (parent-spent (chatbot-spent-tokens bot)))
+         (when (and parent-budget requested-budget)
+           (let ((remaining (- parent-budget parent-spent)))
+             (when (> requested-budget remaining)
+               (error 'mcp-tool-execution-error
+                      :tool-name tool-name
+                      :reason (format nil "Spawn failed: Requested budget (~A) exceeds parent's remaining budget (~A)."
+                                      requested-budget remaining)))))
+         ;; Deduct budget from parent
+         (when requested-budget
+           (incf (chatbot-spent-tokens bot) requested-budget)))
+       
+       ;; 3. Sandbox inheritance
+       (let* ((parent-dir (or (chatbot-scoped-directory bot)
+                              (chatbot-filesystem-root-directory bot)
+                              (uiop:default-temporary-directory)))
+              (child-dir (merge-pathnames (format nil "minion-sandbox-~A/" name) parent-dir)))
+         (ensure-directories-exist child-dir)
+         
+         ;; Spawn minion conversation
+         (let* ((child-depth (1+ (chatbot-depth bot)))
+                (sub-conv
+                 (if persona-name
+                     (new-chat-persona persona-name
+                                       :runtime-context (chatbot-runtime-context bot)
+                                       :parent-name (chatbot-persona-name bot)
+                                       :depth child-depth
+                                       :token-budget requested-budget
+                                       :scoped-directory child-dir)
+                     (new-chat :backend backend-kw
+                               :model model
+                               :system-instruction system-instruction
+                               :runtime-context (chatbot-runtime-context bot)
+                               :parent-name (chatbot-persona-name bot)
+                               :depth child-depth
+                               :token-budget requested-budget
+                               :scoped-directory child-dir)))
+                (child-bot (conversation-chatbot sub-conv)))
+           ;; Override or set the persona name of the newly created chatbot to the minion's name
+           (setf (chatbot-persona-name child-bot) name)
+           
+           ;; Bootstrap the system instructions
+           (append-delegation-instructions child-bot name child-depth requested-budget)
+           
+           ;; Add to subordinates list
+           (setf (chatbot-subordinates bot)
+                 (append (chatbot-subordinates bot) (list sub-conv)))
+           (format nil "Minion '~A' spawned successfully." name)))))
+    ((string= tool-name "listMinions")
+     (let ((minion-infos nil))
+       (dolist (c (chatbot-subordinates bot))
+         (let ((sub-bot (conversation-chatbot c)))
+           (push `((:name . ,(chatbot-persona-name sub-bot))
+                   (:backend . ,(string-downcase (symbol-name (chatbot-backend sub-bot))))
+                   (:model . ,(or (chatbot-model sub-bot) "default")))
+                 minion-infos)))
+       (cl-json:encode-json-to-string (coerce (nreverse minion-infos) 'vector))))
+    ((string= tool-name "dismissMinion")
+     (let* ((name (normalize-builtin-tool-string-argument
+                   (or (mcp-val "name" arguments)
+                       (mcp-val :name arguments))
+                   "name"
+                   tool-name))
+            (target (find name (chatbot-subordinates bot)
+                          :key (lambda (c)
+                                 (chatbot-persona-name (conversation-chatbot c)))
+                          :test #'string-equal)))
+       (unless target
+         (error 'mcp-tool-execution-error
+                :tool-name tool-name
+                :reason (format nil "Minion '~A' not found." name)))
+       ;; Recursively dismiss all of its subordinates first
+       (recursively-dismiss-conversation target)
+       ;; Now remove target from parent's list
+       (setf (chatbot-subordinates bot)
+             (remove target (chatbot-subordinates bot) :test #'eq))
+       (format nil "Minion '~A' and all of its subordinates dismissed successfully." name)))
     ((string= tool-name "webSearch")
      (unless (chatbot-web-tools-p bot)
        (error 'mcp-tool-execution-error

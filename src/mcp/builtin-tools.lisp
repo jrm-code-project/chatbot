@@ -204,6 +204,52 @@
                                                     (:description . "Whether to approve the loop's pending request and resume it.")))))
                       (:required . ("loopId" "approve"))))))
 
+(defun builtin-prompt-subordinate-tool ()
+  "Returns the built-in promptSubordinate tool definition."
+  '((:name . "promptSubordinate")
+    (:description . "Prompts a subordinate chatbot persona by name and returns its response.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("name" . ((:type . "string")
+                                                 (:description . "The name of the subordinate persona to prompt.")))
+                                      ("prompt" . ((:type . "string")
+                                                   (:description . "The message prompt to send to the subordinate.")))))
+                      (:required . ("name" "prompt"))))))
+
+(defun builtin-spawn-minion-tool ()
+  "Returns the built-in spawnMinion tool definition."
+  '((:name . "spawnMinion")
+    (:description . "Creates a new subordinate chatbot minion with a unique name, optionally based on a persona or custom parameters.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("name" . ((:type . "string")
+                                                 (:description . "The unique name of the minion to spawn.")))
+                                      ("personaName" . ((:type . "string")
+                                                       (:description . "Optional name of an existing persona to initialize the minion with.")))
+                                      ("backend" . ((:type . "string")
+                                                    (:description . "Optional backend to use (e.g. gemini, google, openai, lm-studio). Defaults to gemini.")))
+                                      ("model" . ((:type . "string")
+                                                  (:description . "Optional model override for the minion.")))
+                                      ("systemInstruction" . ((:type . "string")
+                                                              (:description . "Optional system instructions override for the minion.")))
+                                      ("budget" . ((:type . "number")
+                                                   (:description . "Optional token budget representing their allowed usage limit.")))))
+                      (:required . ("name"))))))
+
+(defun builtin-list-minions-tool ()
+  "Returns the built-in listMinions tool definition."
+  '((:name . "listMinions")
+    (:description . "Lists all active subordinate minions currently managed by this chatbot.")
+    (:input-schema . ((:type . "object")
+                      (:properties . nil)))))
+
+(defun builtin-dismiss-minion-tool ()
+  "Returns the built-in dismissMinion tool definition."
+  '((:name . "dismissMinion")
+    (:description . "Terminates and removes a subordinate minion by name.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("name" . ((:type . "string")
+                                                 (:description . "The name of the minion to dismiss.")))))
+                      (:required . ("name"))))))
+
 (defun default-get-all-builtin-tools (bot)
   "Returns all built-in tools enabled for BOT as (source . tool) pairs."
   (let ((tools nil))
@@ -215,6 +261,10 @@
     (push (cons :built-in (builtin-reset-sampling-parameters-tool)) tools)
     (push (cons :built-in (builtin-set-sampling-parameters-tool)) tools)
     (push (cons :built-in (builtin-read-sampling-parameters-tool)) tools)
+    (push (cons :built-in (builtin-prompt-subordinate-tool)) tools)
+    (push (cons :built-in (builtin-spawn-minion-tool)) tools)
+    (push (cons :built-in (builtin-list-minions-tool)) tools)
+    (push (cons :built-in (builtin-dismiss-minion-tool)) tools)
     (when (chatbot-web-tools-p bot)
       (push (cons :built-in (builtin-hyperspec-search-tool)) tools)
       (push (cons :built-in (builtin-web-search-tool)) tools))
