@@ -83,7 +83,7 @@
                                 :agentic-loop-default-model loop-default-model)))
        base-context)))
 
-(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p)
+(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p)
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
@@ -110,7 +110,7 @@ configuration, instructions, or preloaded memory."
                                  :code-execution-p code-execution-p
                                  :include-timestamp-p include-timestamp-p
                                  :include-model-p include-model-p
-                                 :enable-eval-p enable-eval-p :enable-git-tools-p enable-git-tools-p
+                                 :enable-eval-p enable-eval-p
                                  :filesystem-tools-p filesystem-tools-p
                                  :filesystem-root-directory (or scoped-directory filesystem-root-directory)
                                  :filesystem-allowed-directories filesystem-allowed-directories
@@ -122,8 +122,7 @@ configuration, instructions, or preloaded memory."
                                  :token-budget token-budget
                                  :spent-tokens spent-tokens
                                  :scoped-directory (or scoped-directory filesystem-root-directory)
-                                 :filesystem-read-only-p filesystem-read-only-p
-                                 :planner-p planner-p)))
+                                 :filesystem-read-only-p filesystem-read-only-p)))
         (when (startup-chatbot-mcp-servers resolved-context)
           (setf (chatbot-mcp-servers bot)
                 (startup-chatbot-mcp-servers resolved-context))
@@ -131,7 +130,7 @@ configuration, instructions, or preloaded memory."
                 (startup-chatbot-mcp-status resolved-context)))
         (make-instance 'conversation :chatbot bot))))))
 
-(defun new-chat-persona (persona-name &key runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory (web-tools-p nil web-tools-supplied-p) (enable-git-tools-p nil enable-git-tools-supplied-p) (filesystem-tools-p nil filesystem-tools-supplied-p) (filesystem-read-only-p nil filesystem-read-only-supplied-p) (planner-p nil planner-supplied-p))
+(defun new-chat-persona (persona-name &key runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory (web-tools-p nil web-tools-supplied-p) (filesystem-tools-p nil filesystem-tools-supplied-p) (filesystem-read-only-p nil filesystem-read-only-supplied-p))
   "Creates a new chat session for a given chatbot persona.
 The persona's configuration is read from ~/.Personas/<persona-name>/config.lisp
 and the system instructions are loaded from the persona's system-instruction file set.
@@ -154,7 +153,7 @@ Use NEW-CHAT instead when no persona should be loaded."
            (include-timestamp-p (safe-getf config :include-timestamp))
            (include-model-p (safe-getf config :include-model))
            (enable-eval-p (safe-getf config :enable-eval))
-           (config-enable-git-tools-p (safe-getf config :enable-git-tools)) (config-filesystem-tools-p (safe-getf config :enable-filesystem-tools))
+           (config-filesystem-tools-p (safe-getf config :enable-filesystem-tools))
            (backend (persona-config-backend config))
            (persona-runtime-context (persona-config-runtime-context config runtime-context)))
       (declare (ignore googleapi))
@@ -174,8 +173,8 @@ Use NEW-CHAT instead when no persona should be loaded."
                           :code-execution-p code-execution-p
                           :include-timestamp-p include-timestamp-p
                           :include-model-p include-model-p
-                          :enable-eval-p enable-eval-p :enable-git-tools-p enable-git-tools-p
-                          :enable-git-tools-p (if enable-git-tools-supplied-p enable-git-tools-p config-enable-git-tools-p) :filesystem-tools-p (if filesystem-tools-supplied-p filesystem-tools-p config-filesystem-tools-p)
+                          :enable-eval-p enable-eval-p
+                          :filesystem-tools-p (if filesystem-tools-supplied-p filesystem-tools-p config-filesystem-tools-p)
                           :filesystem-root-directory (or scoped-directory persona-dir)
                           :filesystem-allowed-directories (persona-filesystem-allowlist-directories persona-dir)
                           :filesystem-allowlist-path (persona-filesystem-allowlist-path persona-dir)
@@ -188,8 +187,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                           :token-budget token-budget
                           :spent-tokens spent-tokens
                           :scoped-directory (or scoped-directory persona-dir)
-                          :filesystem-read-only-p (if filesystem-read-only-supplied-p filesystem-read-only-p nil)
-                          :planner-p (if planner-supplied-p planner-p nil))
+                          :filesystem-read-only-p (if filesystem-read-only-supplied-p filesystem-read-only-p nil))
                 persona-dir)
                persona-dir)))
         (setf conversation (attach-persona-memory-mcp-server conversation persona-dir))
@@ -363,60 +361,3 @@ Use NEW-CHAT instead when no persona should be loaded."
                           (log-message :warn "Orphaned minion: parent not found"
                                        :context `(("name" . ,name) ("parent" . ,parent-name)))))))))))
       (log-message :info "MCRS: Restoration bootloader completed successfully."))))
-
-(defun summarize-old-history (messages bot)
-  "Sends the old conversation history to the LLM to generate a concise State Digest."
-  (let* ((history-text
-          (with-output-to-string (stream)
-            (dolist (msg messages)
-              (format stream "~A: ~A~%"
-                      (cdr (assoc "role" msg :test #'string=))
-                      (cdr (assoc "content" msg :test #'string=))))))
-         (prompt (format nil "Please read the following conversation history and write a highly concise, dense 'State Digest' summarizing all key factual information, state, progress, and memories from it. Output only the State Digest, nothing else: ~%~%~A" history-text))
-         ;; Use a clean, stateless conversation to avoid nested pruning loops
-         (conv (new-chat :backend (chatbot-backend bot)
-                         :model (chatbot-model bot)
-                         :runtime-context (chatbot-runtime-context bot)))
-         (summary (chat prompt :conversation conv)))
-    summary))
-
-(defun prune-conversation-context-if-needed (conversation)
-  "Checks if the conversation history is too large (exceeds *context-pruning-threshold-characters*), and if so, compresses old turns into a State Digest."
-  (let* ((bot (conversation-chatbot conversation))
-         (history (conversation-messages conversation))
-         (total-len (loop for msg in history
-                          sum (length (cdr (assoc "content" msg :test #'string=))))))
-    (when (> total-len *context-pruning-threshold-characters*)
-      ;; We have enough turns to compress. Keep the last 4 messages (2 turns) in raw format.
-      (let* ((keep-count 4)
-             (history-len (length history)))
-        (when (> history-len keep-count)
-          (let* ((old-messages (subseq history 0 (- history-len keep-count)))
-                 (raw-messages (subseq history (- history-len keep-count)))
-                 (digest (summarize-old-history old-messages bot))
-                 (digest-msg (list (cons "role" "system")
-                                   (cons "content" (format nil "[State Digest of previous turns: ~A]" digest)))))
-            (setf (conversation-messages conversation)
-                  (append (list digest-msg) raw-messages))
-            (log-message :info "Pruned and compressed conversation history context"
-                         :context `(("old-messages-count" . ,(princ-to-string (length old-messages)))
-                                    ("digest-length" . ,(princ-to-string (length digest)))))))))))
-
-(defun load-plan-to-system-instructions (bot filename)
-  "Reads the generated Markdown plan from FILENAME and appends it to BOT's transient system-instruction."
-  (let* ((filepath (merge-pathnames filename (uiop:getcwd)))
-         (content (and (probe-file filepath) (uiop:read-file-string filepath))))
-    (unless content
-      (error "Plan file not found: ~A" filename))
-    (let* ((curr (chatbot-system-instruction bot))
-           (plan-inst (format nil "~&[EXECUTING PLAN FROM ~A]:~%~A" filename content)))
-      (setf (chatbot-system-instruction bot)
-            (cond
-              ((null curr) plan-inst)
-              ((stringp curr) (format nil "~A~%~A" curr plan-inst))
-              ((vectorp curr)
-               (coerce (append (coerce curr 'list) (list plan-inst)) 'vector))
-              (t plan-inst)))
-      (log-message :info "Ingested plan as transient system instruction"
-                   :context `(("file" . ,filename)))
-      (format nil "Plan from ~A successfully loaded as a transient system instruction." filename))))

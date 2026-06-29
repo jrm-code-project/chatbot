@@ -7,9 +7,6 @@
 (defvar *gemini-base-url* "https://generativelanguage.googleapis.com/v1beta"
   "The base REST endpoint for the Gemini Interactions API.")
 
-(defparameter +planner-system-instruction+
-  "You are an architectural planner. You cannot execute code. Your job is to collaborate with the user to outline steps required to achieve a goal. Ask clarifying questions until the requirements are unambiguous. Format the final output as a detailed Markdown list/document. When approved by the user, use the `submitPlan` tool to submit the plan.")
-
 (defvar *openai-base-url* "https://api.openai.com/v1"
   "The base REST endpoint for the OpenAI-compliant API.")
 
@@ -38,16 +35,12 @@
 (defvar *filesystem-access-approval-function* #'default-filesystem-access-approval-function
   "Function used to approve persona filesystem access outside the current allowlist.")
 
-(defvar *bypass-eval-approval-p* nil
-  "When T, bypasses interactive evaluation approval and automatically returns T.")
-
 (defun default-eval-approval-function (bot source tool-name)
   "Prompts the user to approve evaluating SOURCE for TOOL-NAME."
   (declare (ignore bot))
-  (or *bypass-eval-approval-p*
-      (y-or-n-p "~&Allow ~A to evaluate this expression?~%~A~% "
-                tool-name
-                source)))
+  (y-or-n-p "~&Allow ~A to evaluate this expression?~%~A~% "
+            tool-name
+            source))
 
 (defvar *eval-approval-function* #'default-eval-approval-function
   "Function used to approve evaluation of a specific expression for the eval tool.")
@@ -775,12 +768,3 @@ runtime settings are read from the runtime context directly."
 
 (defvar *max-minion-depth* 3
   "The global maximum nesting depth allowed for the minion hierarchy.")
-
-(defvar *context-pruning-threshold-characters* 64000
-  "The total character length of the conversation history above which auto-pruning is triggered.")
-
-(defvar *active-planner* nil
-  "Tracks the active planner minion conversation, or NIL if not in Planner Mode.")
-
-(defvar *active-planner-parent-conversation* nil
-  "Tracks the parent conversation that spawned the active planner minion.")

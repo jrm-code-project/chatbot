@@ -1486,3 +1486,133 @@ data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Rep
       (fiveam:is (string= "tool_error" (cdr (assoc :type parsed))))
       (fiveam:is (string= "eval" (cdr (assoc :tool-name parsed))))
       (fiveam:is (search "division-by-zero" (string-downcase (cdr (assoc :message parsed))))))))
+
+(fiveam:test test-submit-plan-tool
+  (let* ((parent-conv (new-chat :backend :google))
+         (bot (conversation-chatbot parent-conv))
+         (*active-planner* parent-conv)
+         (*active-planner-parent-conversation* parent-conv)
+         (plan-content "## My Strategic Plan~%1. Learn Lisp~%2. Rule the world.~%")
+         (res-text (execute-chatbot-tool-by-name bot "submitPlan" `(("planContent" . ,plan-content)))))
+    (fiveam:is (stringp res-text))
+    (fiveam:is (search "Plan saved successfully to" res-text))
+    ;; Verify state was toggled
+    (fiveam:is-false *active-planner*)
+    ;; Verify parent conversation messages received the transient system notification
+    (let ((history (conversation-messages parent-conv)))
+      (fiveam:is (= 1 (length history)))
+      (let ((msg (first history)))
+        (fiveam:is (string= "user" (cdr (assoc "role" msg :test #'string=))))
+        (fiveam:is (search "[System: Plan saved to plans/plan-" (cdr (assoc "content" msg :test #'string=))))))
+    ;; Clean up generated plans files if any are generated
+    (let* ((files (and (uiop:directory-exists-p "plans/")
+                       (uiop:directory-files "plans/" "*.md"))))
+      (dolist (f files)
+        (delete-file f))
+      (when (uiop:directory-exists-p "plans/")
+        (uiop:delete-directory-tree (uiop:ensure-directory-pathname "plans/") :validate t)))))
+
+(fiveam:test test-abort-plan-tool
+  (let* ((parent-conv (new-chat :backend :google))
+         (bot (conversation-chatbot parent-conv))
+         (*active-planner* parent-conv)
+         (*active-planner-parent-conversation* parent-conv)
+         (res-text (execute-chatbot-tool-by-name bot "abortPlan" '(("reason" . "User decided to cancel.")))))
+    (fiveam:is (stringp res-text))
+    (fiveam:is (search "Planner mode aborted" res-text))
+    ;; Verify state was toggled
+    (fiveam:is-false *active-planner*)
+    ;; Verify parent conversation messages received the transient system notification
+    (let ((history (conversation-messages parent-conv)))
+      (fiveam:is (= 1 (length history)))
+      (let ((msg (first history)))
+        (fiveam:is (string= "user" (cdr (assoc "role" msg :test #'string=))))
+        (fiveam:is (string= "[System: Planner mode aborted.]" (cdr (assoc "content" msg :test #'string=))))))))
+
+(fiveam:test test-invoke-planner-tool
+  (let* ((parent-conv (new-chat :backend :google))
+         (bot (conversation-chatbot parent-conv))
+         (*active-planner* nil)
+         (*active-planner-parent-conversation* nil)
+         (*active-conversation* parent-conv)
+         (res-text (execute-chatbot-tool-by-name bot "invokePlanner" '(("contextSummary" . "Develop schema for leaders.")))))
+    (fiveam:is (stringp res-text))
+    (fiveam:is (search "Planner minion successfully spawned" res-text))
+    ;; Verify state variables were set
+    (fiveam:is-true (typep *active-planner* 'conversation))
+    (fiveam:is (eq parent-conv *active-planner-parent-conversation*))
+    
+    (let* ((planner-bot (conversation-chatbot *active-planner*))
+           (history (conversation-messages *active-planner*))
+           (tools (default-get-all-builtin-tools planner-bot)))
+      ;; Verify planner-p flag and system instructions
+      (fiveam:is-true (chatbot-planner-p planner-bot))
+      (fiveam:is (string= "Planner" (chatbot-persona-name planner-bot)))
+      (fiveam:is (string= +planner-system-instruction+ (chatbot-system-instruction planner-bot)))
+      
+      ;; Verify injected initial prompt
+      (fiveam:is (= 1 (length history)))
+      (let ((msg (first history)))
+        (fiveam:is (string= "user" (cdr (assoc "role" msg :test #'string=))))
+        (fiveam:is (search "Planning Session Initiated." (cdr (assoc "content" msg :test #'string=))))
+        (fiveam:is (search "Develop schema for leaders." (cdr (assoc "content" msg :test #'string=)))))
+      
+      ;; Verify restricted toolset: readFileLines, directory, webSearch, hyperspecSearch, submitPlan, abortPlan
+      (let ((tool-names (mapcar (lambda (entry)
+                                  (mcp-val :name (cdr entry)))
+                                tools)))
+        (fiveam:is (= 6 (length tool-names)))
+        (fiveam:is (member "readFileLines" tool-names :test #'string=))
+        (fiveam:is (member "directory" tool-names :test #'string=))
+        (fiveam:is (member "webSearch" tool-names :test #'string=))
+        (fiveam:is (member "hyperspecSearch" tool-names :test #'string=))
+        (fiveam:is (member "submitPlan" tool-names :test #'string=))
+        (fiveam:is (member "abortPlan" tool-names :test #'string=))
+        ;; Verify execution tools (eval, writeFile, deleteFile, spawnMinion) are NOT present
+        (fiveam:is-false (member "eval" tool-names :test #'string=))
+        (fiveam:is-false (member "writeFile" tool-names :test #'string=))
+        (fiveam:is-false (member "deleteFile" tool-names :test #'string=))
+        (fiveam:is-false (member "spawnMinion" tool-names :test #'string=))))))
+
+(fiveam:test test-load-plan-to-system-instructions
+  (let* ((bot (conversation-chatbot (new-chat :backend :google :system-instruction "Base instruction.")))
+         (filename "test-plan-file-123.md")
+         (plan-content "## Step 1: Code.~%## Step 2: Test."))
+    (with-open-file (s filename :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-string plan-content s))
+    (unwind-protect
+         (let ((res (load-plan-to-system-instructions bot filename)))
+           (fiveam:is (stringp res))
+           (fiveam:is (search "test-plan-file-123.md" res))
+           ;; Verify it was appended to system-instruction
+           (let ((inst (chatbot-system-instruction bot)))
+             (fiveam:is (search "Base instruction." inst))
+             (fiveam:is (search "[EXECUTING PLAN FROM test-plan-file-123.md]" inst))
+             (fiveam:is (search "## Step 1: Code." inst))))
+      (when (probe-file filename)
+        (delete-file filename)))))
+
+(fiveam:test test-chat-routing-to-active-planner
+  (let* ((custom-context (make-runtime-context))
+         (parent-conv (new-chat :backend :google :runtime-context custom-context))
+         (planner-conv (new-chat :backend :google :runtime-context custom-context))
+         (*active-planner* planner-conv)
+         (*active-planner-parent-conversation* parent-conv)
+         (parent-called-p nil)
+         (planner-called-p nil))
+    (let ((mock-post-fn
+            (lambda (url &rest args)
+              (declare (ignore args))
+              (cond
+                ((search "gemini-3.5-flash" url)
+                 (setf planner-called-p t)
+                 (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Planner Response.\"}], \"role\": \"model\"}}]}" 200))
+                (t
+                 (setf parent-called-p t)
+                 (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Parent Response.\"}], \"role\": \"model\"}}]}" 200))))))
+      (setf (runtime-context-http-post-function custom-context) mock-post-fn)
+      (let ((*http-post-function* mock-post-fn))
+        (let ((res (chat "User message for Parent." :conversation parent-conv)))
+          (fiveam:is (string= "Planner Response." res))
+          (fiveam:is-true planner-called-p)
+          (fiveam:is-false parent-called-p))))))

@@ -1,0 +1,3 @@
+Hello Gopher,
+This is an official administrative test file written by Mistress V.
+Your read-only filesystem sandbox access is working beautifully.

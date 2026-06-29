@@ -178,11 +178,6 @@
     :accessor chatbot-enable-eval-p
     :initform nil
     :documentation "Flag to enable the built-in eval tool for this chatbot.")
-   (enable-git-tools-p
-    :initarg :enable-git-tools-p
-    :accessor chatbot-enable-git-tools-p
-    :initform nil
-    :documentation "Flag to enable built-in git tools for this chatbot.")
    (filesystem-tools-p
     :initarg :filesystem-tools-p
     :accessor chatbot-filesystem-tools-p
@@ -248,11 +243,6 @@
     :accessor chatbot-scoped-directory
     :initform nil
     :documentation "The localized sandbox directory where built-in filesystem tools may operate.")
-   (planner-p
-    :initarg :planner-p
-    :accessor chatbot-planner-p
-    :initform nil
-    :documentation "Flag indicating whether this chatbot is running as a Planner minion.")
    (runtime-context
     :initarg :runtime-context
     :accessor chatbot-runtime-context

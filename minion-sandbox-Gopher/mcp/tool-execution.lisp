@@ -44,7 +44,7 @@
   "Executes JSON-argument TOOL-CALLS for BOT and returns builder outputs in order.
 
 When ERROR-BUILDER is provided, tool execution errors are converted into result
-entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are sandboxed."
+entries instead of aborting the full turn."
   (let ((results nil))
     (dolist (tool-call tool-calls (nreverse results))
       (let* ((id (cdr (assoc :id tool-call)))
@@ -59,14 +59,11 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
               (push (funcall result-builder id name arguments-json res-text tool-call) results))
           (error (condition)
             (if (or (typep condition 'agentic-loop-approval-required)
-                    (typep condition 'agentic-loop-interrupted))
+                   (typep condition 'agentic-loop-interrupted))
                 (error condition)
                 (if error-builder
-                    (push (funcall error-builder id name arguments-json condition tool-call) results)
-                    (push (funcall result-builder id name arguments-json
-                                   (chatbot-tool-error-text name condition)
-                                   tool-call)
-                          results)))))))))
+                (push (funcall error-builder id name arguments-json condition tool-call) results)
+                (error condition)))))))))
 
 (defun normalize-builtin-tool-integer-argument (value argument-name tool-name)
   "Normalizes VALUE to an integer argument or signals an execution error."
@@ -641,18 +638,8 @@ Do not output anything else in the spawn command line itself, but continue your 
           (or remaining-budget "unbounded")))
 
 (defun append-delegation-instructions (bot name depth remaining-budget)
-  (let* ((model (and (slot-boundp bot 'model) (chatbot-model bot)))
-         (is-qwen (and (stringp model) (search "qwen" model :test #'char-equal)))
-         (inst (if is-qwen
-                   (format nil (concatenate 'string
-                                            "~&[CRITICAL OPERATION DIRECTIVE]~%"
-                                            "You are a worker minion named '~A'.~%"
-                                            "You must DIRECTLY write Lisp code and execute tasks yourself.~%"
-                                            "Do NOT output [SPAWN-SUB] commands. Do NOT try to delegate tasks.~%"
-                                            "Solve all requests entirely within your own response.")
-                               name)
-                   (format-delegation-instruction name depth remaining-budget)))
-         (curr (chatbot-system-instruction bot)))
+  (let ((inst (format-delegation-instruction name depth remaining-budget))
+        (curr (chatbot-system-instruction bot)))
     (setf (chatbot-system-instruction bot)
           (cond
             ((null curr) inst)
@@ -732,14 +719,6 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
         (when (probe-file file-path)
           (delete-file file-path))))
     (setf (chatbot-subordinates bot) nil)))
-
-(defun generate-timestamped-plan-filename ()
-  "Generates a string filename matching plans/plan-YYYYMMDD-HHMM.md."
-  (multiple-value-bind (sec min hour day month year)
-      (get-decoded-time)
-    (declare (ignore sec))
-    (format nil "plans/plan-~4,'0D~2,'0D~2,'0D-~2,'0D~2,'0D.md"
-            year month day hour min)))
 
 (defun default-execute-builtin-chatbot-tool (bot tool-name arguments)
   "Executes a built-in tool for BOT."
@@ -934,37 +913,6 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                 (mcp-val :query arguments))
                             "query"
                             tool-name)))
-    ((string= tool-name "gitCall")
-     (unless (chatbot-enable-git-tools-p bot)
-       (error 'mcp-tool-execution-error
-              :tool-name tool-name
-              :reason "Git tool is not enabled."))
-     (let* ((args-list (or (mcp-val "args" arguments)
-                           (mcp-val :args arguments)))
-            (args (loop for arg in args-list
-                        collect (typecase arg
-                                  (string arg)
-                                  (t (format nil "~A" arg)))))
-            (dir (or (chatbot-scoped-directory bot)
-                     (namestring (uiop:getcwd)))))
-       (multiple-value-bind (stdout stderr exit-code)
-           (uiop:run-program (cons "git" args)
-                             :directory dir
-                             :output :string
-                             :error-output :string
-                             :ignore-error-status t)
-         (format nil (concatenate 'string
-                                  "~&[Git Executed]~%"
-                                  "Command: git ~{~A ~}~%"
-                                  "Directory: ~A~%"
-                                  "Exit Code: ~D~@[~%"
-                                  "STDOUT:~%"
-                                  "~A~]~@[~%"
-                                  "STDERR:~%"
-                                  "~A~]")
-                 args dir exit-code
-                 (and (string/= stdout "") stdout)
-                 (and (string/= stderr "") stderr)))))
     ((string= tool-name "eval")
      (unless (chatbot-enable-eval-p bot)
        (error 'mcp-tool-execution-error
@@ -1201,79 +1149,6 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
        (let* ((path (resolve-filesystem-tool-path bot pathname tool-name))
               (root (chatbot-filesystem-root-truename bot tool-name)))
          (delete-file-tool-result path root))))
-    ((string= tool-name "submitPlan")
-     (let* ((plan-content (normalize-builtin-tool-string-argument
-                           (or (mcp-val "plan_content" arguments)
-                               (mcp-val "planContent" arguments)
-                               (mcp-val :plan-content arguments)
-                               (mcp-val :plan_content arguments))
-                           "planContent"
-                           tool-name))
-            (filename (generate-timestamped-plan-filename)))
-       (ensure-directories-exist filename)
-       (with-open-file (stream filename
-                               :direction :output
-                               :if-exists :supersede
-                               :if-does-not-exist :create)
-         (write-string plan-content stream))
-       (format t "~&[PLAN SUBMITTED]~%Filename: ~A~%~%Content:~%~A~%" filename plan-content)
-       ;; Toggle state
-       (setf *active-planner* nil)
-       ;; Inject transient system message to V (the parent conversation)
-       (let ((parent-conv *active-planner-parent-conversation*))
-         (when parent-conv
-           (setf (conversation-messages parent-conv)
-                 (append (conversation-messages parent-conv)
-                         (list (list (cons "role" "user")
-                                     (cons "content" (format nil "[System: Plan saved to ~A]" filename))))))))
-       (format nil "Plan saved successfully to ~A and exited Planner Mode." filename)))
-    ((string= tool-name "abortPlan")
-     (let ((reason (or (mcp-val "reason" arguments)
-                       (mcp-val :reason arguments)
-                       "No reason provided.")))
-       (format t "~&[PLAN ABORTED]~%Reason: ~A~%" reason)
-       ;; Toggle state
-       (setf *active-planner* nil)
-       ;; Inject transient system message to V (the parent conversation)
-       (let ((parent-conv *active-planner-parent-conversation*))
-         (when parent-conv
-           (setf (conversation-messages parent-conv)
-                 (append (conversation-messages parent-conv)
-                         (list (list (cons "role" "user")
-                                     (cons "content" "[System: Planner mode aborted.]")))))))
-       (format nil "Planner mode aborted: ~A" reason)))
-    ((string= tool-name "invokePlanner")
-     (let* ((context-summary (normalize-builtin-tool-string-argument
-                              (or (mcp-val "context_summary" arguments)
-                                  (mcp-val "contextSummary" arguments)
-                                  (mcp-val :context-summary arguments)
-                                  (mcp-val :context_summary arguments))
-                              "contextSummary"
-                              tool-name))
-            ;; Resolve the parent conversation
-            (parent-conv (or *active-conversation* (make-instance 'conversation :chatbot bot)))
-            ;; Spawn the Planner minion chatbot
-            (planner-conv (new-chat :backend (chatbot-backend bot)
-                                    :model (chatbot-model bot)
-                                    :system-instruction +planner-system-instruction+
-                                    :parent-name (chatbot-persona-name bot)
-                                    :depth (1+ (chatbot-depth bot))
-                                    :planner-p t
-                                    :runtime-context (chatbot-runtime-context bot))))
-       (setf (chatbot-persona-name (conversation-chatbot planner-conv)) "Planner")
-       ;; Link as subordinate
-       (setf (chatbot-subordinates bot)
-             (append (chatbot-subordinates bot) (list planner-conv)))
-       ;; Setup Planner Mode active state to suspend V's REPL context
-       (setf *active-planner* planner-conv)
-       (setf *active-planner-parent-conversation* parent-conv)
-       ;; Inject context summary into initial prompt
-       (let ((initial-prompt (format nil "Planning Session Initiated.~%Context/Goal Summary: ~A" context-summary)))
-         (setf (conversation-messages planner-conv)
-               (append (conversation-messages planner-conv)
-                       (list (list (cons "role" "user")
-                                   (cons "content" initial-prompt))))))
-       (format nil "Planner minion successfully spawned and Planner Mode activated with goal: ~A" context-summary)))
     (t
      (error 'mcp-tool-execution-error
             :tool-name tool-name

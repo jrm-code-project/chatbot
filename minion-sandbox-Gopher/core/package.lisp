@@ -30,9 +30,6 @@
            "NEW-CHAT"
            "NEW-CHAT-PERSONA"
            "SAVE-MINION-STATE"
-           "CHATBOT-PLANNER-P"
-           "LOAD-PLAN-TO-SYSTEM-INSTRUCTIONS"
-           "PRUNE-CONVERSATION-CONTEXT-IF-NEEDED"
            "RESTORE-MINIONS"
            "MINIONS-DATA-DIRECTORY"
            "RUN-ALL-TESTS"
@@ -63,10 +60,6 @@
            ;; Compatibility-only ambient runtime globals. Prefer
            ;; MAKE-RUNTIME-CONTEXT plus explicit :RUNTIME-CONTEXT arguments.
            "*WARN-ON-LEGACY-RUNTIME-GLOBALS-P*"
-           "*BYPASS-EVAL-APPROVAL-P*"
-           "*CONTEXT-PRUNING-THRESHOLD-CHARACTERS*"
-           "*ACTIVE-PLANNER*"
-           "*ACTIVE-PLANNER-PARENT-CONVERSATION*"
            "*MCP-CONFIG-PATH*"
            "*MCP-DEBUG-P*"
            "*AUTO-INITIALIZE-STARTUP-MCP-SERVERS-P*"
@@ -89,7 +82,6 @@
            "*LM-STUDIO-DEFAULT-API-KEY*"
            "*LM-STUDIO-API-KEY*"
            "LM-STUDIO-API-KEY"
-           "+PLANNER-SYSTEM-INSTRUCTION+"
            "*SCREENSHOT-PATH*"
            "*SCREENSHOT-PATH-1*"
            "*SCREENSHOT-PROMPT*"))

@@ -48,14 +48,9 @@ Returns the complete response text."
                                (current-default-conversation context))))
          (unless conversation
            (error "No conversation provided and the ambient default conversation is NIL. Please specify a conversation or set *default-conversation*."))
-         ;; Intercept and route input to active planner minion when in planning mode
-         (when (and *active-planner* (not (eq conversation *active-planner*)))
-           (log-message :info "Routing chat input to active planner minion in Planning Mode"
-                        :context `(("input" . ,input)))
-           (setf conversation *active-planner*))
          (let* ((bot (conversation-chatbot conversation))
                 (effective-files (append (when file
-                                           (list file))
+                                          (list file))
                                          files))
                 (file-attachments (and effective-files
                                        (prepare-chat-file-attachments effective-files)))
@@ -64,9 +59,8 @@ Returns the complete response text."
                          bot
                          (append (when temperaturep
                                    (list :temperature temperature))
-                                 (when top-p
+                                 (when top-pp
                                    (list :top-p top-p))))))
-           (prune-conversation-context-if-needed conversation)
            (multiple-value-bind (effective-input effective-model)
                (resolve-prompt-model-override bot input)
              (let ((*active-conversation* conversation))
