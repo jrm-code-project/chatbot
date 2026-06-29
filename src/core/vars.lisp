@@ -35,12 +35,16 @@
 (defvar *filesystem-access-approval-function* #'default-filesystem-access-approval-function
   "Function used to approve persona filesystem access outside the current allowlist.")
 
+(defvar *bypass-eval-approval-p* nil
+  "When T, bypasses interactive evaluation approval and automatically returns T.")
+
 (defun default-eval-approval-function (bot source tool-name)
   "Prompts the user to approve evaluating SOURCE for TOOL-NAME."
   (declare (ignore bot))
-  (y-or-n-p "~&Allow ~A to evaluate this expression?~%~A~% "
-            tool-name
-            source))
+  (or *bypass-eval-approval-p*
+      (y-or-n-p "~&Allow ~A to evaluate this expression?~%~A~% "
+                tool-name
+                source)))
 
 (defvar *eval-approval-function* #'default-eval-approval-function
   "Function used to approve evaluation of a specific expression for the eval tool.")
@@ -768,3 +772,6 @@ runtime settings are read from the runtime context directly."
 
 (defvar *max-minion-depth* 3
   "The global maximum nesting depth allowed for the minion hierarchy.")
+
+(defvar *context-pruning-threshold-characters* 32000
+  "The total character length of the conversation history above which auto-pruning is triggered.")

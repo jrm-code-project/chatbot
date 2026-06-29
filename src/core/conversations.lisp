@@ -361,3 +361,41 @@ Use NEW-CHAT instead when no persona should be loaded."
                           (log-message :warn "Orphaned minion: parent not found"
                                        :context `(("name" . ,name) ("parent" . ,parent-name)))))))))))
       (log-message :info "MCRS: Restoration bootloader completed successfully."))))
+
+(defun summarize-old-history (messages bot)
+  "Sends the old conversation history to the LLM to generate a concise State Digest."
+  (let* ((history-text
+          (with-output-to-string (stream)
+            (dolist (msg messages)
+              (format stream "~A: ~A~%"
+                      (cdr (assoc "role" msg :test #'string=))
+                      (cdr (assoc "content" msg :test #'string=))))))
+         (prompt (format nil "Please read the following conversation history and write a highly concise, dense 'State Digest' summarizing all key factual information, state, progress, and memories from it. Output only the State Digest, nothing else: ~%~%~A" history-text))
+         ;; Use a clean, stateless conversation to avoid nested pruning loops
+         (conv (new-chat :backend (chatbot-backend bot)
+                         :model (chatbot-model bot)
+                         :runtime-context (chatbot-runtime-context bot)))
+         (summary (chat prompt :conversation conv)))
+    summary))
+
+(defun prune-conversation-context-if-needed (conversation)
+  "Checks if the conversation history is too large (exceeds *context-pruning-threshold-characters*), and if so, compresses old turns into a State Digest."
+  (let* ((bot (conversation-chatbot conversation))
+         (history (conversation-messages conversation))
+         (total-len (loop for msg in history
+                          sum (length (cdr (assoc "content" msg :test #'string=))))))
+    (when (> total-len *context-pruning-threshold-characters*)
+      ;; We have enough turns to compress. Keep the last 4 messages (2 turns) in raw format.
+      (let* ((keep-count 4)
+             (history-len (length history)))
+        (when (> history-len keep-count)
+          (let* ((old-messages (subseq history 0 (- history-len keep-count)))
+                 (raw-messages (subseq history (- history-len keep-count)))
+                 (digest (summarize-old-history old-messages bot))
+                 (digest-msg (list (cons "role" "system")
+                                   (cons "content" (format nil "[State Digest of previous turns: ~A]" digest)))))
+            (setf (conversation-messages conversation)
+                  (append (list digest-msg) raw-messages))
+            (log-message :info "Pruned and compressed conversation history context"
+                         :context `(("old-messages-count" . ,(princ-to-string (length old-messages)))
+                                    ("digest-length" . ,(princ-to-string (length digest)))))))))))

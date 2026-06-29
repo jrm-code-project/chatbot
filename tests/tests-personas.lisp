@@ -1046,3 +1046,33 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                                                '(("name" . "unknown-persona")
                                                  ("prompt" . "hello")))))))
       (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-context-pruning
+  (let* ((*context-pruning-threshold-characters* 8000)
+         (conv (new-chat :backend :google))
+         (bot (conversation-chatbot conv))
+         (long-text (make-string 3000 :initial-element #\A))
+         (calls '()))
+    (setf (conversation-messages conv)
+          (list (list (cons "role" "user") (cons "content" long-text))
+                (list (cons "role" "model") (cons "content" "response 1"))
+                (list (cons "role" "user") (cons "content" long-text))
+                (list (cons "role" "model") (cons "content" "response 2"))
+                (list (cons "role" "user") (cons "content" long-text))
+                (list (cons "role" "model") (cons "content" "response 3"))))
+    (let ((*gemini-api-key-function* (lambda () "mocked-api-key"))
+          (*http-post-function*
+            (lambda (url &rest args)
+              (declare (ignore args))
+              (push url calls)
+              (values
+               "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Mocked response.\"}], \"role\": \"model\"}}]}"
+               200))))
+      (let ((response (chat "Hello latest prompt" :conversation conv)))
+        (fiveam:is (string= "Mocked response." response))
+        ;; Verify that the history was successfully pruned and a State Digest was inserted
+        (let ((history (conversation-messages conv)))
+          ;; History length should be pruned: 1 State Digest + 4 kept raw messages + 2 new turn messages = 7 total!
+          (fiveam:is (= 7 (length history)))
+          (fiveam:is (string= "system" (cdr (assoc "role" (first history) :test #'string=))))
+          (fiveam:is (search "State Digest" (cdr (assoc "content" (first history) :test #'string=)))))))))

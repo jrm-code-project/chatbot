@@ -44,7 +44,7 @@
   "Executes JSON-argument TOOL-CALLS for BOT and returns builder outputs in order.
 
 When ERROR-BUILDER is provided, tool execution errors are converted into result
-entries instead of aborting the full turn."
+entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are sandboxed."
   (let ((results nil))
     (dolist (tool-call tool-calls (nreverse results))
       (let* ((id (cdr (assoc :id tool-call)))
@@ -59,11 +59,14 @@ entries instead of aborting the full turn."
               (push (funcall result-builder id name arguments-json res-text tool-call) results))
           (error (condition)
             (if (or (typep condition 'agentic-loop-approval-required)
-                   (typep condition 'agentic-loop-interrupted))
+                    (typep condition 'agentic-loop-interrupted))
                 (error condition)
                 (if error-builder
-                (push (funcall error-builder id name arguments-json condition tool-call) results)
-                (error condition)))))))))
+                    (push (funcall error-builder id name arguments-json condition tool-call) results)
+                    (push (funcall result-builder id name arguments-json
+                                   (chatbot-tool-error-text name condition)
+                                   tool-call)
+                          results)))))))))
 
 (defun normalize-builtin-tool-integer-argument (value argument-name tool-name)
   "Normalizes VALUE to an integer argument or signals an execution error."

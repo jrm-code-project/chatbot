@@ -257,3 +257,36 @@
       (abort-agentic-loops :force t :context context-b)
       (clear-agentic-loops context-a)
       (clear-agentic-loops context-b))))
+
+(fiveam:test test-active-thread-reaper-garbage-collection
+  (let* ((context (make-runtime-context))
+         (conv (new-chat :backend :openai :runtime-context context))
+         (loop-id 9999)
+         (loop (make-instance 'agentic-loop
+                              :id loop-id
+                              :goal "Dummy goal"
+                              :conversation conv
+                              :runtime-context context)))
+    ;; Set loop to completed and finished older than 5 minutes (301 seconds ago)
+    (setf (agentic-loop-status loop) :completed)
+    (setf (agentic-loop-finished-at loop) (- (get-universal-time) 301))
+    
+    ;; Register it
+    (register-agentic-loop loop)
+    (fiveam:is (typep (find-agentic-loop loop-id) 'agentic-loop))
+    
+    ;; Spawn a mock worker thread that hangs (representing an orphaned/hung worker)
+    (let ((hung-thread (sb-thread:make-thread (lambda () (sleep 10))
+                                             :name (format nil "Agentic-Loop-Worker-~A" loop-id))))
+      (unwind-protect
+           (progn
+             (fiveam:is-true (sb-thread:thread-alive-p hung-thread))
+             ;; Run reaper sweep
+             (reap-orphaned-threads-and-sockets)
+             ;; Verify loop is pruned from the registry
+             (fiveam:is (null (find-agentic-loop loop-id)))
+             ;; Verify hung orphaned thread was detected and terminated by the reaper
+             (sleep 0.1)
+             (fiveam:is-false (sb-thread:thread-alive-p hung-thread)))
+        (when (sb-thread:thread-alive-p hung-thread)
+          (sb-thread:terminate-thread hung-thread))))))

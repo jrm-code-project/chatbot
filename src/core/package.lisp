@@ -30,6 +30,7 @@
            "NEW-CHAT"
            "NEW-CHAT-PERSONA"
            "SAVE-MINION-STATE"
+           "PRUNE-CONVERSATION-CONTEXT-IF-NEEDED"
            "RESTORE-MINIONS"
            "MINIONS-DATA-DIRECTORY"
            "RUN-ALL-TESTS"
@@ -60,6 +61,8 @@
            ;; Compatibility-only ambient runtime globals. Prefer
            ;; MAKE-RUNTIME-CONTEXT plus explicit :RUNTIME-CONTEXT arguments.
            "*WARN-ON-LEGACY-RUNTIME-GLOBALS-P*"
+           "*BYPASS-EVAL-APPROVAL-P*"
+           "*CONTEXT-PRUNING-THRESHOLD-CHARACTERS*"
            "*MCP-CONFIG-PATH*"
            "*MCP-DEBUG-P*"
            "*AUTO-INITIALIZE-STARTUP-MCP-SERVERS-P*"

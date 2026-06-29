@@ -59,10 +59,11 @@ Returns the complete response text."
                          bot
                          (append (when temperaturep
                                    (list :temperature temperature))
-                                 (when top-pp
+                                 (when top-p
                                    (list :top-p top-p))))))
-           (multiple-value-bind (effective-input effective-model)
-               (resolve-prompt-model-override bot input)
+                (prune-conversation-context-if-needed conversation)
+                (multiple-value-bind (effective-input effective-model)
+                (resolve-prompt-model-override bot input)
              (let ((*active-conversation* conversation))
                (dispatch-chat-turn conversation
                                    effective-input

@@ -1463,3 +1463,26 @@ data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Rep
                (fiveam:is (null tool)))))
       (when (uiop:directory-exists-p mock-home)
         (uiop:delete-directory-tree mock-home :validate t)))))
+
+(fiveam:test test-tool-execution-sandboxing-prevents-bubble-crash
+  (let* ((bot (conversation-chatbot (new-chat :enable-eval-p t)))
+         (tool-calls (list '((:id . "call-1")
+                             (:name . "eval")
+                             (:arguments . "{\"expression\":\"(/ 1 0)\"}"))))
+         (results (map-chatbot-json-tool-call-results
+                   bot
+                   tool-calls
+                   (lambda (name tool-call)
+                     (declare (ignore name tool-call))
+                     "eval sandbox")
+                   (lambda (id name arguments-json res-text tool-call)
+                     (declare (ignore id name arguments-json tool-call))
+                     res-text)
+                   :error-builder nil)))
+    ;; Verify that instead of bubble-crashing, the error is caught and returned as serialized JSON
+    (fiveam:is (= 1 (length results)))
+    (let* ((res-text (first results))
+           (parsed (cl-json:decode-json-from-string res-text)))
+      (fiveam:is (string= "tool_error" (cdr (assoc :type parsed))))
+      (fiveam:is (string= "eval" (cdr (assoc :tool-name parsed))))
+      (fiveam:is (search "division-by-zero" (string-downcase (cdr (assoc :message parsed))))))))

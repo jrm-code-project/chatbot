@@ -499,45 +499,47 @@
 
 (defun run-agentic-loop-worker (loop)
   "Runs LOOP to completion, pause, interruption, or failure."
-  (call-with-runtime-context
-   (agentic-loop-runtime-context loop)
-   (lambda ()
-     (handler-case
-         (loop
-           while (eq (agentic-loop-status loop) :running)
-           do (when (>= (agentic-loop-current-iteration loop)
-                        (agentic-loop-max-iterations loop))
-                (setf (agentic-loop-status loop) :limit-reached)
-                (setf (agentic-loop-result-summary loop)
-                      "Maximum iterations reached.")
-                (return))
-              (case (run-agentic-loop-step loop)
-                (:completed (return))
-                (:paused (return))
-               (:interrupted (return))
-               (:continue nil)
-               (t (return))))
-       (agentic-loop-interrupted (condition)
-         (unless (eq (agentic-loop-status loop) :interrupted)
-          (setf (agentic-loop-status loop) :interrupted))
-         (setf (agentic-loop-last-error loop) (agentic-loop-interrupted-reason condition))
-         (setf (agentic-loop-result-summary loop) (agentic-loop-interrupted-reason condition))
-         (agentic-loop-log :warn loop "interrupted"
-                          :context `(("reason" . ,(agentic-loop-interrupted-reason condition)))))
-       (error (condition)
-         (setf (agentic-loop-status loop) :failed)
-         (setf (agentic-loop-last-error loop) (princ-to-string condition))
-         (append-agentic-loop-step-record
-          loop
-          (make-agentic-loop-step-record (1+ (agentic-loop-current-iteration loop))
-                                         :failed
-                                         :note (princ-to-string condition)))
-         (agentic-loop-log :error loop "failed"
-                           :context `(("error" . ,(princ-to-string condition))))))
-     (when (eq (agentic-loop-status loop) :running)
-       (setf (agentic-loop-status loop) :completed))
-     (setf (agentic-loop-finished-at loop) (get-universal-time))
-     (setf (agentic-loop-thread loop) nil))))
+  (unwind-protect
+       (call-with-runtime-context
+        (agentic-loop-runtime-context loop)
+        (lambda ()
+          (handler-case
+              (loop
+                while (eq (agentic-loop-status loop) :running)
+                do (when (>= (agentic-loop-current-iteration loop)
+                             (agentic-loop-max-iterations loop))
+                     (setf (agentic-loop-status loop) :limit-reached)
+                     (setf (agentic-loop-result-summary loop)
+                           "Maximum iterations reached.")
+                     (return))
+                   (case (run-agentic-loop-step loop)
+                     (:completed (return))
+                     (:paused (return))
+                     (:interrupted (return))
+                     (:continue nil)
+                     (t (return))))
+            (agentic-loop-interrupted (condition)
+              (unless (eq (agentic-loop-status loop) :interrupted)
+                (setf (agentic-loop-status loop) :interrupted))
+              (setf (agentic-loop-last-error loop) (agentic-loop-interrupted-reason condition))
+              (setf (agentic-loop-result-summary loop) (agentic-loop-interrupted-reason condition))
+              (agentic-loop-log :warn loop "interrupted"
+                               :context `(("reason" . ,(agentic-loop-interrupted-reason condition)))))
+            (error (condition)
+              (setf (agentic-loop-status loop) :failed)
+              (setf (agentic-loop-last-error loop) (princ-to-string condition))
+              (append-agentic-loop-step-record
+               loop
+               (make-agentic-loop-step-record (1+ (agentic-loop-current-iteration loop))
+                                              :failed
+                                              :note (princ-to-string condition)))
+              (agentic-loop-log :error loop "failed"
+                                :context `(("error" . ,(princ-to-string condition))))))))
+    (progn
+      (when (eq (agentic-loop-status loop) :running)
+        (setf (agentic-loop-status loop) :completed))
+      (setf (agentic-loop-finished-at loop) (get-universal-time))
+      (setf (agentic-loop-thread loop) nil))))
 
 (defun spawn-agentic-loop-thread (loop)
   "Spawns LOOP's background worker thread."
@@ -671,6 +673,47 @@
            (setf (agentic-loop-last-error loop) (format nil "Unrecognized loop status: ~A" status))
            (setf (agentic-loop-finished-at loop) (get-universal-time))))))))
 
+(defvar *reaper-interval-seconds* 600
+  "Interval in seconds between thread and memory reaper sweeps (default 10 minutes).")
+
+(defvar *last-reaper-execution-time* 0
+  "Timestamp of the last thread and memory reaper sweep.")
+
+(defun reap-orphaned-threads-and-sockets ()
+  "Garbage-collects terminal loops from the registry and terminates orphaned background threads."
+  (let ((all-threads (sb-thread:list-all-threads)))
+    ;; 1. Reap terminal agentic loops from global registry to free memory
+    (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+      (let ((ids-to-remove nil))
+        (maphash (lambda (id loop)
+                   (let ((status (agentic-loop-status loop))
+                         (finished (agentic-loop-finished-at loop)))
+                     ;; If the loop is finished (terminal status) and has been finished for more than 5 minutes
+                     (when (and (member status '(:completed :failed :limit-reached :interrupted))
+                                finished
+                                (> (- (get-universal-time) finished) 300))
+                       (push id ids-to-remove))))
+                 *agentic-loop-registry*)
+        (dolist (id ids-to-remove)
+          (log-message :info (format nil "Reaper: Pruning completed loop ~A from registry." id))
+          (remhash id *agentic-loop-registry*))))
+    
+    ;; 2. Detect and terminate orphaned/hung worker threads
+    (dolist (thread all-threads)
+      (let ((name (sb-thread:thread-name thread)))
+        (when (and name (alexandria:starts-with-subseq "Agentic-Loop-Worker-" name))
+          (let* ((id-str (subseq name (length "Agentic-Loop-Worker-")))
+                 (id (parse-integer id-str :junk-allowed t)))
+            (when id
+              ;; Look up in registry. If the loop is not registered, or is in terminal state, terminate!
+              (let ((loop (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+                            (gethash id *agentic-loop-registry*))))
+                (when (or (null loop)
+                          (member (agentic-loop-status loop) '(:completed :failed :limit-reached :interrupted)))
+                  (log-message :warn (format nil "Reaper: Terminating orphaned worker thread: ~A" name))
+                  (handler-case (sb-thread:terminate-thread thread)
+                    (error () nil)))))))))))
+
 (defun run-agentic-loop-monitor ()
   "The execution loop for the background monitor."
   (loop
@@ -678,6 +721,11 @@
     do (handler-case
            (progn
              (monitor-agentic-loops-once)
+             ;; Run reaper sweep if interval has elapsed
+             (let ((now (get-universal-time)))
+               (when (>= (- now *last-reaper-execution-time*) *reaper-interval-seconds*)
+                 (setf *last-reaper-execution-time* now)
+                 (reap-orphaned-threads-and-sockets)))
              (sleep 5))
          (error (condition)
            (log-message :error (format nil "Agentic loop monitor error: ~A" condition))

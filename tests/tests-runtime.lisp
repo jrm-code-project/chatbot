@@ -1409,3 +1409,30 @@ data: [DONE]")
              (fiveam:is (equal (list persona-memory) stopped))
              (fiveam:is (eq startup-bot (runtime-context-startup-chatbot context))))
         (setf (runtime-context-startup-chatbot context) nil)))))
+
+(fiveam:test test-http-backoff-retry-on-transient-errors
+  (let ((post-call-count 0)
+        (get-call-count 0))
+    ;; 1. Test POST request with transient errors that eventually succeeds on 3rd attempt
+    (let ((*http-post-function*
+            (lambda (url &rest args)
+              (declare (ignore url args))
+              (incf post-call-count)
+              (cond
+                ((<= post-call-count 2)
+                 (error "Transient Network timeout (12002)."))
+                (t
+                 (values "Success" 200))))))
+      (let ((res (post-web-request "https://api.test/post" nil "payload")))
+        (fiveam:is (string= "Success" res))
+        (fiveam:is (= 3 post-call-count))))
+    
+    ;; 2. Test GET request with non-retryable 404 client error that fails immediately on 1st attempt
+    (let ((*http-get-function*
+            (lambda (url &rest args)
+              (declare (ignore url args))
+              (incf get-call-count)
+              (error "HTTP 404 Not Found"))))
+      (fiveam:signals error
+        (get-web-request "https://api.test/get"))
+      (fiveam:is (= 1 get-call-count)))))
