@@ -765,7 +765,11 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                            (and val (string/= val "") val)))
             (backend-kw (if backend-str
                             (intern (string-upcase backend-str) "KEYWORD")
-                            :gemini))
+                            (handler-case
+                                (progn
+                                  (get-web-request "http://localhost:1234/v1/models")
+                                  :lm-studio)
+                              (error () :gemini))))
             (model (let ((val (or (mcp-val "model" arguments)
                                   (mcp-val :model arguments))))
                      (and val (string/= val "") val)))
