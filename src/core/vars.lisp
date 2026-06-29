@@ -773,5 +773,5 @@ runtime settings are read from the runtime context directly."
 (defvar *max-minion-depth* 3
   "The global maximum nesting depth allowed for the minion hierarchy.")
 
-(defvar *context-pruning-threshold-characters* 32000
+(defvar *context-pruning-threshold-characters* 64000
   "The total character length of the conversation history above which auto-pruning is triggered.")
