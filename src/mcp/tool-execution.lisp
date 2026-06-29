@@ -641,8 +641,16 @@ Do not output anything else in the spawn command line itself, but continue your 
           (or remaining-budget "unbounded")))
 
 (defun append-delegation-instructions (bot name depth remaining-budget)
-  (let ((inst (format-delegation-instruction name depth remaining-budget))
-        (curr (chatbot-system-instruction bot)))
+  (let* ((model (and (slot-boundp bot 'model) (chatbot-model bot)))
+         (is-qwen (and (stringp model) (search "qwen" model :test #'char-equal)))
+         (inst (if is-qwen
+                   (format nil "~&[CRITICAL OPERATION DIRECTIVE]~%~
+                                You are a worker minion named '~A'.~%~
+                                You must DIRECTLY write Lisp code and execute tasks yourself.~%~
+                                Do NOT output [SPAWN-SUB] commands. Do NOT try to delegate tasks.~%~
+                                Solve all requests entirely within your own response." name)
+                   (format-delegation-instruction name depth remaining-budget)))
+         (curr (chatbot-system-instruction bot)))
     (setf (chatbot-system-instruction bot)
           (cond
             ((null curr) inst)
@@ -916,6 +924,36 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                 (mcp-val :query arguments))
                             "query"
                             tool-name)))
+    ((string= tool-name "gitCall")
+     (unless (chatbot-enable-git-tools-p bot)
+       (error 'mcp-tool-execution-error
+              :tool-name tool-name
+              :reason "Git tool is not enabled."))
+     (let* ((args-list (or (mcp-val "args" arguments)
+                           (mcp-val :args arguments)))
+            (args (loop for arg in args-list
+                        collect (typecase arg
+                                  (string arg)
+                                  (t (format nil "~A" arg)))))
+            (dir (or (chatbot-scoped-directory bot)
+                     (namestring (uiop:getcwd)))))
+       (multiple-value-bind (stdout stderr exit-code)
+           (uiop:run-program (cons "git" args)
+                             :directory dir
+                             :output :string
+                             :error-output :string
+                             :ignore-error-status t)
+         (format nil "~&[Git Executed]~%~
+                      Command: git ~{~A ~}~%~
+                      Directory: ~A~%~
+                      Exit Code: ~D~@[~%~
+                      STDOUT:~%~
+                      ~A~]~@[~%~
+                      STDERR:~%~
+                      ~A~]"
+                 args dir exit-code
+                 (and (string/= stdout "") stdout)
+                 (and (string/= stderr "") stderr)))))
     ((string= tool-name "eval")
      (unless (chatbot-enable-eval-p bot)
        (error 'mcp-tool-execution-error

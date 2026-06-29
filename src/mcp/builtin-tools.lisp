@@ -52,6 +52,16 @@
                                                      (:description . "Path to the file, relative to the persona directory or absolute within it.")))))
                       (:required . ("pathname"))))))
 
+(defun builtin-git-tool ()
+  "Returns the built-in git tool definition."
+  '((:name . "gitCall")
+    (:description . "Executes a git command with provided arguments inside the repository workspace.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("args" . ((:type . "array")
+                                                 (:items . ((:type . "string")))
+                                                 (:description . "Array of argument strings to pass to the git executable (e.g. [\"status\"], [\"diff\"], [\"commit\", \"-m\", \"msg\"]).")))))
+                      (:required . ("args"))))))
+
 (defun builtin-eval-tool ()
   "Returns the built-in eval tool definition."
   '((:name . "eval")
