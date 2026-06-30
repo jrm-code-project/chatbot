@@ -96,7 +96,13 @@
 
 (defun default-start-mcp-server (name command args &optional environment)
   "Launches an MCP server subprocess and starts its reader thread."
-  (let* ((resolved-command (resolve-mcp-launch-command command))
+  (let* ((resolved-args (mapcar (lambda (arg)
+                                  (if (and (stringp arg) (search "mock-mcp-server.lisp" arg))
+                                      (namestring (merge-pathnames "mock-mcp-server.lisp"
+                                                                   (asdf:system-source-directory :chatbot)))
+                                      arg))
+                                args))
+         (resolved-command (resolve-mcp-launch-command command))
          (launch-options (list :input :stream
                               :output :stream
                               :error-output :stream))
@@ -110,7 +116,7 @@
                          command
                          (format nil "~A (resolved from ~A)" resolved-command command)))
          (process-info (apply #'uiop:launch-program
-                             (cons (cons resolved-command args)
+                             (cons (cons resolved-command resolved-args)
                                    (if normalized-environment
                                        (append launch-options
                                                (list :environment normalized-environment))

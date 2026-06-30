@@ -741,11 +741,19 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
     (format nil "plans/plan-~4,'0D~2,'0D~2,'0D-~2,'0D~2,'0D.md"
             year month day hour min)))
 
-(defun default-execute-builtin-chatbot-tool (bot tool-name arguments)
-  "Executes a built-in tool for BOT."
-  (cond
-    ((string= tool-name "promptSubordinate")
-     (let* ((name (normalize-builtin-tool-string-argument
+(defvar *builtin-tools* (make-hash-table :test 'equal)
+  "Registry of built-in chatbot tools, mapping tool-name strings to handler functions.")
+
+(defmacro define-builtin-tool (tool-name (bot-var arguments-var) &body body)
+  "Defines a handler for a built-in tool and registers it in *builtin-tools*.
+The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for use in errors."
+  `(setf (gethash ,tool-name *builtin-tools*)
+         (lambda (,bot-var tool-name ,arguments-var)
+           (declare (ignorable ,bot-var tool-name ,arguments-var))
+           ,@body)))
+
+(define-builtin-tool "promptSubordinate" (bot arguments)
+  (let* ((name (normalize-builtin-tool-string-argument
                    (or (mcp-val "name" arguments)
                        (mcp-val :name arguments))
                    "name"
@@ -771,8 +779,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
          (if spawn-msg
              (format nil "~A~%~A" response spawn-msg)
              response))))
-    ((string= tool-name "spawnMinion")
-     (let* ((name (normalize-builtin-tool-string-argument
+
+(define-builtin-tool "spawnMinion" (bot arguments)
+  (let* ((name (normalize-builtin-tool-string-argument
                    (or (mcp-val "name" arguments)
                        (mcp-val :name arguments))
                    "name"
@@ -879,8 +888,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
            (setf (chatbot-subordinates bot)
                  (append (chatbot-subordinates bot) (list sub-conv)))
            (format nil "Minion '~A' spawned successfully." name)))))
-    ((string= tool-name "listMinions")
-     (let ((minion-infos nil))
+
+(define-builtin-tool "listMinions" (bot arguments)
+  (let ((minion-infos nil))
        (dolist (c (chatbot-subordinates bot))
          (let ((sub-bot (conversation-chatbot c)))
            (push `((:name . ,(chatbot-persona-name sub-bot))
@@ -888,8 +898,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                    (:model . ,(or (chatbot-model sub-bot) "default")))
                  minion-infos)))
        (cl-json:encode-json-to-string (coerce (nreverse minion-infos) 'vector))))
-    ((string= tool-name "dismissMinion")
-     (let* ((name (normalize-builtin-tool-string-argument
+
+(define-builtin-tool "dismissMinion" (bot arguments)
+  (let* ((name (normalize-builtin-tool-string-argument
                    (or (mcp-val "name" arguments)
                        (mcp-val :name arguments))
                    "name"
@@ -908,8 +919,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
        (setf (chatbot-subordinates bot)
              (remove target (chatbot-subordinates bot) :test #'eq))
        (format nil "Minion '~A' and all of its subordinates dismissed successfully." name)))
-    ((string= tool-name "webSearch")
-     (unless (chatbot-web-tools-p bot)
+
+(define-builtin-tool "webSearch" (bot arguments)
+  (unless (chatbot-web-tools-p bot)
        (error 'mcp-tool-execution-error
               :tool-name tool-name
               :reason "Web grounding tools are not enabled."))
@@ -921,8 +933,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                 (mcp-val :query arguments))
                             "query"
                             tool-name)))
-    ((string= tool-name "hyperspecSearch")
-     (unless (chatbot-web-tools-p bot)
+
+(define-builtin-tool "hyperspecSearch" (bot arguments)
+  (unless (chatbot-web-tools-p bot)
        (error 'mcp-tool-execution-error
               :tool-name tool-name
               :reason "Web grounding tools are not enabled."))
@@ -934,8 +947,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                 (mcp-val :query arguments))
                             "query"
                             tool-name)))
-    ((string= tool-name "gitCall")
-     (unless (chatbot-enable-git-tools-p bot)
+
+(define-builtin-tool "gitCall" (bot arguments)
+  (unless (chatbot-enable-git-tools-p bot)
        (error 'mcp-tool-execution-error
               :tool-name tool-name
               :reason "Git tool is not enabled."))
@@ -965,8 +979,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                  args dir exit-code
                  (and (string/= stdout "") stdout)
                  (and (string/= stderr "") stderr)))))
-    ((string= tool-name "eval")
-     (unless (chatbot-enable-eval-p bot)
+
+(define-builtin-tool "eval" (bot arguments)
+  (unless (chatbot-enable-eval-p bot)
        (error 'mcp-tool-execution-error
               :tool-name tool-name
               :reason "Eval tool is not enabled."))
@@ -978,10 +993,12 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
             (form (read-eval-tool-form expression tool-name)))
        (approve-chatbot-eval-expression bot expression tool-name)
        (execute-approved-eval-expression expression form tool-name)))
-    ((string= tool-name "readSamplingParameters")
-     (sampling-parameters-tool-result bot))
-    ((string= tool-name "startAgenticLoop")
-     (unless *active-conversation*
+
+(define-builtin-tool "readSamplingParameters" (bot arguments)
+  (sampling-parameters-tool-result bot))
+
+(define-builtin-tool "startAgenticLoop" (bot arguments)
+  (unless *active-conversation*
        (error 'mcp-tool-execution-error
               :tool-name tool-name
               :reason "No active conversation is bound for autonomous loop startup."))
@@ -1009,10 +1026,12 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                       :backend backend
                                       :model model)))
        (agentic-loop-public-json loop)))
-    ((string= tool-name "listAgenticLoops")
-     (agentic-loop-list-json))
-    ((string= tool-name "readAgenticLoop")
-     (let* ((loop-id (normalize-builtin-tool-integer-argument
+
+(define-builtin-tool "listAgenticLoops" (bot arguments)
+  (agentic-loop-list-json))
+
+(define-builtin-tool "readAgenticLoop" (bot arguments)
+  (let* ((loop-id (normalize-builtin-tool-integer-argument
                       (or (mcp-val "loopId" arguments)
                           (mcp-val :loop-id arguments))
                       "loopId"
@@ -1022,8 +1041,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                              :tool-name tool-name
                              :reason (format nil "Unknown agentic loop id: ~A" loop-id)))))
        (agentic-loop-public-json loop)))
-    ((string= tool-name "abortAgenticLoop")
-     (multiple-value-bind (force-foundp force-value)
+
+(define-builtin-tool "abortAgenticLoop" (bot arguments)
+  (multiple-value-bind (force-foundp force-value)
          (builtin-tool-argument arguments "force" :force)
        (let* ((loop-id (normalize-builtin-tool-integer-argument
                         (or (mcp-val "loopId" arguments)
@@ -1038,8 +1058,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                          nil))
               (loop (abort-agentic-loop loop-id :force force)))
          (agentic-loop-public-json loop))))
-    ((string= tool-name "resumeAgenticLoop")
-     (multiple-value-bind (approve-foundp approve-value)
+
+(define-builtin-tool "resumeAgenticLoop" (bot arguments)
+  (multiple-value-bind (approve-foundp approve-value)
          (builtin-tool-argument arguments "approve" :approve)
        (let* ((loop-id (normalize-builtin-tool-integer-argument
                         (or (mcp-val "loopId" arguments)
@@ -1052,8 +1073,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                                                 tool-name))
               (loop (resume-agentic-loop loop-id :approve approve)))
          (agentic-loop-public-json loop))))
-    ((string= tool-name "setSamplingParameters")
-     (multiple-value-bind (temperature-foundp temperature-value)
+
+(define-builtin-tool "setSamplingParameters" (bot arguments)
+  (multiple-value-bind (temperature-foundp temperature-value)
          (builtin-tool-argument arguments "temperature" :temperature)
        (multiple-value-bind (top-p-foundp top-p-value)
            (builtin-tool-argument arguments "topP" :top-p :top_p)
@@ -1076,11 +1098,13 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
              (error 'mcp-tool-execution-error
                     :tool-name tool-name
                     :reason (princ-to-string e)))))))
-    ((string= tool-name "resetSamplingParameters")
-     (reset-sampling-parameters bot)
+
+(define-builtin-tool "resetSamplingParameters" (bot arguments)
+  (reset-sampling-parameters bot)
      (sampling-parameters-tool-result bot :saved t))
-    ((string= tool-name "readFileLines")
-     (let* ((filename (mcp-val :filename arguments))
+
+(define-builtin-tool "readFileLines" (bot arguments)
+  (let* ((filename (mcp-val :filename arguments))
             (beginning-line (normalize-builtin-tool-integer-argument
                              (or (mcp-val "beginningLine" arguments)
                                  (mcp-val :beginning-line arguments))
@@ -1093,11 +1117,13 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                           tool-name))
             (path (resolve-filesystem-tool-path bot filename tool-name)))
        (read-file-lines-subset path beginning-line ending-line tool-name)))
-    ((string= tool-name "readSystemInstructions")
-     (ensure-system-instruction-tool-path bot tool-name)
+
+(define-builtin-tool "readSystemInstructions" (bot arguments)
+  (ensure-system-instruction-tool-path bot tool-name)
      (system-instruction-tool-result bot))
-    ((string= tool-name "insertSystemInstructionParagraph")
-     (ensure-system-instruction-tool-path bot tool-name)
+
+(define-builtin-tool "insertSystemInstructionParagraph" (bot arguments)
+  (ensure-system-instruction-tool-path bot tool-name)
      (insert-system-instruction-paragraph
       bot
       (normalize-builtin-tool-string-argument
@@ -1112,8 +1138,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
               tool-name))
      (save-system-instructions-or-tool-error bot tool-name)
      (system-instruction-tool-result bot :saved t))
-    ((string= tool-name "updateSystemInstructionParagraph")
-     (ensure-system-instruction-tool-path bot tool-name)
+
+(define-builtin-tool "updateSystemInstructionParagraph" (bot arguments)
+  (ensure-system-instruction-tool-path bot tool-name)
      (update-system-instruction-paragraph
       bot
       (normalize-builtin-tool-integer-argument
@@ -1128,8 +1155,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
        tool-name))
      (save-system-instructions-or-tool-error bot tool-name)
      (system-instruction-tool-result bot :saved t))
-    ((string= tool-name "deleteSystemInstructionParagraph")
-     (ensure-system-instruction-tool-path bot tool-name)
+
+(define-builtin-tool "deleteSystemInstructionParagraph" (bot arguments)
+  (ensure-system-instruction-tool-path bot tool-name)
      (delete-system-instruction-paragraph
       bot
       (normalize-builtin-tool-integer-argument
@@ -1139,8 +1167,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
        tool-name))
      (save-system-instructions-or-tool-error bot tool-name)
      (system-instruction-tool-result bot :saved t))
-    ((string= tool-name "replaceSystemInstructions")
-     (ensure-system-instruction-tool-path bot tool-name)
+
+(define-builtin-tool "replaceSystemInstructions" (bot arguments)
+  (ensure-system-instruction-tool-path bot tool-name)
      (multiple-value-bind (paragraphs-foundp paragraphs-value)
          (builtin-tool-argument arguments "paragraphs" :paragraphs)
        (replace-system-instruction-paragraphs
@@ -1152,8 +1181,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
          tool-name)))
      (save-system-instructions-or-tool-error bot tool-name)
      (system-instruction-tool-result bot :saved t))
-    ((string= tool-name "directory")
-     (multiple-value-bind (directory-path root)
+
+(define-builtin-tool "directory" (bot arguments)
+  (multiple-value-bind (directory-path root)
          (resolve-filesystem-tool-directory bot
                                             (or (mcp-val "pathname" arguments)
                                                 (mcp-val :pathname arguments))
@@ -1163,8 +1193,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                               (or (mcp-val "pattern" arguments)
                                   (mcp-val :pattern arguments))
                               tool-name)))
-    ((string= tool-name "writeFile")
-     (multiple-value-bind (pathname-foundp pathname)
+
+(define-builtin-tool "writeFile" (bot arguments)
+  (multiple-value-bind (pathname-foundp pathname)
          (builtin-tool-argument arguments "pathname" :pathname)
        (declare (ignore pathname-foundp))
        (multiple-value-bind (use-lf-only-foundp use-lf-only-value)
@@ -1191,8 +1222,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                                                                 end-with-eol-value
                                                                                 "endWithEol"
                                                                                 tool-name))))))))
-    ((string= tool-name "deleteFile")
-     (multiple-value-bind (pathname-foundp pathname)
+
+(define-builtin-tool "deleteFile" (bot arguments)
+  (multiple-value-bind (pathname-foundp pathname)
          (builtin-tool-argument arguments "pathname" :pathname)
        (unless pathname-foundp
          (error 'mcp-tool-execution-error
@@ -1201,8 +1233,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
        (let* ((path (resolve-filesystem-tool-path bot pathname tool-name))
               (root (chatbot-filesystem-root-truename bot tool-name)))
          (delete-file-tool-result path root))))
-    ((string= tool-name "submitPlan")
-     (let* ((plan-content (normalize-builtin-tool-string-argument
+
+(define-builtin-tool "submitPlan" (bot arguments)
+  (let* ((plan-content (normalize-builtin-tool-string-argument
                            (or (mcp-val "plan_content" arguments)
                                (mcp-val "planContent" arguments)
                                (mcp-val :plan-content arguments)
@@ -1227,8 +1260,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                          (list (list (cons "role" "user")
                                      (cons "content" (format nil "[System: Plan saved to ~A]" filename))))))))
        (format nil "Plan saved successfully to ~A and exited Planner Mode." filename)))
-    ((string= tool-name "abortPlan")
-     (let ((reason (or (mcp-val "reason" arguments)
+
+(define-builtin-tool "abortPlan" (bot arguments)
+  (let ((reason (or (mcp-val "reason" arguments)
                        (mcp-val :reason arguments)
                        "No reason provided.")))
        (format t "~&[PLAN ABORTED]~%Reason: ~A~%" reason)
@@ -1242,8 +1276,9 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                          (list (list (cons "role" "user")
                                      (cons "content" "[System: Planner mode aborted.]")))))))
        (format nil "Planner mode aborted: ~A" reason)))
-    ((string= tool-name "invokePlanner")
-     (let* ((context-summary (normalize-builtin-tool-string-argument
+
+(define-builtin-tool "invokePlanner" (bot arguments)
+  (let* ((context-summary (normalize-builtin-tool-string-argument
                               (or (mcp-val "context_summary" arguments)
                                   (mcp-val "contextSummary" arguments)
                                   (mcp-val :context-summary arguments)
@@ -1274,10 +1309,15 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                        (list (list (cons "role" "user")
                                    (cons "content" initial-prompt))))))
        (format nil "Planner minion successfully spawned and Planner Mode activated with goal: ~A" context-summary)))
-    (t
-     (error 'mcp-tool-execution-error
-            :tool-name tool-name
-            :reason "Unknown built-in tool."))))
+
+(defun default-execute-builtin-chatbot-tool (bot tool-name arguments)
+  "Executes a built-in tool for BOT using the *builtin-tools* registry."
+  (let ((handler (gethash tool-name *builtin-tools*)))
+    (if handler
+        (funcall handler bot tool-name arguments)
+        (error 'mcp-tool-execution-error
+               :tool-name tool-name
+               :reason "Unknown built-in tool."))))
 
 (defun execute-chatbot-tool (bot source tool-name arguments)
   "Executes SOURCE as either a built-in or MCP tool for BOT."

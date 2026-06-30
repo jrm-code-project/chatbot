@@ -3,6 +3,14 @@
 
 (in-package "CHATBOT")
 
+(defun get-high-precision-timestamp ()
+  "Returns a double-float timestamp in seconds since Unix epoch (using sb-ext:get-time-of-day) or process internal time if on non-SBCL."
+  #+sbcl
+  (multiple-value-bind (sec usec) (sb-ext:get-time-of-day)
+    (+ sec (float (/ usec 1000000) 1.0d0)))
+  #-sbcl
+  (float (/ (get-internal-real-time) internal-time-units-per-second) 1.0d0))
+
 (defvar *agentic-loop-registry* (make-hash-table))
 (defvar *agentic-loop-registry-lock* (sb-thread:make-mutex :name "agentic-loop-registry-lock"))
 (defvar *agentic-loop-id-counter* 0)
@@ -100,7 +108,7 @@
    (created-at
     :initarg :created-at
     :accessor agentic-loop-created-at
-    :initform (get-universal-time))
+    :initform (get-high-precision-timestamp))
    (started-at
     :initarg :started-at
     :accessor agentic-loop-started-at
@@ -125,13 +133,22 @@
          (merge-initarg-overrides (copy-initargs-for-instance context)
                                   initarg-overrides)))
 
-(defun clone-conversation-for-agentic-loop (conversation)
-  "Returns a loop-owned clone of CONVERSATION and its chatbot."
-  (clone-conversation conversation
-                      :chatbot (clone-chatbot (conversation-chatbot conversation))
-                      :messages (and (conversation-messages conversation)
-                                     (copy-tree (conversation-messages conversation)))
-                      :interaction-id (conversation-interaction-id conversation)))
+(defun clone-conversation-for-agentic-loop (conversation &key isolate-p)
+  "Returns a loop-owned clone of CONVERSATION and its chatbot, optionally isolated."
+  (let ((chatbot (conversation-chatbot conversation)))
+    (if isolate-p
+        (clone-conversation conversation
+                            :chatbot (clone-chatbot chatbot
+                                                    :system-instruction nil
+                                                    :persona-memory nil
+                                                    :persona-diary-entries nil)
+                            :messages nil
+                            :interaction-id nil)
+        (clone-conversation conversation
+                            :chatbot (clone-chatbot chatbot)
+                            :messages (and (conversation-messages conversation)
+                                           (copy-tree (conversation-messages conversation)))
+                            :interaction-id (conversation-interaction-id conversation)))))
 
 (defun apply-agentic-loop-execution-profile (conversation &key backend model)
   "Applies backend/model overrides to CONVERSATION and returns the effective profile."
@@ -398,7 +415,7 @@
         :prompt prompt
         :response response
         :note note
-        :timestamp (get-universal-time)))
+        :timestamp (get-high-precision-timestamp)))
 
 (defun append-agentic-loop-step-record (loop record)
   "Appends RECORD to LOOP history."
@@ -538,14 +555,14 @@
     (progn
       (when (eq (agentic-loop-status loop) :running)
         (setf (agentic-loop-status loop) :completed))
-      (setf (agentic-loop-finished-at loop) (get-universal-time))
+      (setf (agentic-loop-finished-at loop) (get-high-precision-timestamp))
       (setf (agentic-loop-thread loop) nil))))
 
 (defun spawn-agentic-loop-thread (loop)
   "Spawns LOOP's background worker thread."
   (setf (agentic-loop-status loop) :running)
   (unless (agentic-loop-started-at loop)
-    (setf (agentic-loop-started-at loop) (get-universal-time)))
+    (setf (agentic-loop-started-at loop) (get-high-precision-timestamp)))
   (setf (agentic-loop-thread loop)
         (sb-thread:make-thread
          (lambda ()
@@ -555,14 +572,14 @@
   loop)
 
 (defun start-agentic-loop (conversation goal &key (max-iterations 10) backend model)
-  "Clones CONVERSATION and starts an autonomous loop for GOAL."
+  "Clones CONVERSATION into a sterile sandbox and starts an autonomous loop for GOAL."
   (unless (typep conversation 'conversation)
     (error "Agentic loops require a CHATBOT conversation."))
   (let* ((source-bot (conversation-chatbot conversation))
          (template-context (or (chatbot-runtime-context source-bot)
                                (resolve-runtime-context nil :sync-from-globals-p t)
                                *default-runtime-context*))
-         (loop-conversation (clone-conversation-for-agentic-loop conversation))
+         (loop-conversation (clone-conversation-for-agentic-loop conversation :isolate-p t))
          (loop (make-instance 'agentic-loop
                               :id (next-agentic-loop-id)
                               :goal goal
@@ -570,6 +587,9 @@
                               :conversation loop-conversation
                               :runtime-context template-context
                               :chat-function (resolve-agentic-loop-chat-function))))
+    ;; Force sterile instructions
+    (setf (chatbot-system-instruction (conversation-chatbot loop-conversation))
+          "You are an autonomous agent. Focus purely on achieving the specified goal. Do not output conversational filler.")
     (setf (agentic-loop-execution-profile loop)
           (apply-agentic-loop-execution-profile loop-conversation
                                                 :backend backend
@@ -595,7 +615,7 @@
       (setf (agentic-loop-pending-approval-decision loop) :deny)
       (sb-thread:condition-broadcast (agentic-loop-approval-waitqueue loop)))
     (unless (agentic-loop-thread-alive-p loop)
-      (setf (agentic-loop-finished-at loop) (get-universal-time))
+      (setf (agentic-loop-finished-at loop) (get-high-precision-timestamp))
       (setf (agentic-loop-thread loop) nil))
     (agentic-loop-log :warn loop "interrupted")
     loop))
@@ -627,7 +647,7 @@
             (error "Agentic loop ~A is paused but has no live worker thread." loop-id))
           (setf (agentic-loop-last-error loop) "Approval denied by user.")
           (setf (agentic-loop-result-summary loop) "Approval denied by user.")
-          (setf (agentic-loop-finished-at loop) (get-universal-time))
+          (setf (agentic-loop-finished-at loop) (get-high-precision-timestamp))
           (sb-thread:with-mutex ((agentic-loop-lock loop))
             (setf (agentic-loop-pending-approval-decision loop) :deny)
             (setf (agentic-loop-status loop) :interrupted)
@@ -662,7 +682,7 @@
          (sb-thread:with-mutex ((agentic-loop-lock loop))
            (setf (agentic-loop-status loop) :failed)
            (setf (agentic-loop-last-error loop) "Worker thread terminated unexpectedly.")
-           (setf (agentic-loop-finished-at loop) (get-universal-time))))
+           (setf (agentic-loop-finished-at loop) (get-high-precision-timestamp))))
 
         ;; 3. Invalid/unrecognized states that are not completed or aborted should be pushed to failed.
         ((not (member status '(:pending :running :awaiting-approval :completed :failed :limit-reached :interrupted)))
@@ -671,7 +691,7 @@
          (sb-thread:with-mutex ((agentic-loop-lock loop))
            (setf (agentic-loop-status loop) :failed)
            (setf (agentic-loop-last-error loop) (format nil "Unrecognized loop status: ~A" status))
-           (setf (agentic-loop-finished-at loop) (get-universal-time))))))))
+           (setf (agentic-loop-finished-at loop) (get-high-precision-timestamp))))))))
 
 (defvar *reaper-interval-seconds* 600
   "Interval in seconds between thread and memory reaper sweeps (default 10 minutes).")
@@ -691,7 +711,7 @@
                      ;; If the loop is finished (terminal status) and has been finished for more than 5 minutes
                      (when (and (member status '(:completed :failed :limit-reached :interrupted))
                                 finished
-                                (> (- (get-universal-time) finished) 300))
+                                (> (- (get-high-precision-timestamp) finished) 300))
                        (push id ids-to-remove))))
                  *agentic-loop-registry*)
         (dolist (id ids-to-remove)
@@ -722,7 +742,7 @@
            (progn
              (monitor-agentic-loops-once)
              ;; Run reaper sweep if interval has elapsed
-             (let ((now (get-universal-time)))
+             (let ((now (get-high-precision-timestamp)))
                (when (>= (- now *last-reaper-execution-time*) *reaper-interval-seconds*)
                  (setf *last-reaper-execution-time* now)
                  (reap-orphaned-threads-and-sockets)))

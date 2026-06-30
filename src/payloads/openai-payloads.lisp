@@ -27,14 +27,44 @@
              (cons "content" decorated-input)))
       (t nil))))
 
+(defun openai-normalize-message-content (content)
+  "Ensures CONTENT is either a plain string or an array of valid OpenAI content parts.
+Converts any Gemini/Google-style nested parts or non-string structures into clean plain text strings."
+  (cond
+    ((null content) "")
+    ((stringp content) content)
+    ((and (listp content)
+          (consp (car content))
+          (stringp (caar content))) ; Is it an alist (e.g., single Gemini/Google part, or single object)?
+     (let ((text-val (cdr (assoc "text" content :test #'string=)))
+           (fn-call (cdr (assoc "functionCall" content :test #'string=)))
+           (fn-resp (cdr (assoc "functionResponse" content :test #'string=))))
+       (cond
+         (text-val text-val)
+         (fn-call (format nil "[Tool Call: ~A]" (cdr (assoc "name" fn-call :test #'string=))))
+         (fn-resp (format nil "[Tool Response: ~A]" (cl-json:encode-json-to-string fn-resp)))
+         (t (cl-json:encode-json-to-string content)))))
+    ((listp content) ; Is it a list of parts?
+     (with-output-to-string (s)
+       (dolist (part content)
+         (let ((normalized (openai-normalize-message-content part)))
+           (when (string/= normalized "")
+             (format s "~A~%" normalized))))))
+    ((vectorp content) ; Is it a vector of parts?
+     (openai-normalize-message-content (coerce content 'list)))
+    (t (princ-to-string content))))
+
 (defun build-openai-request-messages (system-inst messages input &key chatbot persona-memory persona-diary-entries file-attachments)
   "Builds the OpenAI chat-completions message list for the current turn."
   (let ((history (mapcar (lambda (message)
-                           (let ((role (cdr (assoc "role" message :test #'string=))))
+                           (let* ((role (cdr (assoc "role" message :test #'string=)))
+                                  (content (cdr (assoc "content" message :test #'string=)))
+                                  (normalized-content (openai-normalize-message-content content))
+                                  (clean-msg (remove "role" (remove "content" message :key #'car :test #'string=) :key #'car :test #'string=)))
                              (if role
                                  (acons "role"
                                         (openai-role-for-message role)
-                                        (remove "role" message :key #'car :test #'string=))
+                                        (acons "content" normalized-content clean-msg))
                                  message)))
                          (append (persona-memory-messages persona-memory)
                                  (persona-diary-messages persona-diary-entries)
@@ -42,7 +72,7 @@
         (current-user-message (openai-live-user-message chatbot input file-attachments)))
     (if system-inst
         (append (list (list (cons "role" "system")
-                            (cons "content" (system-instruction-text system-inst))))
+                            (cons "content" (openai-normalize-message-content (system-instruction-text system-inst)))))
                 history
                 (when current-user-message
                   (list current-user-message)))

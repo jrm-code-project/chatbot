@@ -3,4 +3,4 @@
 
 ((:name "mock-server"
   :command "sbcl"
-  :args ("--script" "D:/repositories/chatbot/mock-mcp-server.lisp")))
+  :args ("--script" "mock-mcp-server.lisp")))

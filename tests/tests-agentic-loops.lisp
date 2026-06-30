@@ -269,7 +269,7 @@
                               :runtime-context context)))
     ;; Set loop to completed and finished older than 5 minutes (301 seconds ago)
     (setf (agentic-loop-status loop) :completed)
-    (setf (agentic-loop-finished-at loop) (- (get-universal-time) 301))
+    (setf (agentic-loop-finished-at loop) (- (get-high-precision-timestamp) 301))
     
     ;; Register it
     (register-agentic-loop loop)

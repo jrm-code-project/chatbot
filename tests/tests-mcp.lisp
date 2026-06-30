@@ -1107,7 +1107,7 @@
     (fiveam:is (eq captured-status (chatbot-mcp-startup-status bot)))))
 
 (fiveam:test test-mcp-end-to-end
-  (let* ((mock-server-path (merge-pathnames "mock-mcp-server.lisp" (uiop:getcwd)))
+  (let* ((mock-server-path (merge-pathnames "mock-mcp-server.lisp" (asdf:system-source-directory :chatbot)))
         (server (start-mcp-server "test-server" "sbcl" (list "--script" (namestring mock-server-path)))))
     (unwind-protect
          (progn
@@ -1616,3 +1616,28 @@ data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Rep
           (fiveam:is (string= "Planner Response." res))
           (fiveam:is-true planner-called-p)
           (fiveam:is-false parent-called-p))))))
+
+(fiveam:test test-write-file-auto-creates-directories
+  (let* ((root (uiop:default-temporary-directory))
+         (bot (conversation-chatbot (new-chat :backend :google :filesystem-tools-p t)))
+         (sub-dir (merge-pathnames "test-nested-write-dir/" root))
+         (nested-file-path (merge-pathnames "a/b/c/nested-test-file.txt" sub-dir)))
+    ;; Override default-temporary-directory or use sub-dir as chatbot-filesystem-root-directory
+    (setf (chatbot-filesystem-root-directory bot) (namestring sub-dir))
+    ;; Ensure parent directory does not exist initially, but root sub-dir itself does!
+    (uiop:delete-directory-tree sub-dir :validate t :if-does-not-exist :ignore)
+    (ensure-directories-exist sub-dir)
+    (fiveam:is-false (probe-file (merge-pathnames "a/b/c/" sub-dir)))
+    (unwind-protect
+         (let ((args (list (cons "pathname" "a/b/c/nested-test-file.txt")
+                           (cons "lines" (vector "Hello Nested World" "Line Two"))
+                           (cons "useLfOnly" t)
+                           (cons "endWithEol" t))))
+           (let ((res (execute-chatbot-tool-by-name bot "writeFile" args)))
+             (fiveam:is (stringp res))
+             (fiveam:is (search "Wrote file:" res))
+             ;; Verify it actually exists and has correct content
+             (fiveam:is-true (probe-file nested-file-path))
+             (fiveam:is (string= (format nil "Hello Nested World~%Line Two~%")
+                                 (uiop:read-file-string nested-file-path)))))
+      (uiop:delete-directory-tree sub-dir :validate t :if-does-not-exist :ignore))))
