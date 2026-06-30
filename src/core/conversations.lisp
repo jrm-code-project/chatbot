@@ -249,6 +249,16 @@ Use NEW-CHAT instead when no persona should be loaded."
         when (string-equal k key)
         return v))
 
+(defun get-message-field (msg key-kw key-str)
+  "Safely retrieves a field value from MSG (supporting keyword alist, string alist, or plist)."
+  (cond
+    ((listp msg)
+     (let ((assoc-val (or (assoc key-kw msg) (assoc key-str msg :test #'string-equal))))
+       (if (consp assoc-val)
+           (cdr assoc-val)
+           (get-string-plist-value msg key-str))))
+    (t nil)))
+
 (defun terminate-active-threads-by-name (name-substring)
   "Finds and terminates any active SBCL threads whose name contains NAME-SUBSTRING case-insensitively."
   #+sbcl
@@ -335,8 +345,8 @@ Use NEW-CHAT instead when no persona should be loaded."
                 (when (and messages (listp messages))
                   (setf (conversation-messages sub-conv)
                         (mapcar (lambda (msg)
-                                  (list (cons "role" (get-string-plist-value msg "role"))
-                                        (cons "content" (get-string-plist-value msg "content"))))
+                                  (list (cons "role" (get-message-field msg :role "role"))
+                                        (cons "content" (get-message-field msg :content "content"))))
                                 messages)))
                 
                 ;; 4. Crash-Recovery Handshake: Append a system recovery prompt to the end of the history
@@ -420,3 +430,39 @@ Use NEW-CHAT instead when no persona should be loaded."
       (log-message :info "Ingested plan as transient system instruction"
                    :context `(("file" . ,filename)))
       (format nil "Plan from ~A successfully loaded as a transient system instruction." filename))))
+
+(defun restore-conversation-from-checkpoint (filename &key runtime-context)
+  "Loads the conversation checkpoint from FILENAME (in the minions-data-directory) and returns a restored conversation instance."
+  (let* ((dir (minions-data-directory))
+         (file-path (merge-pathnames filename dir)))
+    (unless (probe-file file-path)
+      (error "Checkpoint file not found: ~A" (namestring file-path)))
+    (let* ((raw-text (uiop:read-file-string file-path))
+           (state (cl-json:decode-json-from-string raw-text))
+           (backend-str (get-string-plist-value state "backend"))
+           (backend-kw (if (and backend-str (string/= backend-str ""))
+                           (intern (string-upcase backend-str) "KEYWORD")
+                           :gemini))
+           (model (get-string-plist-value state "model"))
+           (system-instruction-raw (get-string-plist-value state "systemInstruction"))
+           (system-instruction (cond
+                                 ((null system-instruction-raw) nil)
+                                 ((stringp system-instruction-raw) system-instruction-raw)
+                                 ((listp system-instruction-raw) (coerce system-instruction-raw 'vector))
+                                 (t nil)))
+           (interaction-id (get-string-plist-value state "interactionId"))
+           (messages (get-string-plist-value state "messages")))
+      (let ((conv (new-chat :backend backend-kw
+                            :model (and (string/= model "") model)
+                            :system-instruction system-instruction
+                            :runtime-context runtime-context)))
+        (setf (conversation-interaction-id conv) (and (string/= interaction-id "") interaction-id))
+        (when (and messages (listp messages))
+          (setf (conversation-messages conv)
+                (mapcar (lambda (msg)
+                          (list (cons "role" (get-message-field msg :role "role"))
+                                (cons "content" (get-message-field msg :content "content"))))
+                        messages)))
+        (log-message :info "Restored conversation from checkpoint"
+                     :context `(("file" . ,(namestring file-path))))
+        conv))))
