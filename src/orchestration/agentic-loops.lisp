@@ -571,15 +571,15 @@
   (agentic-loop-log :info loop "started")
   loop)
 
-(defun start-agentic-loop (conversation goal &key (max-iterations 10) backend model)
-  "Clones CONVERSATION into a sterile sandbox and starts an autonomous loop for GOAL."
+(defun start-agentic-loop (conversation goal &key (max-iterations 10) backend model isolate-p)
+  "Clones CONVERSATION and starts an autonomous loop for GOAL."
   (unless (typep conversation 'conversation)
     (error "Agentic loops require a CHATBOT conversation."))
   (let* ((source-bot (conversation-chatbot conversation))
          (template-context (or (chatbot-runtime-context source-bot)
                                (resolve-runtime-context nil :sync-from-globals-p t)
                                *default-runtime-context*))
-         (loop-conversation (clone-conversation-for-agentic-loop conversation :isolate-p t))
+         (loop-conversation (clone-conversation-for-agentic-loop conversation :isolate-p isolate-p))
          (loop (make-instance 'agentic-loop
                               :id (next-agentic-loop-id)
                               :goal goal
@@ -587,9 +587,10 @@
                               :conversation loop-conversation
                               :runtime-context template-context
                               :chat-function (resolve-agentic-loop-chat-function))))
-    ;; Force sterile instructions
-    (setf (chatbot-system-instruction (conversation-chatbot loop-conversation))
-          "You are an autonomous agent. Focus purely on achieving the specified goal. Do not output conversational filler.")
+    ;; Force sterile instructions only when isolate-p is requested
+    (when isolate-p
+      (setf (chatbot-system-instruction (conversation-chatbot loop-conversation))
+            "You are an autonomous agent. Focus purely on achieving the specified goal. Do not output conversational filler."))
     (setf (agentic-loop-execution-profile loop)
           (apply-agentic-loop-execution-profile loop-conversation
                                                 :backend backend

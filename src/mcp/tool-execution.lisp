@@ -245,6 +245,17 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
         (directory-name (string-downcase (namestring (uiop:ensure-directory-pathname (truename directory))))))
     (alexandria:starts-with-subseq directory-name path-name)))
 
+(defun logical-pathname-within-directory-p (path directory)
+  "Checks if PATH is logically within DIRECTORY without requiring PATH to exist on disk."
+  (let* ((clean-path (pathname (uiop:native-namestring (uiop:ensure-directory-pathname path))))
+         (clean-dir (pathname (uiop:native-namestring (uiop:ensure-directory-pathname directory))))
+         (dir-dir (pathname-directory clean-dir))
+         (path-dir (pathname-directory clean-path)))
+    (and (equalp (pathname-device clean-path) (pathname-device clean-dir))
+         (eq (car dir-dir) (car path-dir))
+         (>= (length path-dir) (length dir-dir))
+         (equal (subseq path-dir 0 (length dir-dir)) dir-dir))))
+
 (defun canonicalize-allowed-filesystem-directories (directories)
   "Returns DIRECTORIES deduplicated and collapsed by ancestor coverage."
   (let ((sorted (sort (remove-duplicates
@@ -341,6 +352,17 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
                                          "filename"
                                          "File not found"))
 
+(defun logical-pathname-within-directory-p (path directory)
+  "Checks if PATH is logically within DIRECTORY without requiring PATH to exist on disk."
+  (let* ((clean-path (pathname (uiop:native-namestring (uiop:ensure-directory-pathname path))))
+         (clean-dir (pathname (uiop:native-namestring (uiop:ensure-directory-pathname directory))))
+         (dir-dir (pathname-directory clean-dir))
+         (path-dir (pathname-directory clean-path)))
+    (and (equalp (pathname-device clean-path) (pathname-device clean-dir))
+         (eq (car dir-dir) (car path-dir))
+         (>= (length path-dir) (length dir-dir))
+         (equal (subseq path-dir 0 (length dir-dir)) dir-dir))))
+
 (defun resolve-filesystem-tool-target-path (bot pathname tool-name)
   "Resolves PATHNAME for BOT as a write target inside the allowed filesystem root."
   (let* ((root (chatbot-filesystem-root-truename bot tool-name))
@@ -350,18 +372,24 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
                         requested
                         (merge-pathnames requested root)))
          (parent-candidate (uiop:ensure-directory-pathname
-                            (make-pathname :name nil :type nil :defaults candidate)))
-         (parent-resolved (probe-file parent-candidate)))
+                            (make-pathname :name nil :type nil :defaults candidate))))
     (when (and (null (pathname-name candidate))
                (null (pathname-type candidate)))
       (error 'mcp-tool-execution-error
              :tool-name tool-name
              :reason (format nil "Pathname must name a file: ~A" pathname)))
-    (unless parent-resolved
-      (error 'mcp-tool-execution-error
-             :tool-name tool-name
-             :reason (format nil "Parent directory not found: ~A" parent-candidate)))
-    (let* ((parent-truename (uiop:ensure-directory-pathname parent-resolved))
+    ;; Check logical containment within allowed filesystem root or any other authorized directory
+    (let ((allowed-dirs (chatbot-effective-filesystem-allowed-directories bot tool-name)))
+      (unless (some (lambda (allowed-dir)
+                      (logical-pathname-within-directory-p parent-candidate allowed-dir))
+                    allowed-dirs)
+        (error 'mcp-tool-execution-error
+               :tool-name tool-name
+               :reason (format nil "Target parent directory is outside sandbox root: ~A" parent-candidate))))
+    ;; Automatically create the necessary directories recursively
+    (ensure-directories-exist parent-candidate)
+    (let* ((parent-resolved (probe-file parent-candidate))
+           (parent-truename (uiop:ensure-directory-pathname parent-resolved))
            (safe-parent (ensure-filesystem-tool-directory-authorized bot parent-truename tool-name))
            (resolved-target (merge-pathnames (make-pathname :name (pathname-name candidate)
                                                            :type (pathname-type candidate)
@@ -1020,11 +1048,15 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
                                   (mcp-val :model arguments))))
                      (when raw
                        (normalize-builtin-tool-string-argument raw "model" tool-name))))
+            (isolate-p (let ((raw (or (mcp-val "isolate" arguments)
+                                      (mcp-val :isolate arguments))))
+                         (and raw (eq raw t))))
             (loop (start-agentic-loop *active-conversation*
                                       goal
                                       :max-iterations max-iterations
                                       :backend backend
-                                      :model model)))
+                                      :model model
+                                      :isolate-p isolate-p)))
        (agentic-loop-public-json loop)))
 
 (define-builtin-tool "listAgenticLoops" (bot arguments)
