@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Code Architecture - Enterprise Pitch Deck</title>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --text-color: #c9d1d9;
+            --accent-color: #58a6ff;
+            --panel-bg: #161b22;
+            --border-color: #30363d;
+        }
+        body.light-mode {
+            --bg-color: #f6f8fa;
+            --text-color: #24292f;
+            --accent-color: #0969da;
+            --panel-bg: #ffffff;
+            --border-color: #d0d7de;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            overflow: hidden;
+            transition: background-color 0.3s, color 0.3s;
+        }
+        #theme-toggle {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: var(--panel-bg);
+            color: var(--accent-color);
+            border: 1px solid var(--border-color);
+            padding: 8px 16px;
+            cursor: pointer;
+            font-family: inherit;
+            border-radius: 4px;
+            z-index: 1000;
+            transition: all 0.3s;
+            font-weight: bold;
+        }
+        #theme-toggle:hover {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 8px var(--accent-color);
+        }
+        .slide-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .slide {
+            display: none;
+            width: 80%;
+            max-width: 1200px;
+            max-height: 90vh;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            padding: 40px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border-radius: 8px;
+            flex-direction: column;
+            animation: fadeIn 0.4s ease-out;
+        }
+        .slide.active {
+            display: flex;
+        }
+        h1, h2 {
+            color: var(--accent-color);
+            margin-top: 0;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+        h1 { font-size: 2.8em; letter-spacing: -1px; }
+        h2 { font-size: 1.8em; }
+        p, li {
+            font-size: 1.2em;
+            line-height: 1.6;
+        }
+        ul {
+            margin-top: 20px;
+        }
+        li {
+            margin-bottom: 15px;
+        }
+        .diagram-container {
+            width: 100%;
+            height: 480px;
+            margin-top: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border: 1px solid var(--border-color);
+            background: #000;
+            border-radius: 4px;
+        }
+        body.light-mode .diagram-container {
+            background: #fff;
+        }
+        body.light-mode object {
+            filter: invert(1) hue-rotate(180deg);
+        }
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            display: flex;
+            gap: 20px;
+            font-size: 0.9em;
+            color: var(--border-color);
+            font-family: monospace;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .highlight {
+            color: var(--accent-color);
+            font-weight: bold;
+        }
+        .metrics-bar {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 20px;
+            background: rgba(88, 166, 255, 0.1);
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid var(--accent-color);
+        }
+        .metric {
+            text-align: center;
+        }
+        .metric-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: var(--accent-color);
+        }
+        .metric-label {
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+    </style>
+</head>
+<body>
+    <button id="theme-toggle">Switch to Light Mode</button>
+    <div class="slide-container">
+        <div class="slide active" id="slide-1">
+            <h1>Smart Code Architecture</h1>
+            <h2>Automated Legacy Modernization Synergy</h2>
+            <p>A strategic paradigm shift from static, technical-debt-heavy monoliths to living, autonomous codebases.</p>
+            <ul>
+                <li>Continuous Automated Auditing</li>
+                <li>Zero-Downtime Self-Remediation</li>
+                <li>Scalable Feature Generation</li>
+            </ul>
+        </div>
+        <div class="slide" id="slide-2">
+            <h2>The Enterprise Bottleneck: Stranded Capital</h2>
+            <p>Traditional architectures are a drain on operational expenditure (OpEx). They accumulate technical debt until maintenance costs paralyze your innovation runway.</p>
+            <ul>
+                <li>Opaque I/O dependencies inflating QA overhead</li>
+                <li>Fear-driven development cycles extending Time-to-Value (TTV)</li>
+                <li>High-friction, brittle refactoring pipelines</li>
+            </ul>
+        </div>
+        <div class="slide" id="slide-3">
+            <h2>The Solution: In-Vivo Transition Protocol</h2>
+            <p>We do not "rewrite" the monolith. We surround it, analyze its state, and deprecate it seamlessly without interrupting production.</p>
+            <p>Introducing the <span class="highlight">Autonomous Strangler Fig Protocol (ASFP)</span>, powered by our Proprietary AST Synthesis Engine and LLM-assisted Custodian Agents.</p>
+        </div>
+        <div class="slide" id="slide-4">
+            <h2>Localized Autonomous Architecture</h2>
+            <p>The core loop reduces DevOps overhead by automating analysis and deployment.</p>
+            <div class="diagram-container">
+                <object data="smart_code_architecture.svg" type="image/svg+xml" width="100%" height="100%"></object>
+            </div>
+        </div>
+        <div class="slide" id="slide-5">
+            <h2>The Intelligent Agents</h2>
+            <ul>
+                <li><span class="highlight">Custodian-Alpha:</span> Maps legacy inputs and outputs. Generates a synthesized payload engineered to mimic the exact state constraints of the target function, mitigating risk.</li>
+                <li><span class="highlight">Executor-Beta:</span> Injects the payload. Routes traffic to the modernized proxy. Validates 1:1 operational parity in real-time.</li>
+            </ul>
+        </div>
+        <div class="slide" id="slide-6">
+            <h2>The ASFP Deployment Lifecycle</h2>
+            <p>Phase 1: <strong>Mimicry</strong> - The proxy intercepts traffic, passes it to the legacy system, and shadows execution to establish a baseline.</p>
+            <p>Phase 2: <strong>Parity Validation</strong> - Zero discrepancies detected over a statistically significant SLA window.</p>
+            <p>Phase 3: <strong>Severance Event</strong> - The legacy routing is deprecated. Traffic shifts 100% to the modern node.</p>
+            <div class="metrics-bar">
+                <div class="metric"><div class="metric-value">40%</div><div class="metric-label">Reduced Maintenance OpEx</div></div>
+                <div class="metric"><div class="metric-value">0s</div><div class="metric-label">Deployment Downtime</div></div>
+                <div class="metric"><div class="metric-value">3x</div><div class="metric-label">Faster TTV (Time-to-Value)</div></div>
+            </div>
+        </div>
+        <div class="slide" id="slide-7">
+            <h2>Enterprise-Scale Integration</h2>
+            <p>Executing Zero-Friction Severance Events across distributed, multi-node architectures.</p>
+            <div class="diagram-container">
+                <object data="in_vivo_proxy.svg" type="image/svg+xml" width="100%" height="100%"></object>
+            </div>
+        </div>
+        <div class="slide" id="slide-8">
+            <h2>Unlocking Stranded Capital.</h2>
+            <p>The legacy monolith is fully deprecated. Operational efficiency is maximized. Your infrastructure is now fully autonomous and future-proof.</p>
+            <p style="margin-top:40px; text-align:center; color:var(--border-color); font-family:monospace;">[END OF PRESENTATION]</p>
+        </div>
+        <div class="controls">
+            Use [LEFT] / [RIGHT] or [SPACE] to navigate. Press [Q] to quit.
+        </div>
+    </div>
+    <script>
+        let currentSlide = 1;
+        const totalSlides = 8;
+        function showSlide(n) {
+            document.querySelectorAll('.slide').forEach(s => s.classList.remove('active'));
+            document.getElementById('slide-' + n).classList.add('active');
+        }
+        const themeToggle = document.getElementById('theme-toggle');
+        let isLight = false;
+        themeToggle.addEventListener('click', () => {
+            isLight = !isLight;
+            if (isLight) {
+                document.body.classList.add('light-mode');
+                themeToggle.innerText = "Switch to Dark Mode";
+            } else {
+                document.body.classList.remove('light-mode');
+                themeToggle.innerText = "Switch to Light Mode";
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key.toLowerCase() === 'q') {
+                window.close();
+                document.body.innerHTML = '<div style="display:flex; height:100vh; width:100vw; align-items:center; justify-content:center; background:#000; color:#f00; font-family:monospace; font-size:3rem; font-weight:bold; letter-spacing:5px; text-transform:uppercase;">[SESSION TERMINATED]</div>';
+                return;
+            }
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                if (currentSlide < totalSlides) {
+                    currentSlide++;
+                    showSlide(currentSlide);
+                }
+            } else if (e.key === 'ArrowLeft') {
+                if (currentSlide > 1) {
+                    currentSlide--;
+                    showSlide(currentSlide);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
