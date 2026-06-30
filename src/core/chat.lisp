@@ -67,12 +67,24 @@ Returns the complete response text."
                                  (when top-p
                                    (list :top-p top-p))))))
            (prune-conversation-context-if-needed conversation)
-           (multiple-value-bind (effective-input effective-model)
-               (resolve-prompt-model-override bot input)
-             (let ((*active-conversation* conversation))
-               (dispatch-chat-turn conversation
-                                   effective-input
-                                   callback
-                                   :file-attachments file-attachments
-                                   :effective-model effective-model
-                                   :effective-generation-config effective-generation-config)))))))))
+           (let ((result (multiple-value-bind (effective-input effective-model)
+                             (resolve-prompt-model-override bot input)
+                           (let ((*active-conversation* conversation))
+                             (dispatch-chat-turn conversation
+                                                 effective-input
+                                                 callback
+                                                 :file-attachments file-attachments
+                                                 :effective-model effective-model
+                                                 :effective-generation-config effective-generation-config)))))
+             ;; Checkpoint the active conversation after each top-level chat call
+             (let* ((d-bot (conversation-chatbot conversation))
+                    (original-name (chatbot-persona-name d-bot)))
+               (unless original-name
+                 (setf (chatbot-persona-name d-bot) "DefaultConversation"))
+               (log-message :info "Checkpointing conversation after chat"
+                            :context `(("name" . ,(chatbot-persona-name d-bot))))
+               (unwind-protect
+                    (save-minion-state conversation)
+                 (unless original-name
+                   (setf (chatbot-persona-name d-bot) nil))))
+             result)))))))

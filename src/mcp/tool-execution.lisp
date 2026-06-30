@@ -207,7 +207,9 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
                    ("count" . ,(system-instruction-paragraph-count bot))
                    ("storageKind" . ,(system-instruction-storage-kind-name
                                       (chatbot-system-instruction-storage-kind bot)))
-                   ("path" . ,(namestring (chatbot-system-instruction-path bot)))
+                   ("path" . ,(if (chatbot-system-instruction-path bot)
+                                  (namestring (chatbot-system-instruction-path bot))
+                                  :null))
                    ,@(when saved '(("saved" . t))))))
     (cl-json:encode-json-to-string payload)))
 
@@ -1151,68 +1153,67 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
        (read-file-lines-subset path beginning-line ending-line tool-name)))
 
 (define-builtin-tool "readSystemInstructions" (bot arguments)
-  (ensure-system-instruction-tool-path bot tool-name)
-     (system-instruction-tool-result bot))
+  (system-instruction-tool-result bot))
 
 (define-builtin-tool "insertSystemInstructionParagraph" (bot arguments)
-  (ensure-system-instruction-tool-path bot tool-name)
-     (insert-system-instruction-paragraph
-      bot
-      (normalize-builtin-tool-string-argument
-       (or (mcp-val "paragraph" arguments)
-           (mcp-val :paragraph arguments))
-       "paragraph"
-       tool-name)
-      :index (normalize-builtin-tool-integer-argument
-              (or (mcp-val "index" arguments)
-                  (mcp-val :index arguments))
-              "index"
-              tool-name))
-     (save-system-instructions-or-tool-error bot tool-name)
-     (system-instruction-tool-result bot :saved t))
+  (insert-system-instruction-paragraph
+   bot
+   (normalize-builtin-tool-string-argument
+    (or (mcp-val "paragraph" arguments)
+        (mcp-val :paragraph arguments))
+    "paragraph"
+    tool-name)
+   :index (normalize-builtin-tool-integer-argument
+           (or (mcp-val "index" arguments)
+               (mcp-val :index arguments))
+           "index"
+           tool-name))
+  (when (chatbot-system-instruction-path bot)
+    (save-system-instructions-or-tool-error bot tool-name))
+  (system-instruction-tool-result bot :saved (and (chatbot-system-instruction-path bot) t)))
 
 (define-builtin-tool "updateSystemInstructionParagraph" (bot arguments)
-  (ensure-system-instruction-tool-path bot tool-name)
-     (update-system-instruction-paragraph
-      bot
-      (normalize-builtin-tool-integer-argument
-       (or (mcp-val "index" arguments)
-           (mcp-val :index arguments))
-       "index"
-       tool-name)
-      (normalize-builtin-tool-string-argument
-       (or (mcp-val "paragraph" arguments)
-           (mcp-val :paragraph arguments))
-       "paragraph"
-       tool-name))
-     (save-system-instructions-or-tool-error bot tool-name)
-     (system-instruction-tool-result bot :saved t))
+  (update-system-instruction-paragraph
+   bot
+   (normalize-builtin-tool-integer-argument
+    (or (mcp-val "index" arguments)
+        (mcp-val :index arguments))
+    "index"
+    tool-name)
+   (normalize-builtin-tool-string-argument
+    (or (mcp-val "paragraph" arguments)
+        (mcp-val :paragraph arguments))
+    "paragraph"
+    tool-name))
+  (when (chatbot-system-instruction-path bot)
+    (save-system-instructions-or-tool-error bot tool-name))
+  (system-instruction-tool-result bot :saved (and (chatbot-system-instruction-path bot) t)))
 
 (define-builtin-tool "deleteSystemInstructionParagraph" (bot arguments)
-  (ensure-system-instruction-tool-path bot tool-name)
-     (delete-system-instruction-paragraph
-      bot
-      (normalize-builtin-tool-integer-argument
-       (or (mcp-val "index" arguments)
-           (mcp-val :index arguments))
-       "index"
-       tool-name))
-     (save-system-instructions-or-tool-error bot tool-name)
-     (system-instruction-tool-result bot :saved t))
+  (delete-system-instruction-paragraph
+   bot
+   (normalize-builtin-tool-integer-argument
+    (or (mcp-val "index" arguments)
+        (mcp-val :index arguments))
+    "index"
+    tool-name))
+  (when (chatbot-system-instruction-path bot)
+    (save-system-instructions-or-tool-error bot tool-name))
+  (system-instruction-tool-result bot :saved (and (chatbot-system-instruction-path bot) t)))
 
 (define-builtin-tool "replaceSystemInstructions" (bot arguments)
-  (ensure-system-instruction-tool-path bot tool-name)
-     (multiple-value-bind (paragraphs-foundp paragraphs-value)
-         (builtin-tool-argument arguments "paragraphs" :paragraphs)
-       (replace-system-instruction-paragraphs
-        bot
-        (normalize-builtin-tool-string-sequence-argument
-         paragraphs-foundp
-         paragraphs-value
-         "paragraphs"
-         tool-name)))
-     (save-system-instructions-or-tool-error bot tool-name)
-     (system-instruction-tool-result bot :saved t))
+  (multiple-value-bind (paragraphs-foundp paragraphs-value)
+      (builtin-tool-argument arguments "paragraphs" :paragraphs)
+    (replace-system-instruction-paragraphs
+     bot
+     (normalize-builtin-tool-string-sequence-argument
+      paragraphs-foundp
+      paragraphs-value
+      "paragraphs"
+      tool-name)))
+  (when (chatbot-system-instruction-path bot)
+    (save-system-instructions-or-tool-error bot tool-name))
+  (system-instruction-tool-result bot :saved (and (chatbot-system-instruction-path bot) t)))
 
 (define-builtin-tool "directory" (bot arguments)
   (multiple-value-bind (directory-path root)

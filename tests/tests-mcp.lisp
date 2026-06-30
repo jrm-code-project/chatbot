@@ -1641,3 +1641,30 @@ data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Rep
              (fiveam:is (string= (format nil "Hello Nested World~%Line Two~%")
                                  (uiop:read-file-string nested-file-path)))))
       (uiop:delete-directory-tree sub-dir :validate t :if-does-not-exist :ignore))))
+
+(fiveam:test test-chat-checkpoint-for-default-conversation
+  (let* ((custom-context (make-runtime-context))
+         (*default-conversation* (new-chat :backend :google :runtime-context custom-context))
+         (checkpoint-file (merge-pathnames "DefaultConversation.json" (minions-data-directory))))
+    ;; Delete any pre-existing checkpoint
+    (when (probe-file checkpoint-file)
+      (delete-file checkpoint-file))
+    (unwind-protect
+         (let ((mock-post-fn
+                 (lambda (url &rest args)
+                   (declare (ignore args))
+                   (if (search "gemini-3.5-flash" url)
+                       (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Response.\"}], \"role\": \"model\"}}]}" 200)
+                       (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Response.\"}], \"role\": \"model\"}}]}" 200)))))
+           (setf (runtime-context-http-post-function custom-context) mock-post-fn)
+           (let ((*http-post-function* mock-post-fn))
+             (let ((res (chat "Hello ambient" :conversation *default-conversation*)))
+               (fiveam:is (string= "Response." res))
+               ;; Assert that the checkpoint file was successfully written!
+               (fiveam:is-true (probe-file checkpoint-file))
+               ;; Read checkpoint to verify payload
+               (let ((content (uiop:read-file-string checkpoint-file)))
+                 (fiveam:is (search "DefaultConversation" content))
+                 (fiveam:is (search "Hello ambient" content))))))
+      (when (probe-file checkpoint-file)
+        (delete-file checkpoint-file)))))
