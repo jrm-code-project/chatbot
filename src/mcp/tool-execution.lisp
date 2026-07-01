@@ -108,85 +108,23 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
   (execute-read-sampling-parameters-tool bot))
 
 (define-builtin-tool "startAgenticLoop" (bot arguments)
-  (unless (current-active-conversation (chatbot-runtime-context bot))
-       (error 'mcp-tool-execution-error
-              :tool-name tool-name
-              :reason "No active conversation is bound for autonomous loop startup."))
-     (let* ((goal (normalize-builtin-tool-string-argument
-                   (or (mcp-val "goal" arguments)
-                       (mcp-val :goal arguments))
-                   "goal"
-                   tool-name))
-            (max-iterations (let ((raw (or (mcp-val "maxIterations" arguments)
-                                           (mcp-val :max-iterations arguments))))
-                              (if raw
-                                  (normalize-builtin-tool-integer-argument raw "maxIterations" tool-name)
-                                  10)))
-            (backend (let ((raw (or (mcp-val "backend" arguments)
-                                    (mcp-val :backend arguments))))
-                       (when raw
-                         (normalize-builtin-tool-string-argument raw "backend" tool-name))))
-            (model (let ((raw (or (mcp-val "model" arguments)
-                                  (mcp-val :model arguments))))
-                     (when raw
-                       (normalize-builtin-tool-string-argument raw "model" tool-name))))
-            (isolate-p (let ((raw (or (mcp-val "isolate" arguments)
-                                      (mcp-val :isolate arguments))))
-                         (and raw (eq raw t))))
-            (loop (start-agentic-loop (current-active-conversation (chatbot-runtime-context bot))
-                                      goal
-                                      :max-iterations max-iterations
-                                      :backend backend
-                                      :model model
-                                      :isolate-p isolate-p)))
-       (agentic-loop-public-json loop)))
+  (execute-start-agentic-loop-tool bot arguments tool-name))
 
 (define-builtin-tool "listAgenticLoops" (bot arguments)
-  (agentic-loop-list-json))
+  (declare (ignore bot arguments))
+  (execute-list-agentic-loops-tool))
 
 (define-builtin-tool "readAgenticLoop" (bot arguments)
-  (let* ((loop-id (normalize-builtin-tool-integer-argument
-                      (or (mcp-val "loopId" arguments)
-                          (mcp-val :loop-id arguments))
-                      "loopId"
-                      tool-name))
-            (loop (or (find-agentic-loop loop-id)
-                      (error 'mcp-tool-execution-error
-                             :tool-name tool-name
-                             :reason (format nil "Unknown agentic loop id: ~A" loop-id)))))
-       (agentic-loop-public-json loop)))
+  (declare (ignore bot))
+  (execute-read-agentic-loop-tool arguments tool-name))
 
 (define-builtin-tool "abortAgenticLoop" (bot arguments)
-  (multiple-value-bind (force-foundp force-value)
-         (builtin-tool-argument arguments "force" :force)
-       (let* ((loop-id (normalize-builtin-tool-integer-argument
-                        (or (mcp-val "loopId" arguments)
-                            (mcp-val :loop-id arguments))
-                        "loopId"
-                        tool-name))
-              (force (if force-foundp
-                         (normalize-builtin-tool-boolean-argument force-foundp
-                                                                  force-value
-                                                                  "force"
-                                                                  tool-name)
-                         nil))
-              (loop (abort-agentic-loop loop-id :force force)))
-         (agentic-loop-public-json loop))))
+  (declare (ignore bot))
+  (execute-abort-agentic-loop-tool arguments tool-name))
 
 (define-builtin-tool "resumeAgenticLoop" (bot arguments)
-  (multiple-value-bind (approve-foundp approve-value)
-         (builtin-tool-argument arguments "approve" :approve)
-       (let* ((loop-id (normalize-builtin-tool-integer-argument
-                        (or (mcp-val "loopId" arguments)
-                            (mcp-val :loop-id arguments))
-                        "loopId"
-                        tool-name))
-              (approve (normalize-builtin-tool-boolean-argument approve-foundp
-                                                                approve-value
-                                                                "approve"
-                                                                tool-name))
-              (loop (resume-agentic-loop loop-id :approve approve)))
-         (agentic-loop-public-json loop))))
+  (declare (ignore bot))
+  (execute-resume-agentic-loop-tool arguments tool-name))
 
 (define-builtin-tool "setSamplingParameters" (bot arguments)
      (execute-set-sampling-parameters-tool bot arguments tool-name))
