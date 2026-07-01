@@ -7,30 +7,44 @@
   "Returns RULE after rejecting malformed grouped content-type declarations."
   (let ((mime-type (getf rule :mime-type))
         (extensions (getf rule :extensions)))
-    (unless (and (stringp mime-type)
-                 (> (length mime-type) 0))
-      (error "Attachment content-type rule is missing a MIME type: ~S" rule))
-    (unless (and (listp extensions)
-                 extensions)
-      (error "Attachment content-type rule is missing extensions: ~S" rule))
-    (dolist (extension extensions)
-      (unless (and (stringp extension)
-                   (> (length extension) 0))
-        (error "Attachment content-type rule has an invalid extension: ~S" rule)))
-    (when (/= (length extensions)
-              (length (remove-duplicates extensions :test #'string=)))
-      (error "Attachment content-type rule repeats an extension: ~S" rule))
-    rule))
+    (cond
+      ;; 1. Check for valid MIME string
+      ((not (and (stringp mime-type) (plusp (length mime-type))))
+       (error "Attachment content-type rule is missing a MIME type: ~S" rule))
+      
+      ;; 2. Check for non-empty extensions list (consp does both listp and not-nil)
+      ((not (consp extensions))
+       (error "Attachment content-type rule is missing extensions: ~S" rule))
+      
+      ;; 3. Functional replacement for 'dolist' using the higher-order 'every'
+      ((not (every (lambda (ext) (and (stringp ext) (plusp (length ext)))) extensions))
+       (error "Attachment content-type rule has an invalid extension: ~S" rule))
+      
+      ;; 4. Check for duplicates
+      ((/= (length extensions) (length (remove-duplicates extensions :test #'string=)))
+       (error "Attachment content-type rule repeats an extension: ~S" rule))
+      
+      ;; 5. If everything falls through, the expression evaluates to the rule itself.
+      (t rule))))
 
 (defun validate-pathname-content-type-rules (rules)
   "Returns RULES after rejecting malformed or overlapping grouped rules."
-  (let ((seen (make-hash-table :test #'equal)))
-    (dolist (rule rules)
-      (validate-pathname-content-type-rule rule)
-      (dolist (extension (getf rule :extensions))
-        (when (gethash extension seen)
-          (error "Duplicate attachment content-type rule for extension: ~A" extension))
-        (setf (gethash extension seen) t))))
+  (let ((all-extensions
+         ;; 1. Validate each rule, extract its extensions, and flatten the lists
+         (apply #'append 
+                (mapcar (lambda (rule)
+                          (getf (validate-pathname-content-type-rule rule) :extensions))
+                        rules))))
+    
+    ;; 2. Functionally accumulate a 'seen' list and check for duplicates
+    (reduce (lambda (seen ext)
+              (if (member ext seen :test #'string=)
+                  (error "Duplicate attachment content-type rule for extension: ~A" ext)
+                  (cons ext seen)))
+            all-extensions
+            :initial-value nil))
+  
+  ;; 3. Return the original rules
   rules)
 
 (defparameter +pathname-content-type-rules+
@@ -66,29 +80,36 @@
 
 (defun validate-pathname-content-type-policies (policies)
   "Returns POLICIES after rejecting duplicate extension entries."
-  (let ((seen (make-hash-table :test #'equal)))
-    (dolist (policy policies)
-      (let ((extension (car policy)))
-        (when (gethash extension seen)
-          (error "Duplicate attachment content-type policy for extension: ~A" extension))
-        (setf (gethash extension seen) t))))
+  (reduce (lambda (seen policy)
+            (let ((extension (car policy)))
+              (if (member extension seen :test #'equal)
+                  (error "Duplicate attachment content-type policy for extension: ~A" extension)
+                  (cons extension seen))))
+          policies
+          :initial-value nil)
+  
+  ;; Return the original policies
   policies)
 
 (defun build-pathname-content-type-policies ()
   "Expands grouped content-type rules into extension-indexed policies."
   (validate-pathname-content-type-policies
-   (loop for rule in +pathname-content-type-rules+
-         append
-         (let ((mime-type (getf rule :mime-type))
-               (extensions (getf rule :extensions))
-               (textual-p-provided (member :textual-p rule))
-               (textual-p (getf rule :textual-p)))
-           (mapcar (lambda (extension)
-                     (cons extension
-                           (append (list :mime-type mime-type)
-                                   (when textual-p-provided
-                                     (list :textual-p textual-p)))))
-                   extensions)))))
+   ;; 1. The pure functional 'flatmap' (replaces 'loop ... append')
+   (apply #'append
+          (mapcar (lambda (rule)
+                    (let ((mime-type (getf rule :mime-type))
+                          (extensions (getf rule :extensions))
+                          (textual-p-provided (member :textual-p rule))
+                          (textual-p (getf rule :textual-p)))
+                      
+                      ;; 2. Map over the extensions to build the policies
+                      (mapcar (lambda (extension)
+                                ;; 3. Quasiquoting for pure, elegant list construction
+                                `(,extension :mime-type ,mime-type
+                                             ,@(when textual-p-provided
+                                                 (list :textual-p textual-p))))
+                              extensions)))
+                  +pathname-content-type-rules+))))
 
 (defparameter +pathname-content-type-policies+
   (build-pathname-content-type-policies))
@@ -96,9 +117,11 @@
 (defun build-textual-mime-types ()
   "Derives MIME types with explicit textual fallback from grouped content-type rules."
   (remove-duplicates
-   (loop for rule in +pathname-content-type-rules+
-         when (getf rule :textual-p)
-         collect (getf rule :mime-type))
+   (mapcar (lambda (rule) 
+             (getf rule :mime-type))
+           (remove-if-not (lambda (rule) 
+                            (getf rule :textual-p))
+                          +pathname-content-type-rules+))
    :test #'string=))
 
 (defparameter +textual-mime-types+
