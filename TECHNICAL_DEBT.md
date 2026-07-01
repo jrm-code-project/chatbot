@@ -28,6 +28,7 @@ These areas should not be treated as fresh debt, but as **partially retired debt
 
 1. **Pure chat loop migration**
    - The normalized turn-result flow and thinner `chat` shell were a major improvement.
+   - Conversation requirement and planner routing in `src/core/chat.lisp` now flow through a focused `resolve-chat-conversation` helper.
    - Backend selection for `dispatch-chat-turn` now flows through focused backend-invocation helpers in `src/core/chat.lisp` instead of one inline case form.
    - `chat-turn` now packages file attachment preparation, generation-config resolution, pruning/cloning, and prompt-model override through focused preparation helpers before dispatch.
    - The public `chat` entry point now delegates runtime-context and active-conversation shell binding through a focused helper before applying/checkpointing the turn result.

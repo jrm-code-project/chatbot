@@ -24,6 +24,13 @@
           planner-conversation)
         conversation)))
 
+(defun resolve-chat-conversation (conversation context &key input)
+  "Returns the effective conversation for CONTEXT, optionally planner-routed for INPUT."
+  (let ((effective-conversation (require-chat-conversation conversation context)))
+    (if input
+        (route-chat-turn-conversation effective-conversation input context)
+        effective-conversation)))
+
 (defun call-with-active-chat-conversation (conversation context thunk)
   "Calls THUNK with CONVERSATION recorded as the current active conversation for CONTEXT."
   (let ((previous-active-conversation (current-active-conversation context)))
@@ -140,8 +147,7 @@
                        ((:top-p-specified-p explicit-top-p-specified-p) top-p-specified-p)
                        context)
   "Runs one chat turn and returns a normalized turn result without mutating the source conversation."
-  (let* ((base-conversation (require-chat-conversation conversation context))
-         (conversation (route-chat-turn-conversation base-conversation input context))
+  (let* ((conversation (resolve-chat-conversation conversation context :input input))
          (bot (conversation-chatbot conversation))
          (prepared-state (chat-turn-prepared-state conversation
                                                   input
@@ -166,7 +172,7 @@
   (call-with-runtime-context
    context
    (lambda ()
-     (let ((active-conversation (require-chat-conversation conversation context)))
+     (let ((active-conversation (resolve-chat-conversation conversation context)))
        (call-with-active-chat-conversation
         active-conversation
         context
