@@ -55,7 +55,8 @@ These areas should not be treated as fresh debt, but as **partially retired debt
 6. **Provider backend phase splitting**
    - `src/backends/backend-google.lisp` now separates Google request submission into API-key validation, request assembly, HTTP posting, and HTTP-response normalization helpers above `submit-google-turn`.
    - `src/backends/backend-openai.lisp` now separates OpenAI-compatible request submission into API-key validation, request assembly, streaming request posting, and stream-consumption setup helpers above `submit-openai-turn`.
-   - Remaining debt: Gemini still has more provider-specific turn phases that can be peeled apart further, and Google/OpenAI still keep tool-recursion shaping in the same modules.
+   - `src/backends/backend-gemini.lisp` now separates Gemini Interactions submission into API-key validation, request assembly, streaming request posting, and stream-consumption setup helpers above `submit-gemini-turn`.
+   - Remaining debt: provider modules still keep tool-recursion shaping in the same files, but submission phases are now consistently thinner across Google, OpenAI-compatible, and Gemini backends.
 
 ## Suggested fix order
 

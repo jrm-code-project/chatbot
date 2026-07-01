@@ -254,39 +254,61 @@
       :usage (gemini-stream-state-completed-usage stream-state)
       :thought-text (coerce (gemini-stream-state-full-thought-text stream-state) 'string)))))
 
-(defun submit-gemini-turn (bot callback state)
-  "Submits one Gemini Interactions turn and returns a normalized outcome."
+(defun gemini-api-key-or-error ()
+  "Returns the configured Gemini API key or signals when it is missing."
   (let ((api-key (gemini-api-key)))
     (unless (and api-key (string/= api-key ""))
       (error "Gemini API Key is not set. Please ensure (gemini-api-key) is configured."))
-    (let* ((current-interaction-id (getf state :current-interaction-id))
-           (payload-alist (make-interaction-payload
-                           bot
-                           (getf state :input)
-                           :messages (getf state :messages)
-                           :persona-memory (getf state :persona-memory)
-                           :persona-diary-entries (getf state :persona-diary-entries)
-                           :previous-interaction-id current-interaction-id
-                           :file-attachments (getf state :file-attachments)
-                           :effective-model (getf state :effective-model)
-                           :effective-generation-config (getf state :effective-generation-config)
-                           :stream t))
-           (payload-json (cl-json:encode-json-to-string payload-alist))
-           (url (gemini-request-url))
-           (headers (gemini-request-headers api-key))
-           (stream-read-timeout (current-http-read-timeout)))
-      (multiple-value-bind (stream status)
-          (post-web-request url headers payload-json :want-stream t)
-        (unless (= status 200)
-          (error "API responded with HTTP status ~A" status))
-        (gemini-stream-state->provider-outcome
-         state
-         (collect-gemini-stream-state
-          stream
-          callback
-          stream-read-timeout
-          status
-          current-interaction-id))))))
+    api-key))
+
+(defun gemini-turn-request-payload-json (bot state)
+  "Returns the encoded Interactions request payload for STATE."
+  (cl-json:encode-json-to-string
+   (make-interaction-payload
+    bot
+    (getf state :input)
+    :messages (getf state :messages)
+    :persona-memory (getf state :persona-memory)
+    :persona-diary-entries (getf state :persona-diary-entries)
+    :previous-interaction-id (getf state :current-interaction-id)
+    :file-attachments (getf state :file-attachments)
+    :effective-model (getf state :effective-model)
+    :effective-generation-config (getf state :effective-generation-config)
+    :stream t)))
+
+(defun gemini-turn-request-details (bot state)
+  "Returns the request details plist for one Gemini Interactions turn."
+  (let ((api-key (gemini-api-key-or-error)))
+    (list :payload-json (gemini-turn-request-payload-json bot state)
+          :url (gemini-request-url)
+          :headers (gemini-request-headers api-key)
+          :stream-read-timeout (current-http-read-timeout)
+          :current-interaction-id (getf state :current-interaction-id))))
+
+(defun post-gemini-turn-request (request-details)
+  "Executes one Gemini Interactions streaming request from REQUEST-DETAILS."
+  (multiple-value-bind (stream status)
+      (post-web-request (getf request-details :url)
+                        (getf request-details :headers)
+                        (getf request-details :payload-json)
+                        :want-stream t)
+    (unless (= status 200)
+      (error "API responded with HTTP status ~A" status))
+    (list :stream stream
+          :status status)))
+
+(defun submit-gemini-turn (bot callback state)
+  "Submits one Gemini Interactions turn and returns a normalized outcome."
+  (let* ((request-details (gemini-turn-request-details bot state))
+         (http-response (post-gemini-turn-request request-details)))
+    (gemini-stream-state->provider-outcome
+     state
+     (collect-gemini-stream-state
+      (getf http-response :stream)
+      callback
+      (getf request-details :stream-read-timeout)
+      (getf http-response :status)
+      (getf request-details :current-interaction-id)))))
 
 (defun chat-gemini (bot input conversation callback &key file-attachments effective-model effective-generation-config
                                                      return-turn-result-p
