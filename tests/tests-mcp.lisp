@@ -1660,6 +1660,8 @@ data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Rep
            (let ((*http-post-function* mock-post-fn))
              (let ((res (chat "Hello ambient" :conversation *default-conversation*)))
                (fiveam:is (string= "Response." res))
+               (fiveam:is-false (chatbot-persona-name
+                                 (conversation-chatbot *default-conversation*)))
                ;; Assert that the checkpoint file was successfully written!
                (fiveam:is-true (probe-file checkpoint-file))
                ;; Read checkpoint to verify payload

@@ -208,10 +208,16 @@ Use NEW-CHAT instead when no persona should be loaded."
              (path (merge-pathnames "data/minions/" base-dir)))
         (uiop:ensure-directory-pathname path))))
 
-(defun save-minion-state (conversation)
+(defun conversation-checkpoint-name (conversation)
+  "Returns the persistence name used when checkpointing CONVERSATION."
+  (or (chatbot-persona-name (conversation-chatbot conversation))
+      "DefaultConversation"))
+
+(defun save-minion-state (conversation &key checkpoint-name)
   "Serializes the critical state and telemetry of CONVERSATION to disk."
   (let* ((bot (conversation-chatbot conversation))
-         (name (chatbot-persona-name bot)))
+         (name (or checkpoint-name
+                  (chatbot-persona-name bot))))
     (when name
       (let* ((dir (minions-data-directory))
              (file-path (merge-pathnames (format nil "~A.json" name) dir))
@@ -242,6 +248,13 @@ Use NEW-CHAT instead when no persona should be loaded."
         (log-message :info "Freeze-dried minion state"
                      :context `(("name" . ,name) ("file" . ,(namestring file-path))))
         (namestring file-path)))))
+
+(defun checkpoint-conversation-after-chat (conversation)
+  "Persists CONVERSATION using the standard post-chat checkpoint naming policy."
+  (let ((checkpoint-name (conversation-checkpoint-name conversation)))
+    (log-message :info "Checkpointing conversation after chat"
+                :context `(("name" . ,checkpoint-name)))
+    (save-minion-state conversation :checkpoint-name checkpoint-name)))
 
 (defun get-string-plist-value (plist key)
   "Gets the value associated with KEY (a string) in a string-keyed PLIST."
