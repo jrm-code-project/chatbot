@@ -161,28 +161,36 @@
                          :effective-generation-config (getf prepared-state :effective-generation-config))
      conversation)))
 
+(defun execute-chat-entry-shell (conversation context thunk)
+  "Runs THUNK with CONVERSATION bound as the active conversation inside CONTEXT."
+  (call-with-runtime-context
+   context
+   (lambda ()
+     (let ((active-conversation (require-chat-conversation conversation context)))
+       (call-with-active-chat-conversation
+        active-conversation
+        context
+        (lambda ()
+          (funcall thunk active-conversation)))))))
+
 (defun chat (input &key conversation callback file files (temperature nil temperaturep) (top-p nil top-pp))
   "Sends user input to the active conversation using the appropriate backend API.
 If a callback is provided, each text token is passed to it in real-time.
 Returns the complete response text."
   (let ((context (and conversation
                      (chatbot-runtime-context (conversation-chatbot conversation)))))
-    (call-with-runtime-context
+    (execute-chat-entry-shell
+     conversation
      context
-     (lambda ()
-       (let ((active-conversation (require-chat-conversation conversation context)))
-         (call-with-active-chat-conversation
-          active-conversation
-          context
-          (lambda ()
-            (apply-and-checkpoint-chat-turn-result
-             (chat-turn input
-                        :conversation active-conversation
-                        :callback callback
-                        :file file
-                        :files files
-                        :temperature temperature
-                        :temperature-specified-p temperaturep
-                        :top-p top-p
-                        :top-p-specified-p top-pp
-                        :context context)))))))))
+     (lambda (active-conversation)
+       (apply-and-checkpoint-chat-turn-result
+        (chat-turn input
+                   :conversation active-conversation
+                   :callback callback
+                   :file file
+                   :files files
+                   :temperature temperature
+                   :temperature-specified-p temperaturep
+                   :top-p top-p
+                   :top-p-specified-p top-pp
+                   :context context))))))
