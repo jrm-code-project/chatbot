@@ -134,19 +134,7 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
      (execute-reset-sampling-parameters-tool bot))
 
 (define-builtin-tool "readFileLines" (bot arguments)
-  (let* ((filename (mcp-val :filename arguments))
-            (beginning-line (normalize-builtin-tool-integer-argument
-                             (or (mcp-val "beginningLine" arguments)
-                                 (mcp-val :beginning-line arguments))
-                             "beginningLine"
-                             tool-name))
-            (ending-line (normalize-builtin-tool-integer-argument
-                          (or (mcp-val "endingLine" arguments)
-                              (mcp-val :ending-line arguments))
-                          "endingLine"
-                          tool-name))
-            (path (resolve-filesystem-tool-path bot filename tool-name)))
-       (read-file-lines-subset path beginning-line ending-line tool-name)))
+  (execute-read-file-lines-tool bot arguments tool-name))
 
 (define-builtin-tool "readSystemInstructions" (bot arguments)
   (declare (ignore arguments))
@@ -165,56 +153,13 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
   (execute-replace-system-instructions-tool bot arguments tool-name))
 
 (define-builtin-tool "directory" (bot arguments)
-  (multiple-value-bind (directory-path root)
-         (resolve-filesystem-tool-directory bot
-                                            (or (mcp-val "pathname" arguments)
-                                                (mcp-val :pathname arguments))
-                                            tool-name)
-       (directory-tool-result directory-path
-                              root
-                              (or (mcp-val "pattern" arguments)
-                                  (mcp-val :pattern arguments))
-                              tool-name)))
+  (execute-directory-tool bot arguments tool-name))
 
 (define-builtin-tool "writeFile" (bot arguments)
-  (multiple-value-bind (pathname-foundp pathname)
-         (builtin-tool-argument arguments "pathname" :pathname)
-       (declare (ignore pathname-foundp))
-       (multiple-value-bind (use-lf-only-foundp use-lf-only-value)
-           (builtin-tool-argument arguments "useLfOnly" :use-lf-only)
-         (multiple-value-bind (end-with-eol-foundp end-with-eol-value)
-             (builtin-tool-argument arguments "endWithEol" :end-with-eol)
-           (multiple-value-bind (lines-foundp lines-value)
-               (builtin-tool-argument arguments "lines" :lines)
-             (multiple-value-bind (target-path root)
-                 (resolve-filesystem-tool-target-path bot
-                                                      (normalize-builtin-tool-string-argument pathname "pathname" tool-name)
-                                                      tool-name)
-               (write-file-tool-result target-path
-                                       root
-                                       (normalize-builtin-tool-string-sequence-argument lines-foundp
-                                                                                        lines-value
-                                                                                        "lines"
-                                                                                        tool-name)
-                                       (normalize-builtin-tool-boolean-argument use-lf-only-foundp
-                                                                                use-lf-only-value
-                                                                                "useLfOnly"
-                                                                                tool-name)
-                                       (normalize-builtin-tool-boolean-argument end-with-eol-foundp
-                                                                                end-with-eol-value
-                                                                                "endWithEol"
-                                                                                tool-name))))))))
+  (execute-write-file-tool bot arguments tool-name))
 
 (define-builtin-tool "deleteFile" (bot arguments)
-  (multiple-value-bind (pathname-foundp pathname)
-         (builtin-tool-argument arguments "pathname" :pathname)
-       (unless pathname-foundp
-         (error 'mcp-tool-execution-error
-                :tool-name tool-name
-                :reason "pathname is required."))
-       (let* ((path (resolve-filesystem-tool-path bot pathname tool-name))
-              (root (chatbot-filesystem-root-truename bot tool-name)))
-         (delete-file-tool-result path root))))
+  (execute-delete-file-tool bot arguments tool-name))
 
 (define-builtin-tool "submitPlan" (bot arguments)
   (execute-submit-plan-tool bot arguments tool-name))

@@ -44,12 +44,13 @@ These areas should not be treated as fresh debt, but as **partially retired debt
 
 5. **Tool-execution filesystem split**
    - Built-in tool argument normalization now lives in `src/mcp/tool-arguments.lisp`, and filesystem tool helpers now live in `src/mcp/filesystem-tools.lisp`.
+   - The remaining built-in filesystem handlers (`readFileLines`, `directory`, `writeFile`, and `deleteFile`) now also live in `src/mcp/filesystem-tools.lisp`.
    - System-instruction and sampling tool helpers now also live in `src/mcp/chatbot-state-tools.lisp`.
    - Eval and grounding helpers now also live in `src/mcp/eval-grounding-tools.lisp`.
    - Git tool behavior now also lives in `src/mcp/git-tools.lisp`.
    - Agentic loop built-ins now also live in `src/mcp/agentic-loop-tools.lisp`.
    - Planner and minion orchestration now also live in `src/mcp/planner-minion-tools.lisp`.
-   - Remaining debt: `src/mcp/tool-execution.lisp` is now much narrower, and mostly holds built-in registrations, light filesystem wiring, and shared execution plumbing.
+   - Remaining debt: `src/mcp/tool-execution.lisp` is now much narrower, and mostly holds built-in registrations and shared execution plumbing.
 
 ## Suggested fix order
 
