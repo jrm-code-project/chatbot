@@ -38,6 +38,10 @@ These areas should not be treated as fresh debt, but as **partially retired debt
    - Immutable CLOS slots were tightened in several classes.
    - Remaining debt: large classes and lifecycle-heavy modules still expose broad mutable surfaces overall.
 
+4. **MCP startup/config separation**
+   - MCP configuration discovery, parsing, and built-in definition lookup now live in `src/mcp/mcp-config.lisp`, and `src/mcp/mcp-startup.lisp` is narrower than before.
+   - Remaining debt: process supervision, shutdown behavior, and startup-policy coupling still need further lifecycle decomposition.
+
 ## Suggested fix order
 
 1. **Retire the legacy-global/runtime-context bridge** enough that new work no longer depends on it.

@@ -1,5 +1,5 @@
 ;;; -*- Lisp -*-
-;;; mcp-startup.lisp - Model Context Protocol (MCP) server lifecycle & config
+;;; mcp-startup.lisp - MCP startup status and shared startup orchestration
 
 (in-package "CHATBOT")
 
@@ -85,139 +85,6 @@
                        (mcp-startup-status-configured-count status)
                        (mapcar #'mcp-startup-entry-name required-failures))))))
 
-(defun get-mcp-config-paths ()
-  "Returns a list of candidate paths to the MCP configuration file."
-  (let ((configured-path (current-mcp-config-path)))
-    (if configured-path
-       (list configured-path)
-      (let* ((config-home (uiop:xdg-config-home))
-             (paths (list (merge-pathnames "mcp/mcp.lisp" config-home))))
-        (when (uiop:os-windows-p)
-          (push (merge-pathnames "mcp/mcp.lisp" (uiop:pathname-parent-directory-pathname config-home))
-                paths))
-        (nreverse paths)))))
-
-(defun get-mcp-config-path ()
-  "Returns the path to the MCP configuration file that exists, or the primary candidate."
-  (let ((paths (get-mcp-config-paths)))
-    (or (find-if #'probe-file paths)
-        (car paths))))
-
-(defun default-read-mcp-config ()
-  "Reads and parses the MCP s-expression configuration file from candidate paths."
-  (let ((paths (get-mcp-config-paths)))
-    (dolist (path paths nil)
-      (when (probe-file path)
-        (handler-case
-            (return-from default-read-mcp-config
-              (with-open-file (stream path :direction :input)
-                (read stream nil nil)))
-          (error (e)
-            (format *error-output* "Error reading MCP configuration from ~A: ~A~%" path e)))))))
-
-(defun read-mcp-config ()
-  "Reads MCP configuration, honoring the configured test seam when present."
-  (if *read-mcp-config-function*
-      (funcall *read-mcp-config-function*)
-      (default-read-mcp-config)))
-
-(defun parse-mcp-server-def (srv-raw)
-  "Parses a raw server definition from the configuration file.
-Supports two formats:
-1. Standard plist format: (:name \"name\" :command \"command\" :args (\"args\"))
-2. Custom nested list format: (\"name\" (:command \"command\") (:args \"args\"...))"
-  (cond
-    ((and (listp srv-raw) (keywordp (car srv-raw)))
-     (let ((name (safe-getf srv-raw :name))
-           (command (safe-getf srv-raw :command))
-           (args (safe-getf srv-raw :args))
-           (required-p (safe-getf srv-raw :required))
-           (environment (safe-getf srv-raw :env))
-           (system-instruction (safe-getf srv-raw :system-instruction)))
-       (values name
-               command
-               (cond
-                 ((null args) nil)
-                 ((listp args) args)
-                 (t (list args)))
-               required-p
-               environment
-               system-instruction)))
-    ((and (listp srv-raw) (stringp (car srv-raw)))
-     (let* ((name (car srv-raw))
-            (body (cdr srv-raw))
-            (cmd-entry (assoc :command body))
-            (args-entry (assoc :args body))
-            (required-entry (assoc :required body))
-            (env-entry (assoc :env body))
-            (system-instruction-entry (assoc :system-instruction body))
-            (command (and cmd-entry (cadr cmd-entry)))
-            (args (and args-entry (cdr args-entry)))
-            (required-p (and required-entry (cadr required-entry)))
-            (environment (and env-entry (cdr env-entry)))
-            (system-instruction (and system-instruction-entry (cadr system-instruction-entry))))
-       (values name command args required-p environment system-instruction)))
-    (t (values nil nil nil nil nil nil))))
-
-(defun mcp-config-server-definitions (config)
-  "Returns the raw MCP server definitions from CONFIG."
-  (cond
-    ((null config) nil)
-    ((and (consp config)
-         (consp (car config))
-         (eq (car (car config)) :mcp-servers))
-     (cdr (car config)))
-    (t config)))
-
-(defun built-in-mcp-server-definition (server-name)
-  "Returns a built-in raw MCP server definition for SERVER-NAME, when one exists."
-  (cond
-    ((string= server-name "memory")
-    '(:name "memory"
-      :command "npx"
-      :args ("-y" "@modelcontextprotocol/server-memory")))
-    (t nil)))
-
-(defun find-configured-mcp-server-definition (server-name &optional (config (read-mcp-config)))
-  "Returns the raw configured MCP server definition matching SERVER-NAME."
-  (find server-name
-       (mcp-config-server-definitions config)
-       :test #'string=
-       :key (lambda (srv-raw)
-              (nth-value 0 (parse-mcp-server-def srv-raw)))))
-
-(defun initialize-configured-mcp-server (server-name &key environment)
-  "Starts and initializes the configured MCP server named SERVER-NAME."
-  (let* ((configured-server-def (find-configured-mcp-server-definition server-name))
-        (server-def (or configured-server-def
-                        (built-in-mcp-server-definition server-name))))
-    (unless server-def
-     (error "Configured MCP server not found: ~A" server-name))
-    (unless configured-server-def
-     (log-prefixed-message "MCP INFO"
-                           (format nil "Using built-in MCP server definition for ~A."
-                                   server-name)))
-    (multiple-value-bind (name command args required-p configured-environment system-instruction)
-       (parse-mcp-server-def server-def)
-     (declare (ignore required-p system-instruction))
-     (unless (and name command)
-       (error "Invalid MCP server definition for ~A." server-name))
-     (let ((server nil))
-       (handler-case
-           (progn
-             (setf server
-                   (let ((merged-environment (merge-mcp-server-environments configured-environment
-                                                                           environment)))
-                     (if merged-environment
-                         (start-mcp-server name command args merged-environment)
-                         (start-mcp-server name command args))))
-             (mcp-initialize server)
-             server)
-         (error (e)
-           (when server
-             (stop-mcp-server server))
-           (error "Failed to start/initialize MCP server ~A: ~A" server-name e)))))))
-
 (defun mcp-startup-status-partial-failure-p (status)
   "Returns true when STATUS represents a mix of successful and failed server startups."
   (and (> (mcp-startup-status-failed-count status) 0)
@@ -253,92 +120,123 @@ Supports two formats:
                (error "Unknown startup chatbot option: ~S" key))))
     (values context strict-required-p)))
 
+(defun make-mcp-startup-entry (name command args required-p)
+  "Returns a fresh startup entry for one MCP server definition."
+  (make-instance 'mcp-startup-entry
+                :name (or name "<invalid-server>")
+                :command command
+                :args args
+                :required-p required-p))
+
+(defun mark-mcp-startup-entry-failed (entry message)
+  "Marks ENTRY as failed with MESSAGE and logs the failure."
+  (setf (mcp-startup-entry-error-message entry) message)
+  (log-prefixed-message "MCP ERROR"
+                       (format nil "Failed to start/initialize MCP server ~A: ~A"
+                               (mcp-startup-entry-name entry)
+                               message))
+  entry)
+
+(defun initialize-mcp-startup-entry (entry environment)
+  "Starts and initializes ENTRY, mutating it with the resulting status."
+  (let ((server nil))
+    (handler-case
+       (progn
+         (setf server (if environment
+                          (start-mcp-server (mcp-startup-entry-name entry)
+                                            (mcp-startup-entry-command entry)
+                                            (mcp-startup-entry-args entry)
+                                            environment)
+                          (start-mcp-server (mcp-startup-entry-name entry)
+                                            (mcp-startup-entry-command entry)
+                                            (mcp-startup-entry-args entry))))
+         (mcp-initialize server)
+         (setf (mcp-startup-entry-success-p entry) t)
+         (setf (mcp-startup-entry-server entry) server)
+         entry)
+     (error (e)
+       (when server
+         (stop-mcp-server server))
+       (mark-mcp-startup-entry-failed entry (princ-to-string e))))))
+
+(defun startup-entry-from-server-definition (cfg)
+  "Returns one startup entry initialized from raw server definition CFG."
+  (multiple-value-bind (name command args required-p environment system-instruction)
+     (parse-mcp-server-def cfg)
+    (declare (ignore system-instruction))
+    (let ((entry (make-mcp-startup-entry name command args required-p)))
+     (if (and name command)
+         (initialize-mcp-startup-entry entry environment)
+         (mark-mcp-startup-entry-failed
+          entry
+          "Invalid MCP server definition: missing required name or command.")))))
+
+(defun mcp-startup-status-from-entries (entries strict-required-p)
+  "Builds structured startup status for ENTRIES."
+  (let ((required-failed-count
+         (count-if (lambda (entry)
+                     (and (mcp-startup-entry-required-p entry)
+                          (not (mcp-startup-entry-success-p entry))))
+                   entries)))
+    (make-instance 'mcp-startup-status
+                  :entries entries
+                  :strict-required-p strict-required-p
+                  :configured-count (length entries)
+                  :successful-count (count-if #'mcp-startup-entry-success-p entries)
+                  :failed-count (count-if-not #'mcp-startup-entry-success-p entries)
+                  :required-failed-count required-failed-count)))
+
+(defun apply-mcp-startup-status (bot servers status)
+  "Stores startup SERVERS and STATUS on BOT."
+  (setf (chatbot-mcp-servers bot) servers)
+  (setf (chatbot-mcp-startup-status bot) status)
+  status)
+
+(defun log-mcp-startup-summary (status)
+  "Logs the final structured startup STATUS."
+  (log-prefixed-message "MCP INFO"
+                       (format nil "Successfully fully initialized ~A out of ~A configured servers."
+                               (mcp-startup-status-successful-count status)
+                               (mcp-startup-status-configured-count status)))
+  (when (> (mcp-startup-status-failed-count status) 0)
+    (dolist (entry (remove-if #'mcp-startup-entry-success-p
+                             (mcp-startup-status-entries status)))
+     (log-prefixed-message "MCP WARN"
+                           (format nil "Startup failure for ~A~:[~; (required)~]: ~A"
+                                   (mcp-startup-entry-name entry)
+                                   (mcp-startup-entry-required-p entry)
+                                   (mcp-startup-entry-error-message entry))))))
+
+(defun empty-mcp-startup-status (strict-required-p)
+  "Returns the startup status used when no MCP configuration exists."
+  (make-instance 'mcp-startup-status
+                :entries nil
+                :strict-required-p strict-required-p
+                :configured-count 0
+                :successful-count 0
+                :failed-count 0
+                :required-failed-count 0))
+
 (defun default-initialize-mcp-servers-for-chatbot (bot &key strict-required-p)
   "Discovers and initializes MCP servers for the chatbot."
   (log-prefixed-message "MCP INFO" "Scanning for MCP configurations...")
   (let ((config (read-mcp-config)))
     (if config
-       (let* ((servers nil)
-              (entries nil)
-             (raw-list (mcp-config-server-definitions config)))
+       (let* ((raw-list (mcp-config-server-definitions config))
+              (entries (mapcar #'startup-entry-from-server-definition raw-list))
+              (servers (remove nil (mapcar #'mcp-startup-entry-server entries)))
+              (status (mcp-startup-status-from-entries entries strict-required-p)))
          (log-prefixed-message "MCP INFO"
                                (format nil "Found ~A server definitions to initialize."
                                        (length raw-list)))
-         (dolist (cfg raw-list)
-           (multiple-value-bind (name command args required-p environment system-instruction) (parse-mcp-server-def cfg)
-             (declare (ignore system-instruction))
-             (let ((entry (make-instance 'mcp-startup-entry
-                                         :name (or name "<invalid-server>")
-                                         :command command
-                                         :args args
-                                         :required-p required-p)))
-               (cond
-                 ((not (and name command))
-                  (setf (mcp-startup-entry-error-message entry)
-                        "Invalid MCP server definition: missing required name or command.")
-                  (log-prefixed-message "MCP ERROR"
-                                        (format nil "Failed to start/initialize MCP server ~A: ~A"
-                                                (mcp-startup-entry-name entry)
-                                                (mcp-startup-entry-error-message entry))))
-                 (t
-                  (let ((server nil))
-                    (handler-case
-                        (progn
-                          (setf server (if environment
-                                           (start-mcp-server name command args environment)
-                                           (start-mcp-server name command args)))
-                          (mcp-initialize server)
-                          (setf (mcp-startup-entry-success-p entry) t)
-                          (setf (mcp-startup-entry-server entry) server)
-                          (push server servers))
-                      (error (e)
-                        (when server
-                          (stop-mcp-server server))
-                        (setf (mcp-startup-entry-error-message entry) (princ-to-string e))
-                        (log-prefixed-message "MCP ERROR"
-                                              (format nil "Failed to start/initialize MCP server ~A: ~A"
-                                                      name
-                                                      (mcp-startup-entry-error-message entry))))))))
-               (push entry entries))))
-         (let* ((entries (nreverse entries))
-                (required-failed-count (count-if (lambda (entry)
-                                                  (and (mcp-startup-entry-required-p entry)
-                                                       (not (mcp-startup-entry-success-p entry))))
-                                                entries))
-                (status (make-instance 'mcp-startup-status
-                                       :entries entries
-                                       :strict-required-p strict-required-p
-                                       :configured-count (length entries)
-                                       :successful-count (count-if #'mcp-startup-entry-success-p entries)
-                                       :failed-count (count-if-not #'mcp-startup-entry-success-p entries)
-                                       :required-failed-count required-failed-count)))
-           (setf (chatbot-mcp-servers bot) (nreverse servers))
-           (setf (chatbot-mcp-startup-status bot) status)
-           (log-prefixed-message "MCP INFO"
-                                 (format nil "Successfully fully initialized ~A out of ~A configured servers."
-                                         (mcp-startup-status-successful-count status)
-                                         (mcp-startup-status-configured-count status)))
-           (when (> (mcp-startup-status-failed-count status) 0)
-             (dolist (entry (remove-if #'mcp-startup-entry-success-p entries))
-               (log-prefixed-message "MCP WARN"
-                                     (format nil "Startup failure for ~A~:[~; (required)~]: ~A"
-                                             (mcp-startup-entry-name entry)
-                                             (mcp-startup-entry-required-p entry)
-                                             (mcp-startup-entry-error-message entry)))))
-           (when (and strict-required-p
-                      (> (mcp-startup-status-required-failed-count status) 0))
-             (error 'mcp-startup-error :status status))
-           status))
+         (apply-mcp-startup-status bot servers status)
+         (log-mcp-startup-summary status)
+         (when (and strict-required-p
+                    (> (mcp-startup-status-required-failed-count status) 0))
+           (error 'mcp-startup-error :status status))
+         status)
        (progn
-         (setf (chatbot-mcp-servers bot) nil)
-         (setf (chatbot-mcp-startup-status bot)
-               (make-instance 'mcp-startup-status
-                              :entries nil
-                              :strict-required-p strict-required-p
-                              :configured-count 0
-                              :successful-count 0
-                              :failed-count 0
-                              :required-failed-count 0))
+         (apply-mcp-startup-status bot nil (empty-mcp-startup-status strict-required-p))
          (log-prefixed-message "MCP INFO"
                                "No MCP configuration found. Falling back to zero tools.")
          (chatbot-mcp-startup-status bot)))))
