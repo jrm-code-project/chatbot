@@ -301,6 +301,40 @@
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))
 
+(fiveam:test test-monitor-leaves-exhausted-failed-loop-terminal
+  (let* ((*agentic-loop-supervisor-max-restarts* 1)
+        (*agentic-loop-supervisor-restart-backoff-seconds* 0.0d0)
+        (calls 0)
+        (*agentic-loop-chat-function*
+         (lambda (prompt &key conversation callback file files temperature top-p)
+           (declare (ignore prompt conversation callback file files temperature top-p))
+           (incf calls)
+           "Here is your code!"))
+        (conversation (new-chat :backend :openai)))
+    (unwind-protect
+       (let ((loop (start-agentic-loop conversation "Exhaust retries once" :max-iterations 2)))
+         (fiveam:is (eq :failed
+                        (wait-for-agentic-loop-status loop '(:failed :completed :limit-reached))))
+         (loop repeat 50
+               until (and (= calls 2)
+                          (eq :failed (agentic-loop-status loop)))
+               do (monitor-agentic-loops-once)
+                  (sleep 0.01))
+         (fiveam:is (eq :failed (agentic-loop-status loop)))
+         (fiveam:is (= 2 calls))
+         (fiveam:is (= 1 (agentic-loop-supervisor-restart-count loop)))
+         (let ((finished-at (agentic-loop-finished-at loop))
+               (last-error (agentic-loop-last-error loop)))
+           (sleep 0.01)
+           (monitor-agentic-loops-once)
+           (fiveam:is (eq :failed (agentic-loop-status loop)))
+           (fiveam:is (= 2 calls))
+           (fiveam:is (= 1 (agentic-loop-supervisor-restart-count loop)))
+           (fiveam:is (eql finished-at (agentic-loop-finished-at loop)))
+           (fiveam:is (string= last-error (agentic-loop-last-error loop)))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
 (fiveam:test test-monitor-restarts-timed-out-agentic-loop-step
   (let* ((*agentic-loop-supervisor-timeout-seconds* 0.05d0)
         (*agentic-loop-supervisor-max-restarts* 1)

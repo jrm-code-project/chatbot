@@ -862,9 +862,10 @@
 
         ;; 4. Retry failed loops under watchdog policy instead of leaving them dead immediately.
         ((eq status :failed)
-         (ensure-agentic-loop-watchdog-restart loop
-                                               (or (agentic-loop-last-error loop)
-                                                   "Loop failed unexpectedly.")))
+         (when (agentic-loop-watchdog-restart-allowed-p loop)
+           (ensure-agentic-loop-watchdog-restart loop
+                                                 (or (agentic-loop-last-error loop)
+                                                     "Loop failed unexpectedly."))))
 
         ;; 5. Invalid/unrecognized states that are not completed or aborted should be pushed to failed.
         ((not (member status '(:pending :running :awaiting-approval :completed :failed :limit-reached :interrupted)))
