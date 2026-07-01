@@ -66,6 +66,7 @@
 (defun retry-on-google-gemini-pro-latest (bot input conversation callback
                                             &key file-attachments request-contents history-messages
                                               effective-generation-config
+                                              return-turn-result-p
                                               (recursion-depth 0))
   "Resubmits the current turn through the Google backend on gemini-pro-latest."
   (declare (ignore request-contents history-messages))
@@ -77,6 +78,7 @@
                :effective-model +google-gemini-model-override-model+
                :effective-generation-config effective-generation-config
                :malformed-response-fallback-attempted-p t
+               :return-turn-result-p return-turn-result-p
                :recursion-depth recursion-depth))
 
 (defun google-request-state (bot input conversation file-attachments effective-model effective-generation-config
@@ -217,100 +219,105 @@
 
 (defun chat-google (bot input conversation callback
                    &key file-attachments request-contents history-messages effective-model effective-generation-config
-                     malformed-response-fallback-attempted-p (recursion-depth 0))
+                     malformed-response-fallback-attempted-p return-turn-result-p
+                     (recursion-depth 0))
   "Sends user input to the active conversation using Google's non-streaming generateContent API."
-  (run-provider-turn-loop
-   :google
-   (google-request-state bot input conversation file-attachments effective-model effective-generation-config
-                        :request-contents request-contents
-                        :history-messages history-messages
-                        :malformed-response-fallback-attempted-p malformed-response-fallback-attempted-p)
-   (lambda (state current-depth)
-     (declare (ignore current-depth))
-     (submit-google-turn bot nil state))
-   :retry-turn
-   (lambda (state outcome current-depth step)
-     (declare (ignore outcome step))
-     (retry-on-google-gemini-pro-latest
-      bot
-      (getf state :input)
-      conversation
-      callback
-      :file-attachments (getf state :file-attachments)
-      :request-contents (getf state :request-contents)
-      :history-messages (getf state :history-messages)
-      :effective-generation-config (getf state :effective-generation-config)
-      :recursion-depth current-depth))
-   :continue-with-tools
-   (lambda (state outcome next-depth step)
-     (declare (ignore state))
-     (continue-stateless-provider-tool-recursion
-      bot
-      conversation
-      (getf outcome :history-messages)
-      (provider-turn-outcome-tool-calls outcome)
-      (lambda (name tool-call)
-        (declare (ignore tool-call))
-        (format nil "Google tool arguments for ~A" name))
-      (lambda (id name args-str res-text tool-call)
-        (declare (ignore id args-str))
-        (let ((response-payload `(("result" . ,res-text))))
-          `(("role" . "user")
-            ("parts" . ,(vector
-                        (list (cons "functionResponse"
-                                    `(("name" . ,name)
-                                      ("response" . ,response-payload)))))))))
-      (lambda (tool-calls tool-results)
-        (let* ((tool-call (car tool-calls))
-               (name (cdr (assoc :name tool-call)))
-               (raw-args (cdr (assoc :raw-args tool-call)))
-               (payload-args (if raw-args
-                                (json-encodable-value raw-args)
-                                (empty-json-object)))
-               (thought-signature (cdr (assoc :thought-signature tool-call)))
-               (model-msg `(("role" . "model")
-                           ("parts" . ,(vector
-                                        (append
-                                         `(("functionCall" . (("name" . ,name) ("args" . ,payload-args))))
-                                         (when thought-signature
-                                           `(("thoughtSignature" . ,thought-signature)))))))))
-          (append (list model-msg)
-                  tool-results)))
-      (lambda (recursive-history recursion-messages)
-        (funcall step
-                 (google-request-state
-                  bot
-                  nil
-                  conversation
-                  (getf outcome :file-attachments)
-                  (getf outcome :effective-model)
-                  (getf outcome :effective-generation-config)
-                  :request-contents (append (getf outcome :request-contents)
-                                           recursion-messages)
-                  :history-messages recursive-history
-                  :malformed-response-fallback-attempted-p
-                  (getf outcome :malformed-response-fallback-attempted-p))
-                 next-depth))
-      :error-builder
-      (lambda (id name args-str condition tool-call)
-        (declare (ignore id args-str tool-call))
-        (let ((response-payload (chatbot-tool-error-payload name condition)))
-          `(("role" . "user")
-            ("parts" . ,(vector
-                        (list (cons "functionResponse"
-                                    `(("name" . ,name)
-                                      ("response" . ,response-payload)))))))))))
-   :finalize-turn
-   (lambda (state outcome)
-     (finish-stateless-text-turn conversation
-                                (getf state :history-messages)
-                                "model"
-                                (provider-turn-outcome-text outcome)
-                                :callback callback
-                                :usage (provider-turn-outcome-usage outcome)
-                                :thought-text (provider-turn-outcome-thought-text outcome)))
-   :error-handler
-   (lambda (state condition current-depth)
-     (declare (ignore state current-depth))
-     (error "Google Chat Error: ~A" condition))
-   :initial-recursion-depth recursion-depth))
+  (let ((result
+          (run-provider-turn-loop
+           :google
+           (google-request-state bot input conversation file-attachments effective-model effective-generation-config
+                                :request-contents request-contents
+                                :history-messages history-messages
+                                :malformed-response-fallback-attempted-p malformed-response-fallback-attempted-p)
+           (lambda (state current-depth)
+             (declare (ignore current-depth))
+             (submit-google-turn bot nil state))
+           :retry-turn
+           (lambda (state outcome current-depth step)
+             (declare (ignore outcome step))
+             (retry-on-google-gemini-pro-latest
+              bot
+              (getf state :input)
+              conversation
+              callback
+              :file-attachments (getf state :file-attachments)
+              :request-contents (getf state :request-contents)
+              :history-messages (getf state :history-messages)
+              :effective-generation-config (getf state :effective-generation-config)
+              :return-turn-result-p t
+              :recursion-depth current-depth))
+           :continue-with-tools
+           (lambda (state outcome next-depth step)
+             (declare (ignore state))
+             (continue-stateless-provider-tool-recursion
+              bot
+              (getf outcome :history-messages)
+              (provider-turn-outcome-tool-calls outcome)
+              (lambda (name tool-call)
+                (declare (ignore tool-call))
+                (format nil "Google tool arguments for ~A" name))
+              (lambda (id name args-str res-text tool-call)
+                (declare (ignore id args-str))
+                (let ((response-payload `(("result" . ,res-text))))
+                  `(("role" . "user")
+                   ("parts" . ,(vector
+                                (list (cons "functionResponse"
+                                            `(("name" . ,name)
+                                              ("response" . ,response-payload)))))))))
+              (lambda (tool-calls tool-results)
+                (let* ((tool-call (car tool-calls))
+                      (name (cdr (assoc :name tool-call)))
+                      (raw-args (cdr (assoc :raw-args tool-call)))
+                      (payload-args (if raw-args
+                                        (json-encodable-value raw-args)
+                                        (empty-json-object)))
+                      (thought-signature (cdr (assoc :thought-signature tool-call)))
+                      (model-msg `(("role" . "model")
+                                   ("parts" . ,(vector
+                                                (append
+                                                 `(("functionCall" . (("name" . ,name) ("args" . ,payload-args))))
+                                                 (when thought-signature
+                                                   `(("thoughtSignature" . ,thought-signature)))))))))
+                  (append (list model-msg)
+                         tool-results)))
+              (lambda (recursive-history recursion-messages)
+                (funcall step
+                        (google-request-state
+                         bot
+                         nil
+                         conversation
+                         (getf outcome :file-attachments)
+                         (getf outcome :effective-model)
+                         (getf outcome :effective-generation-config)
+                         :request-contents (append (getf outcome :request-contents)
+                                                   recursion-messages)
+                         :history-messages recursive-history
+                         :malformed-response-fallback-attempted-p
+                         (getf outcome :malformed-response-fallback-attempted-p))
+                        next-depth))
+              :error-builder
+              (lambda (id name args-str condition tool-call)
+                (declare (ignore id args-str tool-call))
+                (let ((response-payload (chatbot-tool-error-payload name condition)))
+                  `(("role" . "user")
+                   ("parts" . ,(vector
+                                (list (cons "functionResponse"
+                                            `(("name" . ,name)
+                                              ("response" . ,response-payload)))))))))))
+           :finalize-turn
+           (lambda (state outcome)
+             (finish-stateless-text-turn (getf state :history-messages)
+                                        "model"
+                                        (provider-turn-outcome-text outcome)
+                                        :callback callback
+                                        :usage (provider-turn-outcome-usage outcome)
+                                        :thought-text (provider-turn-outcome-thought-text outcome)
+                                        :interaction-id (conversation-interaction-id conversation)))
+           :error-handler
+           (lambda (state condition current-depth)
+             (declare (ignore state current-depth))
+             (error "Google Chat Error: ~A" condition))
+           :initial-recursion-depth recursion-depth)))
+    (if return-turn-result-p
+        result
+        (apply-chat-turn-result result conversation))))

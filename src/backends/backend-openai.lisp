@@ -143,51 +143,58 @@
               (make-provider-turn-final-outcome (coerce full-text 'string))))))))
 
 (defun chat-openai (bot input conversation callback
-                    &key file-attachments request-messages history-messages effective-generation-config (recursion-depth 0))
+                    &key file-attachments request-messages history-messages effective-generation-config
+                      return-turn-result-p
+                      (recursion-depth 0))
   "Sends user input to the active conversation using an OpenAI-compliant chat completions API."
-  (run-provider-turn-loop
-   :openai
-   (openai-request-state bot input conversation file-attachments effective-generation-config
-                         :request-messages request-messages
-                         :history-messages history-messages)
-   (lambda (state current-depth)
-     (declare (ignore current-depth))
-     (submit-openai-turn bot callback state))
-   :continue-with-tools
-   (lambda (state outcome next-depth step)
-     (declare (ignore state))
-     (continue-stateless-provider-tool-recursion
-      bot
-      conversation
-      (getf outcome :history-messages)
-      (provider-turn-outcome-tool-calls outcome)
-      (lambda (name tool-call)
-        (declare (ignore tool-call))
-        (format nil "OpenAI tool arguments for ~A" name))
-      #'openai-tool-result-message
-      (lambda (tool-calls ordered-tool-responses)
-        (append (list (openai-assistant-tool-call-message tool-calls))
-                ordered-tool-responses))
-      (lambda (recursive-history recursion-messages)
-        (funcall step
-                 (openai-request-state bot
-                                       nil
-                                       conversation
-                                       (getf outcome :file-attachments)
-                                       (getf outcome :effective-generation-config)
-                                       :history-messages recursive-history
-                                       :request-messages (append (getf outcome :request-messages)
-                                                                 recursion-messages))
-                 next-depth))
-      :error-builder #'openai-tool-error-message))
-   :finalize-turn
-   (lambda (state outcome)
-     (finish-stateless-text-turn conversation
-                                 (getf state :history-messages)
-                                 "assistant"
-                                 (provider-turn-outcome-text outcome)))
-   :error-handler
-   (lambda (state condition current-depth)
-     (declare (ignore state current-depth))
-     (error "OpenAI Chat Error: ~A" condition))
-   :initial-recursion-depth recursion-depth))
+  (let ((result
+          (run-provider-turn-loop
+           :openai
+           (openai-request-state bot input conversation file-attachments effective-generation-config
+                                 :request-messages request-messages
+                                 :history-messages history-messages)
+           (lambda (state current-depth)
+             (declare (ignore current-depth))
+             (submit-openai-turn bot callback state))
+           :continue-with-tools
+           (lambda (state outcome next-depth step)
+             (declare (ignore state))
+             (continue-stateless-provider-tool-recursion
+              bot
+              (getf outcome :history-messages)
+              (provider-turn-outcome-tool-calls outcome)
+              (lambda (name tool-call)
+                (declare (ignore tool-call))
+                (format nil "OpenAI tool arguments for ~A" name))
+              #'openai-tool-result-message
+              (lambda (tool-calls ordered-tool-responses)
+                (append (list (openai-assistant-tool-call-message tool-calls))
+                        ordered-tool-responses))
+              (lambda (recursive-history recursion-messages)
+                (funcall step
+                         (openai-request-state bot
+                                               nil
+                                               conversation
+                                               (getf outcome :file-attachments)
+                                               (getf outcome :effective-generation-config)
+                                               :history-messages recursive-history
+                                               :request-messages (append (getf outcome :request-messages)
+                                                                         recursion-messages))
+                         next-depth))
+              :error-builder #'openai-tool-error-message))
+           :finalize-turn
+           (lambda (state outcome)
+             (finish-stateless-text-turn (getf state :history-messages)
+                                         "assistant"
+                                         (provider-turn-outcome-text outcome)
+                                         :usage (provider-turn-outcome-usage outcome)
+                                         :thought-text (provider-turn-outcome-thought-text outcome)
+                                         :interaction-id (conversation-interaction-id conversation)))
+           :error-handler
+           (lambda (state condition current-depth)
+             (declare (ignore state current-depth))
+             (error "OpenAI Chat Error: ~A" condition))
+           :initial-recursion-depth recursion-depth)))
+    (if return-turn-result-p
+        result
+        (apply-chat-turn-result result conversation))))

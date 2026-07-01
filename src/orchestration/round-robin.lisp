@@ -144,7 +144,7 @@
   (unless (typep session 'round-robin-session)
     (error "ROUND-ROBIN-CHAT requires a :SESSION created by NEW-ROUND-ROBIN-CHAT."))
   (let* ((effective-files (append (when file
-                                    (list file))
+                                   (list file))
                                   files))
          (file-attachments (and effective-files
                                 (prepare-chat-file-attachments effective-files))))
@@ -154,46 +154,49 @@
                                         :user
                                         input)
     (let ((results
-            (mapcar (lambda (participant)
-                      (multiple-value-bind (history-transcript latest-entry)
-                          (split-round-robin-transcript-for-live-turn
-                           (round-robin-session-transcript session))
-                        (let* ((conversation (round-robin-participant-conversation participant))
-                               (bot (conversation-chatbot conversation))
-                               (effective-generation-config
-                                 (apply #'resolve-effective-generation-config
-                                       bot
-                                       (append (when temperaturep
-                                                 (list :temperature temperature))
-                                               (when top-pp
-                                                 (list :top-p top-p))))))
-                          (setf (conversation-messages conversation)
-                                (build-round-robin-history-messages history-transcript
-                                                                   (round-robin-participant-name participant)))
-                          (when (eq (chatbot-backend bot) :gemini)
-                            (setf (conversation-interaction-id conversation) nil))
-                          (multiple-value-bind (live-input effective-model)
-                              (prepare-round-robin-live-input participant latest-entry)
-                            (print-chat-speaker-header (round-robin-participant-name participant))
-                            (let ((response
-                                   (call-with-runtime-context
-                                    (chatbot-runtime-context bot)
-                                    (lambda ()
-                                      (dispatch-chat-turn conversation
-                                                          live-input
-                                                          callback
-                                                          :file-attachments (and (eq (round-robin-entry-speaker-kind latest-entry) :user)
-                                                                                 file-attachments)
-                                                          :effective-model effective-model
-                                                          :effective-generation-config effective-generation-config)))))
-                              (terpri)
-                              (terpri)
-                              (append-round-robin-transcript-entry session
-                                                                  (round-robin-participant-name participant)
-                                                                  :bot
-                                                                  response)
-                              (list :name (round-robin-participant-name participant)
-                                   :response response))))))
-                    (round-robin-session-participants session))))
+            (mapcar
+             (lambda (participant)
+               (multiple-value-bind (history-transcript latest-entry)
+                   (split-round-robin-transcript-for-live-turn
+                    (round-robin-session-transcript session))
+                 (let* ((conversation (round-robin-participant-conversation participant))
+                        (bot (conversation-chatbot conversation))
+                        (effective-generation-config
+                          (apply #'resolve-effective-generation-config
+                                 bot
+                                 (append (when temperaturep
+                                          (list :temperature temperature))
+                                        (when top-pp
+                                          (list :top-p top-p))))))
+                   (setf (conversation-messages conversation)
+                         (build-round-robin-history-messages history-transcript
+                                                            (round-robin-participant-name participant)))
+                   (when (eq (chatbot-backend bot) :gemini)
+                     (setf (conversation-interaction-id conversation) nil))
+                   (multiple-value-bind (live-input effective-model)
+                       (prepare-round-robin-live-input participant latest-entry)
+                     (print-chat-speaker-header (round-robin-participant-name participant))
+                     (let ((response
+                             (call-with-runtime-context
+                              (chatbot-runtime-context bot)
+                              (lambda ()
+                                (let ((result
+                                       (dispatch-chat-turn conversation
+                                                           live-input
+                                                           callback
+                                                           :file-attachments (and (eq (round-robin-entry-speaker-kind latest-entry) :user)
+                                                                                  file-attachments)
+                                                           :effective-model effective-model
+                                                           :effective-generation-config effective-generation-config)))
+                                  (apply-chat-turn-result result conversation))))))
+                       (terpri)
+                       (terpri)
+                       (append-round-robin-transcript-entry session
+                                                           (round-robin-participant-name participant)
+                                                           :bot
+                                                           response)
+                       (list :name (round-robin-participant-name participant)
+                             :response response))))))
+             (round-robin-session-participants session))))
       (print-round-robin-user-turn-marker)
       results)))

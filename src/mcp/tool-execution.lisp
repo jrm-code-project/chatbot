@@ -1017,7 +1017,7 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
   (sampling-parameters-tool-result bot))
 
 (define-builtin-tool "startAgenticLoop" (bot arguments)
-  (unless *active-conversation*
+  (unless (current-active-conversation (chatbot-runtime-context bot))
        (error 'mcp-tool-execution-error
               :tool-name tool-name
               :reason "No active conversation is bound for autonomous loop startup."))
@@ -1042,7 +1042,7 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
             (isolate-p (let ((raw (or (mcp-val "isolate" arguments)
                                       (mcp-val :isolate arguments))))
                          (and raw (eq raw t))))
-            (loop (start-agentic-loop *active-conversation*
+            (loop (start-agentic-loop (current-active-conversation (chatbot-runtime-context bot))
                                       goal
                                       :max-iterations max-iterations
                                       :backend backend
@@ -1273,9 +1273,9 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
          (write-string plan-content stream))
        (format t "~&[PLAN SUBMITTED]~%Filename: ~A~%~%Content:~%~A~%" filename plan-content)
        ;; Toggle state
-       (setf *active-planner* nil)
+       (setf (current-active-planner (chatbot-runtime-context bot)) nil)
        ;; Inject transient system message to V (the parent conversation)
-       (let ((parent-conv *active-planner-parent-conversation*))
+       (let ((parent-conv (current-active-planner-parent-conversation (chatbot-runtime-context bot))))
          (when parent-conv
            (setf (conversation-messages parent-conv)
                  (append (conversation-messages parent-conv)
@@ -1289,9 +1289,9 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
                        "No reason provided.")))
        (format t "~&[PLAN ABORTED]~%Reason: ~A~%" reason)
        ;; Toggle state
-       (setf *active-planner* nil)
+       (setf (current-active-planner (chatbot-runtime-context bot)) nil)
        ;; Inject transient system message to V (the parent conversation)
-       (let ((parent-conv *active-planner-parent-conversation*))
+       (let ((parent-conv (current-active-planner-parent-conversation (chatbot-runtime-context bot))))
          (when parent-conv
            (setf (conversation-messages parent-conv)
                  (append (conversation-messages parent-conv)
@@ -1308,7 +1308,8 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
                               "contextSummary"
                               tool-name))
             ;; Resolve the parent conversation
-            (parent-conv (or *active-conversation* (make-instance 'conversation :chatbot bot)))
+            (parent-conv (or (current-active-conversation (chatbot-runtime-context bot))
+                             (make-instance 'conversation :chatbot bot)))
             ;; Spawn the Planner minion chatbot
             (planner-conv (new-chat :backend (chatbot-backend bot)
                                     :model (chatbot-model bot)
@@ -1322,8 +1323,8 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
        (setf (chatbot-subordinates bot)
              (append (chatbot-subordinates bot) (list planner-conv)))
        ;; Setup Planner Mode active state to suspend V's REPL context
-       (setf *active-planner* planner-conv)
-       (setf *active-planner-parent-conversation* parent-conv)
+       (setf (current-active-planner (chatbot-runtime-context bot)) planner-conv)
+       (setf (current-active-planner-parent-conversation (chatbot-runtime-context bot)) parent-conv)
        ;; Inject context summary into initial prompt
        (let ((initial-prompt (format nil "Planning Session Initiated.~%Context/Goal Summary: ~A" context-summary)))
          (setf (conversation-messages planner-conv)

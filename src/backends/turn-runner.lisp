@@ -3,12 +3,13 @@
 
 (in-package "CHATBOT")
 
-(defun make-provider-turn-final-outcome (text &key usage thought-text)
+(defun make-provider-turn-final-outcome (text &rest metadata)
   "Returns a normalized final-text turn outcome."
-  (list :kind :final
-        :text text
-        :usage usage
-        :thought-text thought-text))
+  (append (list :kind :final
+                :text text
+                :usage (getf metadata :usage)
+                :thought-text (getf metadata :thought-text))
+          metadata))
 
 (defun make-provider-turn-tool-outcome (tool-calls &rest metadata)
   "Returns a normalized tool-calling turn outcome."
@@ -87,19 +88,18 @@ either recurse through the supplied STEP function or return the final turn resul
                                       result-builder
                                       :error-builder error-builder))
 
-(defun continue-stateless-provider-tool-recursion (bot conversation history-messages tool-calls
+(defun continue-stateless-provider-tool-recursion (bot history-messages tool-calls
                                                        context-builder result-builder
                                                        recursion-message-builder continuation
                                                        &key error-builder)
-  "Executes TOOL-CALLS, appends the resulting recursion messages to CONVERSATION history,
+ "Executes TOOL-CALLS, threads the resulting recursion messages into history,
 and then invokes CONTINUATION with the updated history and recursion messages."
-  (let* ((tool-results (provider-tool-call-results bot
-                                                   tool-calls
-                                                   context-builder
-                                                   result-builder
-                                                   :error-builder error-builder))
+ (let* ((tool-results (provider-tool-call-results bot
+                                                  tool-calls
+                                                  context-builder
+                                                  result-builder
+                                                  :error-builder error-builder))
          (recursion-messages (funcall recursion-message-builder tool-calls tool-results)))
-    (continue-stateless-tool-recursion conversation
-                                       history-messages
-                                       recursion-messages
-                                       continuation)))
+   (continue-stateless-tool-recursion history-messages
+                                      recursion-messages
+                                      continuation)))

@@ -349,7 +349,10 @@ Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
                                   (eval-approval-function nil eval-approval-function-p)
                                   (default-conversation nil default-conversation-p)
                                   (agentic-loop-default-backend nil agentic-loop-default-backend-p)
-                                  (agentic-loop-default-model nil agentic-loop-default-model-p))
+                                  (agentic-loop-default-model nil agentic-loop-default-model-p)
+                                  (active-conversation nil active-conversation-p)
+                                  (active-planner nil active-planner-p)
+                                  (active-planner-parent-conversation nil active-planner-parent-conversation-p))
   "Constructs the preferred public container for shared Chatbot runtime state.
 Use this with explicit :RUNTIME-CONTEXT arguments instead of mutating the
 compatibility-only ambient special variables."
@@ -430,7 +433,17 @@ compatibility-only ambient special variables."
                      (inherit agentic-loop-default-model-p
                               agentic-loop-default-model
                               #'runtime-context-agentic-loop-default-model
-                              nil)))))
+                              nil)
+                     :active-conversation (if active-conversation-p
+                                             active-conversation
+                                             nil)
+                     :active-planner (if active-planner-p
+                                         active-planner
+                                         nil)
+                     :active-planner-parent-conversation
+                     (if active-planner-parent-conversation-p
+                         active-planner-parent-conversation
+                         nil)))))
 
 (defun sync-runtime-context-from-legacy-globals (context &key (warn-p t))
   "Copies legacy global runtime values into CONTEXT."
@@ -619,6 +632,35 @@ as a compatibility alias."
        ,setter-doc
        (set-runtime-context-owned-value value context ',accessor ',legacy-symbol))))
 
+(defun transient-runtime-context-value (context accessor legacy-symbol)
+  "Returns transient runtime state from CONTEXT when present, otherwise the legacy global."
+  (let ((resolved-context (resolve-runtime-context context)))
+    (if resolved-context
+        (or (runtime-context-accessor-value resolved-context accessor)
+            (let ((legacy-value (legacy-global-value legacy-symbol)))
+              (and (typep legacy-value 'conversation)
+                   (eq (chatbot-runtime-context (conversation-chatbot legacy-value))
+                       resolved-context)
+                   legacy-value)))
+        (legacy-global-value legacy-symbol))))
+
+(defun set-transient-runtime-context-value (value context accessor legacy-symbol)
+  "Stores transient runtime state in both CONTEXT and the legacy compatibility global."
+  (let ((resolved-context (resolve-runtime-context context)))
+    (when resolved-context
+      (set-runtime-context-accessor-value resolved-context accessor value))
+    (setf (symbol-value legacy-symbol) value))
+  value)
+
+(defmacro define-transient-runtime-context-helper (name accessor legacy-symbol getter-doc setter-doc)
+  `(progn
+     (defun ,name (&optional context)
+       ,getter-doc
+       (transient-runtime-context-value context ',accessor ',legacy-symbol))
+     (defun (setf ,name) (value &optional context)
+       ,setter-doc
+       (set-transient-runtime-context-value value context ',accessor ',legacy-symbol))))
+
 (define-mirrored-runtime-context-helper current-default-conversation
   runtime-context-default-conversation
   *default-conversation*
@@ -722,6 +764,24 @@ as a compatibility alias."
   "Returns the current eval approval function for CONTEXT."
   "Sets the current eval approval function for CONTEXT."
   :default-uses-legacy-p t)
+
+(define-transient-runtime-context-helper current-active-conversation
+  runtime-context-active-conversation
+  *active-conversation*
+  "Returns the transient active conversation for CONTEXT."
+  "Sets the transient active conversation for CONTEXT.")
+
+(define-transient-runtime-context-helper current-active-planner
+  runtime-context-active-planner
+  *active-planner*
+  "Returns the transient active planner conversation for CONTEXT."
+  "Sets the transient active planner conversation for CONTEXT.")
+
+(define-transient-runtime-context-helper current-active-planner-parent-conversation
+  runtime-context-active-planner-parent-conversation
+  *active-planner-parent-conversation*
+  "Returns the transient planner parent conversation for CONTEXT."
+  "Sets the transient planner parent conversation for CONTEXT.")
 
 (defun call-with-runtime-context (context thunk)
   "Calls THUNK with the resolved runtime context active.

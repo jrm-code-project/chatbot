@@ -48,19 +48,70 @@
   "Appends MESSAGES to HISTORY-MESSAGES for a stateless backend turn."
   (append history-messages messages))
 
-(defun update-conversation-stateless-history (conversation history-messages &rest messages)
-  "Stores the stateless backend recursive history on CONVERSATION and returns it."
-  (let ((updated-history (apply #'extend-stateless-history history-messages messages)))
-    (setf (conversation-messages conversation) updated-history)
-    updated-history))
+(defun update-conversation-stateless-history (history-messages &rest messages)
+  "Returns the stateless backend recursive history after appending MESSAGES."
+  (apply #'extend-stateless-history history-messages messages))
 
-(defun continue-stateless-tool-recursion (conversation history-messages recursion-messages continuation)
-  "Stores RECURSION-MESSAGES on CONVERSATION history, then calls CONTINUATION."
-  (let ((updated-history (apply #'update-conversation-stateless-history
-                                conversation
-                                history-messages
-                                recursion-messages)))
-    (funcall continuation updated-history recursion-messages)))
+(defun continue-stateless-tool-recursion (&rest args)
+  "Threads recursion messages into stateless history and preserves the legacy mutating form.
+
+Accepted signatures:
+  (HISTORY-MESSAGES RECURSION-MESSAGES CONTINUATION)
+  (CONVERSATION HISTORY-MESSAGES RECURSION-MESSAGES CONTINUATION)"
+  (destructuring-bind (conversation history-messages recursion-messages continuation)
+      (if (= (length args) 3)
+          (list nil (first args) (second args) (third args))
+          args)
+    (let ((updated-history (apply #'update-conversation-stateless-history
+                                  history-messages
+                                  recursion-messages)))
+      (when conversation
+        (setf (conversation-messages conversation) updated-history))
+      (funcall continuation updated-history recursion-messages))))
+
+(defun make-chat-turn-result (text &key messages interaction-id usage thought-text conversation)
+  "Returns the normalized result of one chat turn."
+  (list :text text
+        :messages messages
+        :interaction-id interaction-id
+        :usage usage
+        :thought-text thought-text
+        :conversation conversation))
+
+(defun chat-turn-result-text (result)
+  "Returns RESULT's final response text."
+  (getf result :text))
+
+(defun chat-turn-result-messages (result)
+  "Returns RESULT's updated conversation history."
+  (getf result :messages))
+
+(defun chat-turn-result-interaction-id (result)
+  "Returns RESULT's updated Gemini interaction id."
+  (getf result :interaction-id))
+
+(defun chat-turn-result-usage (result)
+  "Returns RESULT's usage metadata."
+  (getf result :usage))
+
+(defun chat-turn-result-thought-text (result)
+  "Returns RESULT's thought text."
+  (getf result :thought-text))
+
+(defun chat-turn-result-conversation (result)
+  "Returns RESULT's target conversation."
+  (getf result :conversation))
+
+(defun apply-chat-turn-result (result &optional conversation)
+  "Applies RESULT to CONVERSATION, defaulting to RESULT's target conversation."
+  (let ((target (or conversation
+                    (chat-turn-result-conversation result))))
+    (when target
+      (setf (conversation-messages target)
+            (chat-turn-result-messages result))
+      (setf (conversation-interaction-id target)
+            (chat-turn-result-interaction-id result)))
+    (chat-turn-result-text result)))
 
 (defun emit-chat-response-text (text &key callback usage thought-text)
   "Formats TEXT for display, writes token USAGE when present, optionally calls CALLBACK, and returns TEXT."
@@ -71,15 +122,43 @@
     (funcall callback text))
   text)
 
-(defun finish-stateless-text-turn (conversation history-messages role text &key callback usage thought-text)
-  "Emits final TEXT for a stateless backend turn, persists it on CONVERSATION, and returns TEXT."
-  (emit-chat-response-text text :callback callback :usage usage :thought-text thought-text)
-  (update-conversation-stateless-history
-   conversation
-   history-messages
-   (list (cons "role" role)
-         (cons "content" text)))
-  text)
+(defun finish-stateless-text-turn (&rest args)
+  "Emits final text and returns a normalized turn result.
+
+Accepted signatures:
+  (HISTORY-MESSAGES ROLE TEXT &key CALLBACK USAGE THOUGHT-TEXT INTERACTION-ID)
+  (CONVERSATION HISTORY-MESSAGES ROLE TEXT &key CALLBACK USAGE THOUGHT-TEXT INTERACTION-ID)"
+  (let* ((legacy-call-p (and (>= (length args) 4)
+                             (typep (first args) 'conversation)))
+         (conversation (and legacy-call-p (first args)))
+         (history-messages (if legacy-call-p (second args) (first args)))
+         (role (if legacy-call-p (third args) (second args)))
+         (text (if legacy-call-p (fourth args) (third args)))
+         (options (if legacy-call-p (nthcdr 4 args) (nthcdr 3 args)))
+         (callback (getf options :callback))
+         (usage (getf options :usage))
+         (thought-text (getf options :thought-text))
+         (interaction-id (or (getf options :interaction-id)
+                             (and conversation
+                                  (conversation-interaction-id conversation))))
+         (result
+           (progn
+             (emit-chat-response-text text :callback callback :usage usage :thought-text thought-text)
+             (make-chat-turn-result
+              text
+              :messages
+              (update-conversation-stateless-history
+               history-messages
+               (list (cons "role" role)
+                     (cons "content" text)))
+              :interaction-id interaction-id
+              :usage usage
+              :thought-text thought-text
+              :conversation conversation))))
+    (when conversation
+      (return-from finish-stateless-text-turn
+        (apply-chat-turn-result result conversation)))
+    result))
 
 (defun persona-memory-messages (persona-memory)
   "Returns provider-neutral synthetic history representing PERSONA-MEMORY."

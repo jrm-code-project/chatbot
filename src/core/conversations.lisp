@@ -387,30 +387,43 @@ Use NEW-CHAT instead when no persona should be loaded."
          (conv (new-chat :backend (chatbot-backend bot)
                          :model (chatbot-model bot)
                          :runtime-context (chatbot-runtime-context bot)))
-         (summary (chat prompt :conversation conv)))
+         (summary
+           (call-with-runtime-context
+            (chatbot-runtime-context bot)
+            (lambda ()
+              (multiple-value-bind (effective-input effective-model)
+                  (resolve-prompt-model-override (conversation-chatbot conv) prompt)
+                (let ((result (dispatch-chat-turn conv
+                                                effective-input
+                                                nil
+                                                :effective-model effective-model
+                                                :effective-generation-config
+                                                (resolve-effective-generation-config (conversation-chatbot conv)))))
+                  (apply-chat-turn-result result conv)))))))
     summary))
 
 (defun prune-conversation-context-if-needed (conversation)
-  "Checks if the conversation history is too large (exceeds *context-pruning-threshold-characters*), and if so, compresses old turns into a State Digest."
+  "Returns CONVERSATION's effective history after pruning oversized context when needed."
   (let* ((bot (conversation-chatbot conversation))
          (history (conversation-messages conversation))
          (total-len (loop for msg in history
                           sum (length (cdr (assoc "content" msg :test #'string=))))))
-    (when (> total-len *context-pruning-threshold-characters*)
-      ;; We have enough turns to compress. Keep the last 4 messages (2 turns) in raw format.
-      (let* ((keep-count 4)
-             (history-len (length history)))
-        (when (> history-len keep-count)
-          (let* ((old-messages (subseq history 0 (- history-len keep-count)))
-                 (raw-messages (subseq history (- history-len keep-count)))
-                 (digest (summarize-old-history old-messages bot))
-                 (digest-msg (list (cons "role" "system")
-                                   (cons "content" (format nil "[State Digest of previous turns: ~A]" digest)))))
-            (setf (conversation-messages conversation)
-                  (append (list digest-msg) raw-messages))
-            (log-message :info "Pruned and compressed conversation history context"
-                         :context `(("old-messages-count" . ,(princ-to-string (length old-messages)))
-                                    ("digest-length" . ,(princ-to-string (length digest)))))))))))
+    (if (<= total-len *context-pruning-threshold-characters*)
+        history
+        (let* ((keep-count 4)
+               (history-len (length history)))
+          (if (<= history-len keep-count)
+              history
+              (let* ((old-messages (subseq history 0 (- history-len keep-count)))
+                     (raw-messages (subseq history (- history-len keep-count)))
+                     (digest (summarize-old-history old-messages bot))
+                     (digest-msg (list (cons "role" "system")
+                                      (cons "content" (format nil "[State Digest of previous turns: ~A]" digest))))
+                     (pruned-history (append (list digest-msg) raw-messages)))
+                (log-message :info "Pruned and compressed conversation history context"
+                            :context `(("old-messages-count" . ,(princ-to-string (length old-messages)))
+                                       ("digest-length" . ,(princ-to-string (length digest)))))
+                pruned-history))))))
 
 (defun load-plan-to-system-instructions (bot filename)
   "Reads the generated Markdown plan from FILENAME and appends it to BOT's transient system-instruction."

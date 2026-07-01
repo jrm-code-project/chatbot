@@ -97,7 +97,22 @@
     :initarg :agentic-loop-registry-lock
     :accessor runtime-context-agentic-loop-registry-lock
     :initform (sb-thread:make-mutex :name "agentic-loop-registry-lock")
-    :documentation "Lock protecting agentic-loop-registry updates.")))
+    :documentation "Lock protecting agentic-loop-registry updates.")
+   (active-conversation
+    :initarg :active-conversation
+    :accessor runtime-context-active-conversation
+    :initform nil
+    :documentation "Conversation currently being processed in this runtime context.")
+   (active-planner
+    :initarg :active-planner
+    :accessor runtime-context-active-planner
+    :initform nil
+    :documentation "Planner conversation currently intercepting chat turns in this runtime context.")
+   (active-planner-parent-conversation
+    :initarg :active-planner-parent-conversation
+    :accessor runtime-context-active-planner-parent-conversation
+    :initform nil
+    :documentation "Parent conversation associated with the active planner in this runtime context.")))
 
 (defparameter +default-gemini-fallback-to-google-p+ nil
   "Authoritative default for the Gemini Interactions compatibility fallback.")
