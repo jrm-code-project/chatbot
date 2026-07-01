@@ -169,7 +169,9 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
 
 (defun parse-subordinate-control-response (response)
   "Parses one strict subordinate control RESPONSE JSON payload."
-  (let* ((payload (parse-json-or-error response :context "subordinate control response"))
+  (let* ((payload (parse-structured-json-response-or-error
+                   response
+                   :context "subordinate control response"))
          (context "subordinate control response"))
     (unless (json-object-alist-p payload)
       (error "Invalid ~A payload: expected a JSON object." context))

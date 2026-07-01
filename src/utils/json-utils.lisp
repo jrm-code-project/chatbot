@@ -178,6 +178,54 @@ even if the plist is malformed."
              :payload line
              :reason (princ-to-string e)))))
 
+(defun extract-first-json-object-string (text)
+  "Returns the first balanced JSON object substring in TEXT, or NIL."
+  (let ((start (position #\{ text)))
+    (when start
+      (loop with depth = 0
+            with in-string-p = nil
+            with escape-p = nil
+            for index from start below (length text)
+            for char = (char text index)
+            do (cond
+                 (escape-p
+                  (setf escape-p nil))
+                 (in-string-p
+                  (cond
+                    ((char= char #\\)
+                     (setf escape-p t))
+                    ((char= char #\")
+                     (setf in-string-p nil))))
+                 ((char= char #\")
+                  (setf in-string-p t))
+                 ((char= char #\{)
+                  (incf depth))
+                 ((char= char #\})
+                  (decf depth)
+                  (when (= depth 0)
+                    (return (subseq text start (1+ index))))))))))
+
+(defun parse-structured-json-response-or-error (line &key (context "JSON"))
+  "Parses a strict structured JSON response from LINE, tolerating provider wrappers."
+  (let ((trimmed (string-trim '(#\Space #\Tab #\Return #\Linefeed) line)))
+    (handler-case
+        (cl-json:decode-json-from-string trimmed)
+      (error (original-error)
+        (let ((candidate (and (stringp trimmed)
+                              (extract-first-json-object-string trimmed))))
+          (if candidate
+              (handler-case
+                  (cl-json:decode-json-from-string candidate)
+                (error ()
+                  (error 'malformed-json-error
+                         :context context
+                         :payload line
+                         :reason (princ-to-string original-error))))
+              (error 'malformed-json-error
+                     :context context
+                     :payload line
+                     :reason (princ-to-string original-error))))))))
+
 (defun json-object-keys (payload)
   "Returns PAYLOAD object keys normalized to lowercase strings."
   (mapcar (lambda (entry)

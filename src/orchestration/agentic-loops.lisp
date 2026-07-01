@@ -330,7 +330,9 @@
 
 (defun parse-agentic-loop-control-response (response)
   "Parses one strict structured loop control RESPONSE."
-  (let* ((payload (parse-json-or-error response :context "agentic loop control response"))
+  (let* ((payload (parse-structured-json-response-or-error
+                   response
+                   :context "agentic loop control response"))
          (context "agentic loop control response"))
     (unless (json-object-alist-p payload)
       (error "Invalid ~A payload: expected a JSON object." context))

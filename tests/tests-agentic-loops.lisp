@@ -8,6 +8,12 @@
   (cl-json:encode-json-to-string `(("status" . ,status)
                                    ("summary" . ,summary))))
 
+(fiveam:test test-parse-agentic-loop-control-response-accepts-provider-wrapper
+  (let ((control (parse-agentic-loop-control-response
+                  "<antml:thinking>draft</antml:thinking>{\"status\":\"continue\",\"summary\":\"next step\"}")))
+    (fiveam:is (string= "continue" (getf control :status)))
+    (fiveam:is (string= "next step" (getf control :summary)))))
+
 (defun wait-for-agentic-loop-status (loop statuses &key (timeout-seconds 3.0d0))
   "Polls LOOP until its status is one of STATUSES or TIMEOUT-SECONDS elapses."
   (let ((deadline (+ (get-internal-real-time)

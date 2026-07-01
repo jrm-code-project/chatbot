@@ -27,6 +27,12 @@
               (cl-json:encode-json-to-string spawn)
               "null")))
 
+(fiveam:test test-parse-subordinate-control-response-accepts-provider-wrapper
+  (let* ((payload "<antml:thinking>draft</antml:thinking>{\"reply\":\"done\",\"spawn\":null}")
+         (control (parse-subordinate-control-response payload)))
+    (fiveam:is (string= "done" (getf control :reply)))
+    (fiveam:is (null (getf control :spawn)))))
+
 (defun test-openai-subordinate-stream (reply &key spawn)
   "Returns one OpenAI-compatible SSE stream whose content is a structured subordinate reply."
   (format nil
