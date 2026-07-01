@@ -319,7 +319,7 @@
 (defun build-agentic-loop-step-prompt (loop)
   "Builds the next autonomous prompt for LOOP."
   (format nil
-          "Autonomous goal: ~A~%Iteration: ~D of ~D.~%~A~%Use available tools when helpful. If the goal is complete or you cannot make further progress, reply with `FINAL:` followed by the result. Otherwise reply with `CONTINUE:` followed by a concise summary of what you learned and the next step to take."
+          "Autonomous goal: ~A~%Iteration: ~D of ~D.~%~A~%Use available tools when helpful. You MUST reply with ONLY one strict JSON object in exactly this schema: {\"status\":\"continue\",\"summary\":\"concise progress update and next step\"} or {\"status\":\"final\",\"summary\":\"final result\"}. Do not add commentary before or after the JSON. The status field must be either continue or final, and the summary field must be a non-empty string."
           (agentic-loop-goal loop)
           (1+ (agentic-loop-current-iteration loop))
           (agentic-loop-max-iterations loop)
@@ -328,23 +328,22 @@
                 "Previous steps: none."
                 (format nil "Previous steps:~A" history)))))
 
-(defun trim-agentic-loop-response (response)
-  "Returns RESPONSE trimmed for control prefix checks."
-  (string-trim '(#\Space #\Tab #\Return #\Linefeed) (or response "")))
-
-(defun agentic-loop-final-response-p (response)
-  "Returns true when RESPONSE indicates the autonomous loop is done."
-  (let ((trimmed (trim-agentic-loop-response response)))
-    (or (alexandria:starts-with-subseq "FINAL:" trimmed)
-        (not (alexandria:starts-with-subseq "CONTINUE:" trimmed)))))
-
-(defun agentic-loop-final-response-text (response)
-  "Returns the human-meaningful completion text from RESPONSE."
-  (let ((trimmed (trim-agentic-loop-response response)))
-    (if (alexandria:starts-with-subseq "FINAL:" trimmed)
-        (string-trim '(#\Space #\Tab #\Return #\Linefeed)
-                     (subseq trimmed (length "FINAL:")))
-        trimmed)))
+(defun parse-agentic-loop-control-response (response)
+  "Parses one strict structured loop control RESPONSE."
+  (let* ((payload (parse-json-or-error response :context "agentic loop control response"))
+         (context "agentic loop control response"))
+    (unless (json-object-alist-p payload)
+      (error "Invalid ~A payload: expected a JSON object." context))
+    (ensure-json-object-only-keys payload '("status" "summary") '() context)
+    (let ((status-raw (mcp-val "status" payload))
+          (summary (require-non-empty-json-string (mcp-val "summary" payload) "summary" context)))
+      (unless (stringp status-raw)
+        (error "Invalid ~A payload: status must be a string." context))
+      (let ((status (string-downcase status-raw)))
+        (unless (member status '("continue" "final") :test #'string=)
+          (error "Invalid ~A payload: status must be either continue or final." context))
+        (list :status status
+              :summary summary)))))
 
 (defun agentic-loop-pending-approval-plist (kind tool-name resource)
   "Returns the stored pending approval representation."
@@ -469,7 +468,8 @@
 
 (defun make-agentic-loop-response-state (iteration prompt response)
   "Returns the next loop state implied by RESPONSE."
-  (let ((final-p (agentic-loop-final-response-p response)))
+  (let* ((control (parse-agentic-loop-control-response response))
+         (final-p (string= "final" (getf control :status))))
     (list :current-iteration iteration
           :pending-step-prompt nil
           :pending-approval nil
@@ -479,7 +479,7 @@
                                                  :response response)
           :status (if final-p :completed :running)
           :result-summary (and final-p
-                               (agentic-loop-final-response-text response))
+                               (getf control :summary))
           :outcome (if final-p :completed :continue))))
 
 (defun make-agentic-loop-interruption-state (loop iteration prompt condition)

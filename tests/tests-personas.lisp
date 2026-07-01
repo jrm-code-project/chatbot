@@ -202,7 +202,8 @@ Second instruction paragraph." s))
            (declare (ignore prompt callback file files temperature top-p))
            (setf observed-backend (chatbot-backend (conversation-chatbot conversation)))
            (setf observed-model (chatbot-model (conversation-chatbot conversation)))
-           "FINAL: persona loop defaults applied")))
+           (cl-json:encode-json-to-string '(("status" . "final")
+                                            ("summary" . "persona loop defaults applied"))))))
     (ensure-directories-exist test-persona-dir)
     (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
                       :direction :output
@@ -1002,12 +1003,27 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                (*http-post-function*
                  (lambda (url &rest args)
                    (declare (ignore url args))
-                   (values
-                    (make-string-input-stream
-                     "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
-data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Subordinate persona replied.\"}}
-data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"sub1-model\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
-                    200))))
+                   (let ((payload
+                          (format nil
+                                   "data: ~A~%data: ~A~%data: ~A"
+                                   (cl-json:encode-json-to-string
+                                    '(("event_type" . "interaction.created")
+                                      ("interaction" . (("id" . "session-1")))))
+                                   (cl-json:encode-json-to-string
+                                    `(("event_type" . "step.delta")
+                                      ("delta" . (("type" . "text")
+                                                  ("text" . ,(format nil
+                                                                     "{\"reply\":~A,\"spawn\":null}"
+                                                                     (cl-json:encode-json-to-string
+                                                                      "Subordinate persona replied.")))))))
+                                   (cl-json:encode-json-to-string
+                                    '(("event_type" . "interaction.completed")
+                                      ("interaction" . (("id" . "session-1")
+                                                        ("model" . "sub1-model")
+                                                        ("usage" . (("total_input_tokens" . 1)
+                                                                    ("total_output_tokens" . 1)
+                                                                    ("total_tokens" . 2))))))))))
+                    (values (make-string-input-stream payload) 200)))))
            (let* ((conv (new-chat-persona "parent-persona"))
                   (bot (conversation-chatbot conv))
                   (subs (chatbot-subordinates bot)))

@@ -177,3 +177,32 @@ even if the plist is malformed."
              :context context
              :payload line
              :reason (princ-to-string e)))))
+
+(defun json-object-keys (payload)
+  "Returns PAYLOAD object keys normalized to lowercase strings."
+  (mapcar (lambda (entry)
+            (json-key-name (car entry)))
+          payload))
+
+(defun ensure-json-object-only-keys (payload required-keys optional-keys context)
+  "Signals an error unless PAYLOAD contains exactly the allowed keys for CONTEXT."
+  (let* ((actual-keys (json-object-keys payload))
+         (allowed-keys (append required-keys optional-keys))
+         (missing-keys (remove-if (lambda (key)
+                                    (member key actual-keys :test #'string=))
+                                  required-keys))
+         (unexpected-keys (remove-if (lambda (key)
+                                       (member key allowed-keys :test #'string=))
+                                     actual-keys)))
+    (when missing-keys
+      (error "Invalid ~A payload: missing required keys ~{~A~^, ~}." context missing-keys))
+    (when unexpected-keys
+      (error "Invalid ~A payload: unexpected keys ~{~A~^, ~}." context unexpected-keys))
+    payload))
+
+(defun require-non-empty-json-string (value field-name context)
+  "Returns VALUE when it is a non-empty string for CONTEXT, otherwise signals an error."
+  (unless (and (stringp value)
+               (string/= "" (string-trim '(#\Space #\Tab #\Return #\Linefeed) value)))
+    (error "Invalid ~A payload: field ~A must be a non-empty string." context field-name))
+  value)

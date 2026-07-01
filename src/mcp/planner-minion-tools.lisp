@@ -8,12 +8,14 @@
 You are a minion named '~A' at hierarchical depth ~D.
 You have been allocated a token budget of ~A.
 You are capable of delegating tasks to your own subordinate minions if needed.
-To delegate a task, output a command in this exact format in your response:
-[SPAWN-SUB: name=\"child_name\", budget=number]
-Where child_name is the unique name of the child minion to spawn, and budget is the number of tokens allocated to it.
-Ensure the child_name is unique and budget is within your remaining budget of ~A.
-Once spawned, you can talk to the child using the 'promptSubordinate' tool.
-Do not output anything else in the spawn command line itself, but continue your response normally."
+You MUST respond with ONLY a strict JSON object in exactly this schema:
+{\"reply\":\"plain text for the parent shell\",\"spawn\":null}
+or
+{\"reply\":\"plain text for the parent shell\",\"spawn\":{\"name\":\"child_name\",\"budget\":123}}
+The reply field must always be a non-empty string.
+The spawn field must be either null or an object with exactly the string field name and integer field budget.
+If you request a spawn, child_name must be unique and budget must be within your remaining budget of ~A.
+Do not add commentary before or after the JSON. Do not wrap it in Markdown."
           name
           depth
           (or remaining-budget "unbounded")
@@ -27,8 +29,9 @@ Do not output anything else in the spawn command line itself, but continue your 
                                             "~&[CRITICAL OPERATION DIRECTIVE]~%"
                                             "You are a worker minion named '~A'.~%"
                                             "You must DIRECTLY write Lisp code and execute tasks yourself.~%"
-                                            "Do NOT output [SPAWN-SUB] commands. Do NOT try to delegate tasks.~%"
-                                            "Solve all requests entirely within your own response.")
+                                            "Do NOT request delegation or child spawns.~%"
+                                            "You MUST respond with ONLY strict JSON in this exact schema: {\"reply\":\"plain text for the parent shell\",\"spawn\":null}.~%"
+                                            "Do not add commentary before or after the JSON.")
                                name)
                    (format-delegation-instruction name depth remaining-budget)))
          (curr (chatbot-system-instruction bot)))
@@ -164,43 +167,69 @@ Do not output anything else in the spawn command line itself, but continue your 
       (:backend . ,(string-downcase (symbol-name (chatbot-backend sub-bot))))
       (:model . ,(or (chatbot-model sub-bot) "default")))))
 
-(defun parse-and-execute-spawn-trigger (bot response)
-  "Parses RESPONSE for a spawn trigger [SPAWN-SUB: name=\"child_name\", budget=1000].
-If found, extracts those parameters, validates, and spawns the child under BOT."
-  (let ((pattern "\\[SPAWN-SUB:\\s*name=\"([^\"]+)\"\\s*,\\s*budget=(\\d+)\\]"))
-    (cl-ppcre:register-groups-bind (child-name budget-str) (pattern response)
-      (let* ((budget (parse-integer budget-str :junk-allowed t))
-             (existing (find-subordinate-conversation bot child-name)))
-        (cond
-          (existing nil)
-          ((> (1+ (chatbot-depth bot)) *max-minion-depth*)
-           (format nil "~%[SYSTEM ERROR: Spawn failed: Maximum nesting depth (~D) exceeded.]" *max-minion-depth*))
-          ((and (chatbot-token-budget bot)
-                (> budget (- (chatbot-token-budget bot) (chatbot-spent-tokens bot))))
-           (format nil "~%[SYSTEM ERROR: Spawn failed: Requested budget (~D) exceeds remaining budget (~D).]"
-                   budget (- (chatbot-token-budget bot) (chatbot-spent-tokens bot))))
-          (t
-           (when (chatbot-token-budget bot)
-             (incf (chatbot-spent-tokens bot) budget))
-           (let* ((parent-dir (or (chatbot-scoped-directory bot)
-                                  (chatbot-filesystem-root-directory bot)
-                                  (uiop:default-temporary-directory)))
-                  (child-dir (merge-pathnames (format nil "minion-sandbox-~A/" child-name) parent-dir)))
-             (ensure-directories-exist child-dir)
-             (let* ((child-depth (1+ (chatbot-depth bot)))
-                    (sub-conv
-                      (spawn-subordinate-conversation
-                       bot
-                       child-name
-                       child-depth
-                       child-dir
-                       :backend-kw (chatbot-backend bot)
-                       :model (chatbot-model bot)
-                       :requested-budget budget
-                       :web-tools-p (chatbot-web-tools-p bot))))
-               (attach-subordinate-conversation bot sub-conv)
-               (format nil "~%[SYSTEM INFO: Successfully spawned subordinate minion '~A' with budget ~D at depth ~D.]"
-                       child-name budget child-depth)))))))))
+(defun parse-subordinate-control-response (response)
+  "Parses one strict subordinate control RESPONSE JSON payload."
+  (let* ((payload (parse-json-or-error response :context "subordinate control response"))
+         (context "subordinate control response"))
+    (unless (json-object-alist-p payload)
+      (error "Invalid ~A payload: expected a JSON object." context))
+    (ensure-json-object-only-keys payload '("reply" "spawn") '() context)
+    (let* ((reply (require-non-empty-json-string (mcp-val "reply" payload) "reply" context))
+           (raw-spawn (mcp-val "spawn" payload))
+           (spawn (if (or (null raw-spawn)
+                          (eq raw-spawn :null)
+                          (search "null"
+                                  (string-downcase (princ-to-string raw-spawn))))
+                      nil
+                      raw-spawn)))
+      (when spawn
+        (unless (json-object-alist-p spawn)
+          (error "Invalid ~A payload: spawn must be null or a JSON object." context))
+        (ensure-json-object-only-keys spawn '("name" "budget") '() "subordinate spawn")
+        (let ((name (mcp-val "name" spawn))
+              (budget (mcp-val "budget" spawn)))
+          (require-non-empty-json-string name "name" "subordinate spawn")
+          (unless (and (integerp budget) (> budget 0))
+            (error "Invalid subordinate spawn payload: budget must be a positive integer."))))
+      (list :reply reply
+            :spawn spawn))))
+
+(defun maybe-execute-subordinate-spawn-request (bot spawn)
+  "Executes one validated subordinate SPAWN request and returns any shell note."
+  (when spawn
+    (let* ((child-name (mcp-val "name" spawn))
+           (budget (mcp-val "budget" spawn))
+           (existing (find-subordinate-conversation bot child-name)))
+      (cond
+        (existing nil)
+        ((> (1+ (chatbot-depth bot)) *max-minion-depth*)
+         (format nil "~%[SYSTEM ERROR: Spawn failed: Maximum nesting depth (~D) exceeded.]" *max-minion-depth*))
+        ((and (chatbot-token-budget bot)
+              (> budget (- (chatbot-token-budget bot) (chatbot-spent-tokens bot))))
+         (format nil "~%[SYSTEM ERROR: Spawn failed: Requested budget (~D) exceeds remaining budget (~D).]"
+                 budget (- (chatbot-token-budget bot) (chatbot-spent-tokens bot))))
+        (t
+         (when (chatbot-token-budget bot)
+           (incf (chatbot-spent-tokens bot) budget))
+         (let* ((parent-dir (or (chatbot-scoped-directory bot)
+                                (chatbot-filesystem-root-directory bot)
+                                (uiop:default-temporary-directory)))
+                (child-dir (merge-pathnames (format nil "minion-sandbox-~A/" child-name) parent-dir)))
+           (ensure-directories-exist child-dir)
+           (let* ((child-depth (1+ (chatbot-depth bot)))
+                  (sub-conv
+                    (spawn-subordinate-conversation
+                     bot
+                     child-name
+                     child-depth
+                     child-dir
+                     :backend-kw (chatbot-backend bot)
+                     :model (chatbot-model bot)
+                     :requested-budget budget
+                     :web-tools-p (chatbot-web-tools-p bot))))
+             (attach-subordinate-conversation bot sub-conv)
+             (format nil "~%[SYSTEM INFO: Successfully spawned subordinate minion '~A' with budget ~D at depth ~D.]"
+                     child-name budget child-depth))))))))
 
 (defun recursively-dismiss-conversation (conv)
   "Recursively dismisses all subordinate conversations of CONV."
@@ -248,12 +277,14 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
      task-key
      (lambda ()
        (let* ((response (chat prompt :conversation sub-conv))
+              (control (parse-subordinate-control-response response))
               (sub-bot (conversation-chatbot sub-conv))
-              (spawn-msg (parse-and-execute-spawn-trigger sub-bot response)))
+              (spawn-msg (maybe-execute-subordinate-spawn-request sub-bot
+                                                                  (getf control :spawn))))
          (save-minion-state sub-conv)
          (if spawn-msg
-             (format nil "~A~%~A" response spawn-msg)
-             response))))))
+             (format nil "~A~%~A" (getf control :reply) spawn-msg)
+             (getf control :reply)))))))
 
 (defun execute-spawn-minion-tool (bot arguments tool-name)
   "Runs the built-in spawnMinion tool."

@@ -3,6 +3,11 @@
 (in-package "CHATBOT")
 (fiveam:in-suite chatbot-suite)
 
+(defun test-agentic-loop-response (status summary)
+  "Returns one strict JSON control response for agentic loop tests."
+  (cl-json:encode-json-to-string `(("status" . ,status)
+                                   ("summary" . ,summary))))
+
 (defun wait-for-agentic-loop-status (loop statuses &key (timeout-seconds 3.0d0))
   "Polls LOOP until its status is one of STATUSES or TIMEOUT-SECONDS elapses."
   (let ((deadline (+ (get-internal-real-time)
@@ -18,7 +23,7 @@
   (let ((*agentic-loop-chat-function*
          (lambda (prompt &key conversation callback file files temperature top-p)
            (declare (ignore prompt conversation callback file files temperature top-p))
-           "FINAL: loop finished"))
+           (test-agentic-loop-response "final" "loop finished")))
         (conversation (new-chat :backend :openai)))
     (unwind-protect
          (let ((loop (start-agentic-loop conversation "Finish the task" :max-iterations 3)))
@@ -48,7 +53,7 @@
               (conversation-chatbot conversation)
               "(+ 1 2)"
               "eval")
-             "FINAL: eval complete")))
+             (test-agentic-loop-response "final" "eval complete"))))
     (unwind-protect
          (let ((loop (start-agentic-loop conversation "Run eval" :max-iterations 2)))
            (fiveam:is (eq :awaiting-approval
@@ -72,7 +77,7 @@
             (setf entered-step-p t)
             (loop until release-step-p
                   do (sleep 0.01))
-            "FINAL: this response must not win after abort"))
+            (test-agentic-loop-response "final" "this response must not win after abort")))
          (conversation (new-chat :backend :openai)))
     (unwind-protect
          (let ((loop (start-agentic-loop conversation "Interrupt the running step" :max-iterations 3)))
@@ -104,7 +109,7 @@
             (declare (ignore prompt callback file files temperature top-p))
             (setf observed-backend (chatbot-backend (conversation-chatbot conversation)))
             (setf observed-model (chatbot-model (conversation-chatbot conversation)))
-            "FINAL: override applied"))
+            (test-agentic-loop-response "final" "override applied")))
          (conversation (new-chat :backend :google :model "gemini-3.5-flash")))
     (unwind-protect
          (let ((loop (start-agentic-loop conversation
@@ -129,7 +134,7 @@
             (declare (ignore prompt callback file files temperature top-p))
             (setf observed-backend (chatbot-backend (conversation-chatbot conversation)))
             (setf observed-model (chatbot-model (conversation-chatbot conversation)))
-            "FINAL: default profile applied"))
+            (test-agentic-loop-response "final" "default profile applied")))
          (context (make-runtime-context :agentic-loop-default-backend :openai
                                         :agentic-loop-default-model "gpt-4o-mini"))
          (conversation (new-chat :backend :google
@@ -156,7 +161,7 @@
             (declare (ignore prompt callback file files temperature top-p))
             (setf observed-backend (chatbot-backend (conversation-chatbot conversation)))
             (setf observed-model (chatbot-model (conversation-chatbot conversation)))
-            "FINAL: explicit profile applied"))
+            (test-agentic-loop-response "final" "explicit profile applied")))
          (context (make-runtime-context :agentic-loop-default-backend :openai
                                         :agentic-loop-default-model "gpt-4o-mini"))
          (conversation (new-chat :backend :google
@@ -181,7 +186,7 @@
   (let ((*agentic-loop-chat-function*
          (lambda (prompt &key conversation callback file files temperature top-p)
            (declare (ignore prompt conversation callback file files temperature top-p))
-           "FINAL: started by tool"))
+           (test-agentic-loop-response "final" "started by tool")))
         (conversation (new-chat :backend :openai)))
     (unwind-protect
          (let* ((*active-conversation* conversation)
@@ -209,7 +214,7 @@
   (let* ((*agentic-loop-chat-function*
           (lambda (prompt &key conversation callback file files temperature top-p)
            (declare (ignore prompt conversation callback file files temperature top-p))
-           "FINAL: started by tool with defaults"))
+           (test-agentic-loop-response "final" "started by tool with defaults")))
          (context (make-runtime-context :agentic-loop-default-backend :openai
                                        :agentic-loop-default-model "gpt-4.1-mini"))
          (conversation (new-chat :backend :google
@@ -245,7 +250,7 @@
            (incf calls)
            (if (= calls 1)
                (error "Malformed response from minion.")
-               "FINAL: recovered after restart")))
+               (test-agentic-loop-response "final" "recovered after restart"))))
         (conversation (new-chat :backend :openai)))
     (unwind-protect
         (let ((loop (start-agentic-loop conversation "Recover from failure" :max-iterations 2)))
@@ -262,6 +267,34 @@
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))
 
+(fiveam:test test-monitor-restarts-agentic-loop-after-invalid-structured-output
+  (let* ((*agentic-loop-supervisor-max-restarts* 1)
+         (*agentic-loop-supervisor-restart-backoff-seconds* 0.0d0)
+         (calls 0)
+         (*agentic-loop-chat-function*
+          (lambda (prompt &key conversation callback file files temperature top-p)
+            (declare (ignore prompt conversation callback file files temperature top-p))
+            (incf calls)
+            (if (= calls 1)
+                "Here is your code!"
+                (test-agentic-loop-response "final" "recovered after invalid structured output"))))
+         (conversation (new-chat :backend :openai)))
+    (unwind-protect
+        (let ((loop (start-agentic-loop conversation "Recover from invalid structured output" :max-iterations 2)))
+          (fiveam:is (eq :failed
+                         (wait-for-agentic-loop-status loop '(:failed :completed :limit-reached))))
+          (fiveam:is (search "agentic loop control response" (agentic-loop-last-error loop)))
+          (monitor-agentic-loops-once)
+          (monitor-agentic-loops-once)
+          (fiveam:is (eq :completed
+                         (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
+          (fiveam:is (= 2 calls))
+          (fiveam:is (= 1 (agentic-loop-supervisor-restart-count loop)))
+          (fiveam:is (string= "recovered after invalid structured output"
+                              (agentic-loop-result-summary loop))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
 (fiveam:test test-monitor-restarts-timed-out-agentic-loop-step
   (let* ((*agentic-loop-supervisor-timeout-seconds* 0.05d0)
         (*agentic-loop-supervisor-max-restarts* 1)
@@ -273,15 +306,18 @@
            (incf calls)
            (if (= calls 1)
                (loop do (sleep 0.01))
-               "FINAL: completed after timeout restart")))
+               (test-agentic-loop-response "final" "completed after timeout restart"))))
         (conversation (new-chat :backend :openai)))
     (unwind-protect
         (let ((loop (start-agentic-loop conversation "Recover from timeout" :max-iterations 2)))
           (fiveam:is (eq :running
                          (wait-for-agentic-loop-status loop '(:running :completed :failed :limit-reached))))
           (sleep 0.08)
-          (monitor-agentic-loops-once)
-          (monitor-agentic-loops-once)
+          (loop repeat 50
+                until (or (= calls 2)
+                          (eq :completed (agentic-loop-status loop)))
+                do (monitor-agentic-loops-once)
+                   (sleep 0.01))
           (fiveam:is (eq :completed
                          (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
           (fiveam:is (= 2 calls))
@@ -299,7 +335,7 @@
          (*agentic-loop-chat-function*
           (lambda (prompt &key conversation callback file files temperature top-p)
             (declare (ignore prompt conversation callback file files temperature top-p))
-            "FINAL: ok")))
+            (test-agentic-loop-response "final" "ok"))))
     (unwind-protect
          (let ((loop-a (start-agentic-loop conv-a "Goal A" :max-iterations 2))
                (loop-b (start-agentic-loop conv-b "Goal B" :max-iterations 2)))

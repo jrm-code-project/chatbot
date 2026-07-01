@@ -18,6 +18,45 @@
   (with-open-file (stream path :direction :input)
     (read stream nil nil)))
 
+(defun test-subordinate-control-response (&key reply spawn)
+  "Returns one strict subordinate control JSON string for tests."
+  (format nil
+          "{\"reply\":~A,\"spawn\":~A}"
+          (cl-json:encode-json-to-string reply)
+          (if spawn
+              (cl-json:encode-json-to-string spawn)
+              "null")))
+
+(defun test-openai-subordinate-stream (reply &key spawn)
+  "Returns one OpenAI-compatible SSE stream whose content is a structured subordinate reply."
+  (format nil
+          "data: ~A~%data: [DONE]"
+          (cl-json:encode-json-to-string
+           `(("choices" . ,(vector `(("delta" . (("content" . ,(test-subordinate-control-response
+                                                                 :reply reply
+                                                                 :spawn spawn)))))))))))
+
+(defun test-gemini-subordinate-stream (reply &key spawn (interaction-id "session-1") (model "gemini-3.5-flash"))
+  "Returns one Gemini-compatible SSE stream whose text is a structured subordinate reply."
+  (format nil
+          "data: ~A~%data: ~A~%data: ~A"
+          (cl-json:encode-json-to-string
+           `(("event_type" . "interaction.created")
+             ("interaction" . (("id" . ,interaction-id)))))
+          (cl-json:encode-json-to-string
+           `(("event_type" . "step.delta")
+             ("delta" . (("type" . "text")
+                         ("text" . ,(test-subordinate-control-response
+                                     :reply reply
+                                     :spawn spawn))))))
+          (cl-json:encode-json-to-string
+           `(("event_type" . "interaction.completed")
+             ("interaction" . (("id" . ,interaction-id)
+                               ("model" . ,model)
+                               ("usage" . (("total_input_tokens" . 1)
+                                           ("total_output_tokens" . 1)
+                                           ("total_tokens" . 2)))))))))
+
 (defun make-grounding-search-response (&key total-results items)
   "Builds a mock GOOGLE search response hash table."
   (let ((response (make-hash-table :test #'eql))
@@ -1168,19 +1207,16 @@
            (lambda (url &rest args)
              (declare (ignore args))
              (cond
-               ((search "api.openai.com" url)
-                (values
-                 (make-string-input-stream
-                  "data: {\"choices\": [{\"delta\": {\"content\": \"Minion Bello here.\"}}]}
-data: [DONE]")
-                 200))
-               (t
-                (values
-                 (make-string-input-stream
-                  "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
-data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Minion Bello here.\"}}
-data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gpt-4o\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
-                 200))))))
+              ((search "api.openai.com" url)
+               (values
+                (make-string-input-stream
+                 (test-openai-subordinate-stream "Minion Bello here."))
+                200))
+              (t
+               (values
+                (make-string-input-stream
+                 (test-gemini-subordinate-stream "Minion Bello here." :model "gpt-4o"))
+                200))))))
     (ensure-directories-exist test-persona-dir)
     (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
                        :direction :output
@@ -1245,9 +1281,10 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
              (declare (ignore url args))
              (values
               (make-string-input-stream
-               "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
-data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"I need to delegate. [SPAWN-SUB: name=\\\"Minion-L3\\\", budget=400]\"}}
-data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-3.5-flash\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
+               (test-gemini-subordinate-stream
+                "I need to delegate."
+                :spawn '(("name" . "Minion-L3")
+                         ("budget" . 400))))
               200))))
     (unwind-protect
          (let ((*user-homedir-pathname-function* (lambda () mock-home))
@@ -1295,7 +1332,12 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                          (declare (ignore url args))
                          (values
                           (make-string-input-stream
-                           "data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Attempting depth 4. [SPAWN-SUB: name=\\\"Minion-L4\\\", budget=100]\"}}")
+                           (test-gemini-subordinate-stream
+                            "Attempting depth 4."
+                            :spawn '(("name" . "Minion-L4")
+                                     ("budget" . 100))
+                            :interaction-id "session-depth"
+                            :model "gemini-3.5-flash"))
                           200))))
                  (let ((prompt-res (execute-chatbot-tool-by-name minion-l2-bot "promptSubordinate"
                                                                  '(("name" . "Minion-L3")
@@ -1311,7 +1353,12 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                          (declare (ignore url args))
                          (values
                           (make-string-input-stream
-                           "data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Excessive budget. [SPAWN-SUB: name=\\\"Minion-Rich\\\", budget=700]\"}}")
+                           (test-gemini-subordinate-stream
+                            "Excessive budget."
+                            :spawn '(("name" . "Minion-Rich")
+                                     ("budget" . 700))
+                            :interaction-id "session-budget"
+                            :model "gemini-3.5-flash"))
                           200))))
                  (let ((prompt-res (execute-chatbot-tool-by-name bot "promptSubordinate"
                                                                  '(("name" . "Minion-L2")
@@ -1371,9 +1418,10 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                    (incf http-calls)
                    (values
                     (make-string-input-stream
-                     "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
-data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"I need to delegate. [SPAWN-SUB: name=\\\"Minion-L3\\\", budget=400]\"}}
-data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-3.5-flash\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
+                     (test-gemini-subordinate-stream
+                      "I need to delegate."
+                      :spawn '(("name" . "Minion-L3")
+                               ("budget" . 400))))
                     200)))))
            (let ((spawn-res (execute-chatbot-tool-by-name bot "spawnMinion"
                                                           '(("name" . "Minion-L2")
@@ -1411,8 +1459,18 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
              (declare (ignore url args))
              (values
               (make-string-input-stream
-               "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
-data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Reporting [SPAWN-SUB: name=\\\"Sub-Minion\\\", budget=500]\"}}")
+               (format nil
+                       "data: ~A~%data: ~A"
+                       (cl-json:encode-json-to-string
+                        '(("event_type" . "interaction.created")
+                          ("interaction" . (("id" . "session-1")))))
+                       (cl-json:encode-json-to-string
+                        `(("event_type" . "step.delta")
+                          ("delta" . (("type" . "text")
+                                      ("text" . ,(test-subordinate-control-response
+                                                  :reply "Reporting"
+                                                  :spawn '(("name" . "Sub-Minion")
+                                                           ("budget" . 500))))))))))
               200))))
     (ensure-directories-exist mock-minions-dir)
     (unwind-protect
