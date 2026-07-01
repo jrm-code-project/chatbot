@@ -43,6 +43,7 @@ These areas should not be treated as fresh debt, but as **partially retired debt
    - Remaining debt: process supervision, shutdown behavior, and startup-policy coupling still need further lifecycle decomposition.
 
 5. **Tool-execution filesystem split**
+   - MCP server lookup and MCP tool result-shaping now live in `src/mcp/mcp-dispatch.lisp`.
    - Built-in tool argument normalization now lives in `src/mcp/tool-arguments.lisp`, and filesystem tool helpers now live in `src/mcp/filesystem-tools.lisp`.
    - The remaining built-in filesystem handlers (`readFileLines`, `directory`, `writeFile`, and `deleteFile`) now also live in `src/mcp/filesystem-tools.lisp`.
    - System-instruction and sampling tool helpers now also live in `src/mcp/chatbot-state-tools.lisp`.
@@ -50,7 +51,7 @@ These areas should not be treated as fresh debt, but as **partially retired debt
    - Git tool behavior now also lives in `src/mcp/git-tools.lisp`.
    - Agentic loop built-ins now also live in `src/mcp/agentic-loop-tools.lisp`.
    - Planner and minion orchestration now also live in `src/mcp/planner-minion-tools.lisp`.
-   - Remaining debt: `src/mcp/tool-execution.lisp` is now much narrower, and mostly holds built-in registrations and shared execution plumbing.
+   - Remaining debt: `src/mcp/tool-execution.lisp` is now much narrower, and mostly holds built-in registrations plus top-level execution entry points.
 
 6. **Provider backend phase splitting**
    - `src/backends/backend-google.lisp` now separates Google request submission into API-key validation, request assembly, HTTP posting, and HTTP-response normalization helpers above `submit-google-turn`.
