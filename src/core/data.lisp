@@ -303,21 +303,21 @@
 (defclass round-robin-participant ()
   ((name
     :initarg :name
-    :accessor round-robin-participant-name
+    :reader round-robin-participant-name
     :documentation "Human-readable name identifying this chatbot in round-robin transcripts.")
    (conversation
     :initarg :conversation
-    :accessor round-robin-participant-conversation
+    :reader round-robin-participant-conversation
     :documentation "Conversation state backing this participant's turns.")))
 
 (defclass round-robin-session ()
   ((participants
     :initarg :participants
-    :accessor round-robin-session-participants
+    :reader round-robin-session-participants
     :documentation "Ordered round-robin participants.")
    (user-name
     :initarg :user-name
-    :accessor round-robin-session-user-name
+    :reader round-robin-session-user-name
     :initform "User"
     :documentation "Display name used for the human participant in the shared transcript.")
    (transcript
@@ -329,11 +329,11 @@
 (defclass persona ()
   ((name
     :initarg :name
-    :accessor persona-name
+    :reader persona-name
     :documentation "Unique runtime identifier for an active sandbox persona.")
    (conversation
     :initarg :conversation
-    :accessor persona-conversation
+    :reader persona-conversation
     :documentation "Conversation state backing this sandbox persona.")
    (history
     :initarg :history
@@ -349,12 +349,12 @@
 (defclass persona-registry ()
   ((personas
      :initarg :personas
-     :accessor persona-registry-personas
+     :reader persona-registry-personas
      :initform (make-hash-table :test 'equal)
      :documentation "Hash table mapping active sandbox persona names to PERSONA instances.")
    (lock
      :initarg :lock
-     :accessor persona-registry-lock
+     :reader persona-registry-lock
      :initform (sb-thread:make-mutex :name "persona-registry-lock")
      :documentation "Mutex protecting PERSONAS updates and reads.")))
 

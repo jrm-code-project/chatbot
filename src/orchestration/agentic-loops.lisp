@@ -43,13 +43,13 @@
 (defclass agentic-loop ()
   ((id
     :initarg :id
-    :accessor agentic-loop-id)
+    :reader agentic-loop-id)
    (goal
     :initarg :goal
-    :accessor agentic-loop-goal)
+    :reader agentic-loop-goal)
    (max-iterations
     :initarg :max-iterations
-    :accessor agentic-loop-max-iterations
+    :reader agentic-loop-max-iterations
     :initform 10)
    (current-iteration
     :initarg :current-iteration
@@ -65,13 +65,13 @@
     :initform nil)
    (conversation
     :initarg :conversation
-    :accessor agentic-loop-conversation)
+    :reader agentic-loop-conversation)
    (runtime-context
     :initarg :runtime-context
     :accessor agentic-loop-runtime-context)
    (chat-function
     :initarg :chat-function
-    :accessor agentic-loop-chat-function-override
+    :reader agentic-loop-chat-function-override
     :initform nil)
    (execution-profile
     :initarg :execution-profile
@@ -99,7 +99,7 @@
     :initform nil)
    (approval-waitqueue
     :initarg :approval-waitqueue
-    :accessor agentic-loop-approval-waitqueue
+    :reader agentic-loop-approval-waitqueue
     :initform (sb-thread:make-waitqueue :name "agentic-loop-approval-waitqueue"))
    (pending-step-prompt
     :initarg :pending-step-prompt
@@ -107,7 +107,7 @@
     :initform nil)
    (created-at
     :initarg :created-at
-    :accessor agentic-loop-created-at
+    :reader agentic-loop-created-at
     :initform (get-high-precision-timestamp))
    (started-at
     :initarg :started-at
@@ -119,7 +119,7 @@
     :initform nil)
    (lock
     :initarg :lock
-    :accessor agentic-loop-lock
+    :reader agentic-loop-lock
     :initform (sb-thread:make-mutex :name "agentic-loop-lock"))))
 
 (defun next-agentic-loop-id ()
@@ -422,6 +422,54 @@
   (setf (agentic-loop-step-history loop)
         (append (agentic-loop-step-history loop) (list record))))
 
+(defun agentic-loop-terminal-status-p (status)
+  "Returns true when STATUS is terminal for an autonomous loop."
+  (member status '(:completed :failed :limit-reached :interrupted)))
+
+(defun agentic-loop-live-status-p (status)
+  "Returns true when STATUS expects a live worker thread."
+  (member status '(:running :awaiting-approval)))
+
+(defun make-agentic-loop-response-state (iteration prompt response)
+  "Returns the next loop state implied by RESPONSE."
+  (let ((final-p (agentic-loop-final-response-p response)))
+    (list :current-iteration iteration
+          :pending-step-prompt nil
+          :pending-approval nil
+          :pending-approval-decision nil
+          :record (make-agentic-loop-step-record iteration :completed
+                                                 :prompt prompt
+                                                 :response response)
+          :status (if final-p :completed :running)
+          :result-summary (and final-p
+                               (agentic-loop-final-response-text response))
+          :outcome (if final-p :completed :continue))))
+
+(defun make-agentic-loop-interruption-state (loop iteration prompt condition)
+  "Returns the next loop state implied by an interruption CONDITION."
+  (list :current-iteration (agentic-loop-current-iteration loop)
+        :pending-step-prompt nil
+        :pending-approval (agentic-loop-pending-approval loop)
+        :pending-approval-decision nil
+        :record (make-agentic-loop-step-record iteration :interrupted
+                                               :prompt prompt
+                                               :note (princ-to-string condition))
+        :outcome :interrupted))
+
+(defun apply-agentic-loop-step-state (loop state)
+  "Applies one computed step STATE to LOOP and returns the step outcome keyword."
+  (setf (agentic-loop-current-iteration loop) (getf state :current-iteration))
+  (setf (agentic-loop-pending-step-prompt loop) (getf state :pending-step-prompt))
+  (setf (agentic-loop-pending-approval loop) (getf state :pending-approval))
+  (setf (agentic-loop-pending-approval-decision loop)
+        (getf state :pending-approval-decision))
+  (append-agentic-loop-step-record loop (getf state :record))
+  (when (member :status state)
+    (setf (agentic-loop-status loop) (getf state :status)))
+  (when (member :result-summary state)
+    (setf (agentic-loop-result-summary loop) (getf state :result-summary)))
+  (getf state :outcome))
+
 (defun agentic-loop-log (level loop message &key context)
   "Emits one concise loop lifecycle log entry."
   (log-message level
@@ -487,32 +535,14 @@
                                   prompt
                                   :conversation conversation)))
             (ensure-agentic-loop-not-interrupted loop)
-            (incf (agentic-loop-current-iteration loop))
-            (setf (agentic-loop-pending-step-prompt loop) nil)
-            (setf (agentic-loop-pending-approval loop) nil)
-            (setf (agentic-loop-pending-approval-decision loop) nil)
-            (append-agentic-loop-step-record
+            (apply-agentic-loop-step-state
              loop
-             (make-agentic-loop-step-record iteration :completed
-                                           :prompt prompt
-                                           :response response))
-            (if (agentic-loop-final-response-p response)
-                (progn
-                  (setf (agentic-loop-status loop) :completed)
-                  (setf (agentic-loop-result-summary loop)
-                       (agentic-loop-final-response-text response))
-                  :completed)
-                :continue)))
+             (make-agentic-loop-response-state iteration prompt response))))
       (agentic-loop-interrupted (condition)
         (restore-conversation-state conversation snapshot)
-        (setf (agentic-loop-pending-step-prompt loop) nil)
-        (setf (agentic-loop-pending-approval-decision loop) nil)
-        (append-agentic-loop-step-record
+        (apply-agentic-loop-step-state
          loop
-         (make-agentic-loop-step-record iteration :interrupted
-                                        :prompt prompt
-                                        :note (princ-to-string condition)))
-        :interrupted))))
+         (make-agentic-loop-interruption-state loop iteration prompt condition))))))
 
 (defun run-agentic-loop-worker (loop)
   "Runs LOOP to completion, pause, interruption, or failure."
@@ -677,7 +707,7 @@
 
         ;; 2. Zombie state: status is :running or :awaiting-approval, but the worker thread is dead.
         ;; We push it to :failed (aborted) to ensure it doesn't stay stuck forever.
-        ((and (member status '(:running :awaiting-approval)) (not alive))
+        ((and (agentic-loop-live-status-p status) (not alive))
          (log-message :warn (format nil "Monitor: Detected zombie loop ~A (status: ~A, thread dead)" 
                                     (agentic-loop-id loop) status))
          (sb-thread:with-mutex ((agentic-loop-lock loop))
@@ -730,7 +760,7 @@
               (let ((loop (sb-thread:with-mutex (*agentic-loop-registry-lock*)
                             (gethash id *agentic-loop-registry*))))
                 (when (or (null loop)
-                          (member (agentic-loop-status loop) '(:completed :failed :limit-reached :interrupted)))
+                         (agentic-loop-terminal-status-p (agentic-loop-status loop)))
                   (log-message :warn (format nil "Reaper: Terminating orphaned worker thread: ~A" name))
                   (handler-case (sb-thread:terminate-thread thread)
                     (error () nil)))))))))))

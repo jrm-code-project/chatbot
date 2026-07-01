@@ -17,7 +17,7 @@
 (defclass mcp-server ()
   ((name
     :initarg :name
-    :accessor mcp-server-name
+    :reader mcp-server-name
     :initform nil
     :documentation "The name of the MCP server.")
    (process
@@ -52,7 +52,7 @@
     :documentation "Counter for unique request IDs.")
    (request-id-lock
     :initarg :request-id-lock
-    :accessor mcp-server-request-id-lock
+    :reader mcp-server-request-id-lock
     :initform (sb-thread:make-mutex :name "mcp-request-id-lock")
     :documentation "Lock for request counter and pending requests table.")
    (tool-list-cache

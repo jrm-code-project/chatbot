@@ -6,21 +6,21 @@
 (defclass mcp-startup-entry ()
   ((name
     :initarg :name
-    :accessor mcp-startup-entry-name
+    :reader mcp-startup-entry-name
     :documentation "Configured MCP server name.")
    (command
     :initarg :command
-    :accessor mcp-startup-entry-command
+    :reader mcp-startup-entry-command
     :initform nil
     :documentation "Configured executable command for the server.")
    (args
     :initarg :args
-    :accessor mcp-startup-entry-args
+    :reader mcp-startup-entry-args
     :initform nil
     :documentation "Configured command-line arguments for the server.")
    (required-p
     :initarg :required-p
-    :accessor mcp-startup-entry-required-p
+    :reader mcp-startup-entry-required-p
     :initform nil
     :documentation "Whether this server is required in strict startup mode.")
    (success-p
@@ -42,32 +42,32 @@
 (defclass mcp-startup-status ()
   ((entries
     :initarg :entries
-    :accessor mcp-startup-status-entries
+    :reader mcp-startup-status-entries
     :initform nil
     :documentation "Per-server startup outcomes.")
    (strict-required-p
     :initarg :strict-required-p
-    :accessor mcp-startup-status-strict-required-p
+    :reader mcp-startup-status-strict-required-p
     :initform nil
     :documentation "Whether strict required-server failure handling was enabled.")
    (configured-count
     :initarg :configured-count
-    :accessor mcp-startup-status-configured-count
+    :reader mcp-startup-status-configured-count
     :initform 0
     :documentation "Number of configured server definitions considered.")
    (successful-count
     :initarg :successful-count
-    :accessor mcp-startup-status-successful-count
+    :reader mcp-startup-status-successful-count
     :initform 0
     :documentation "Number of successfully initialized servers.")
    (failed-count
     :initarg :failed-count
-    :accessor mcp-startup-status-failed-count
+    :reader mcp-startup-status-failed-count
     :initform 0
     :documentation "Number of failed server startups.")
    (required-failed-count
     :initarg :required-failed-count
-    :accessor mcp-startup-status-required-failed-count
+    :reader mcp-startup-status-required-failed-count
     :initform 0
     :documentation "Number of failed required server startups.")))
 
