@@ -42,6 +42,10 @@ These areas should not be treated as fresh debt, but as **partially retired debt
    - MCP configuration discovery, parsing, and built-in definition lookup now live in `src/mcp/mcp-config.lisp`, and `src/mcp/mcp-startup.lisp` is narrower than before.
    - Remaining debt: process supervision, shutdown behavior, and startup-policy coupling still need further lifecycle decomposition.
 
+5. **Tool-execution filesystem split**
+   - Built-in tool argument normalization now lives in `src/mcp/tool-arguments.lisp`, and filesystem tool helpers now live in `src/mcp/filesystem-tools.lisp`.
+   - Remaining debt: system-instruction tools, eval/grounding helpers, and planner/minion orchestration still keep `src/mcp/tool-execution.lisp` broader than ideal.
+
 ## Suggested fix order
 
 1. **Retire the legacy-global/runtime-context bridge** enough that new work no longer depends on it.
