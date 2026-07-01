@@ -51,6 +51,66 @@ Do not output anything else in the spawn command line itself, but continue your 
         :key #'subordinate-conversation-name
         :test #'string-equal))
 
+(defun make-chatbot-task-journal-entry ()
+  "Returns one fresh in-flight idempotency journal entry."
+  (list :status :running
+        :result nil
+        :waitqueue (sb-thread:make-waitqueue :name "chatbot-task-journal-entry")))
+
+(defun chatbot-task-journal-entry-status (entry)
+  "Returns ENTRY's execution status."
+  (getf entry :status))
+
+(defun chatbot-task-journal-entry-result (entry)
+  "Returns ENTRY's cached task result."
+  (getf entry :result))
+
+(defun chatbot-task-journal-entry-waitqueue (entry)
+  "Returns ENTRY's completion waitqueue."
+  (getf entry :waitqueue))
+
+(defun complete-chatbot-task-journal-entry (entry result)
+  "Marks ENTRY complete with RESULT and returns ENTRY."
+  (setf (getf entry :status) :completed)
+  (setf (getf entry :result) result)
+  entry)
+
+(defun call-with-idempotent-chatbot-task (bot task-key thunk)
+  "Runs THUNK exactly once per immutable TASK-KEY for BOT, reusing the first completed result."
+  (let ((journal (chatbot-task-journal bot))
+        (lock (chatbot-task-journal-lock bot)))
+    (block done
+      (loop
+        with claimed-entry = nil
+        do (sb-thread:with-mutex (lock)
+             (let ((entry (gethash task-key journal)))
+               (cond
+                 ((null entry)
+                  (setf claimed-entry (make-chatbot-task-journal-entry))
+                  (setf (gethash task-key journal) claimed-entry))
+                 ((eq (chatbot-task-journal-entry-status entry) :completed)
+                  (return-from done (chatbot-task-journal-entry-result entry)))
+                 ((eq (chatbot-task-journal-entry-status entry) :running)
+                  (sb-thread:condition-wait
+                   (chatbot-task-journal-entry-waitqueue entry)
+                   lock))
+                 (t
+                  (remhash task-key journal)))))
+           (when claimed-entry
+             (handler-case
+                 (let ((result (funcall thunk)))
+                   (sb-thread:with-mutex (lock)
+                     (complete-chatbot-task-journal-entry claimed-entry result)
+                     (sb-thread:condition-broadcast
+                      (chatbot-task-journal-entry-waitqueue claimed-entry)))
+                   (return-from done result))
+               (error (condition)
+                 (sb-thread:with-mutex (lock)
+                   (remhash task-key journal)
+                   (sb-thread:condition-broadcast
+                    (chatbot-task-journal-entry-waitqueue claimed-entry)))
+                 (error condition))))))))
+
 (defun append-conversation-user-message (conversation text)
   "Appends a transient user TEXT message to CONVERSATION and returns CONVERSATION."
   (setf (conversation-messages conversation)
@@ -175,18 +235,25 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                       (mcp-val :prompt arguments))
                   "prompt"
                   tool-name))
-         (sub-conv (find-subordinate-conversation bot name)))
+         (sub-conv (find-subordinate-conversation bot name))
+         (task-key `(:kind :prompt-subordinate
+                    :name ,name
+                    :prompt ,prompt)))
     (unless sub-conv
       (error 'mcp-tool-execution-error
              :tool-name tool-name
              :reason (format nil "Subordinate persona not found: ~A" name)))
-    (let* ((response (chat prompt :conversation sub-conv))
-           (sub-bot (conversation-chatbot sub-conv))
-           (spawn-msg (parse-and-execute-spawn-trigger sub-bot response)))
-      (save-minion-state sub-conv)
-      (if spawn-msg
-          (format nil "~A~%~A" response spawn-msg)
-          response))))
+    (call-with-idempotent-chatbot-task
+     bot
+     task-key
+     (lambda ()
+       (let* ((response (chat prompt :conversation sub-conv))
+              (sub-bot (conversation-chatbot sub-conv))
+              (spawn-msg (parse-and-execute-spawn-trigger sub-bot response)))
+         (save-minion-state sub-conv)
+         (if spawn-msg
+             (format nil "~A~%~A" response spawn-msg)
+             response))))))
 
 (defun execute-spawn-minion-tool (bot arguments tool-name)
   "Runs the built-in spawnMinion tool."
@@ -220,49 +287,61 @@ If found, extracts those parameters, validates, and spawns the child under BOT."
                                       (assoc :webTools arguments :test #'eq))))
                         (if cell
                             (cdr cell)
-                            (chatbot-web-tools-p bot)))))
-    (when (find name (chatbot-subordinates bot)
-                :key #'subordinate-conversation-name
-                :test #'string-equal)
-      (error 'mcp-tool-execution-error
-             :tool-name tool-name
-             :reason (format nil "A minion or subordinate named '~A' already exists." name)))
-    (let ((parent-depth (chatbot-depth bot)))
-      (when (>= (1+ parent-depth) *max-minion-depth*)
-        (error 'mcp-tool-execution-error
+                            (chatbot-web-tools-p bot))))
+         (task-key `(:kind :spawn-minion
+                    :name ,name
+                    :persona-name ,persona-name
+                    :backend ,backend-kw
+                    :model ,model
+                    :system-instruction ,system-instruction
+                    :requested-budget ,requested-budget
+                    :web-tools-p ,web-tools-p)))
+    (call-with-idempotent-chatbot-task
+     bot
+     task-key
+     (lambda ()
+       (when (find name (chatbot-subordinates bot)
+                  :key #'subordinate-conversation-name
+                  :test #'string-equal)
+         (error 'mcp-tool-execution-error
                :tool-name tool-name
-               :reason (format nil "Spawn failed: Maximum nesting depth (~D) exceeded." *max-minion-depth*))))
-    (let ((parent-budget (chatbot-token-budget bot))
-          (parent-spent (chatbot-spent-tokens bot)))
-      (when (and parent-budget requested-budget)
-        (let ((remaining (- parent-budget parent-spent)))
-          (when (> requested-budget remaining)
-            (error 'mcp-tool-execution-error
-                   :tool-name tool-name
-                   :reason (format nil "Spawn failed: Requested budget (~A) exceeds parent's remaining budget (~A)."
-                                   requested-budget remaining)))))
-      (when requested-budget
-        (incf (chatbot-spent-tokens bot) requested-budget)))
-    (let* ((parent-dir (or (chatbot-scoped-directory bot)
-                           (chatbot-filesystem-root-directory bot)
-                           (uiop:default-temporary-directory)))
-           (child-dir (merge-pathnames (format nil "minion-sandbox-~A/" name) parent-dir)))
-      (ensure-directories-exist child-dir)
-      (let* ((child-depth (1+ (chatbot-depth bot)))
-             (sub-conv
-               (spawn-subordinate-conversation
-                bot
-                name
-                child-depth
-                child-dir
-                :persona-name persona-name
-                :backend-kw backend-kw
-                :model model
-                :system-instruction system-instruction
-                :requested-budget requested-budget
-                :web-tools-p web-tools-p)))
-        (attach-subordinate-conversation bot sub-conv)
-        (format nil "Minion '~A' spawned successfully." name)))))
+               :reason (format nil "A minion or subordinate named '~A' already exists." name)))
+       (let ((parent-depth (chatbot-depth bot)))
+         (when (>= (1+ parent-depth) *max-minion-depth*)
+          (error 'mcp-tool-execution-error
+                 :tool-name tool-name
+                 :reason (format nil "Spawn failed: Maximum nesting depth (~D) exceeded." *max-minion-depth*))))
+       (let ((parent-budget (chatbot-token-budget bot))
+            (parent-spent (chatbot-spent-tokens bot)))
+         (when (and parent-budget requested-budget)
+          (let ((remaining (- parent-budget parent-spent)))
+            (when (> requested-budget remaining)
+              (error 'mcp-tool-execution-error
+                     :tool-name tool-name
+                     :reason (format nil "Spawn failed: Requested budget (~A) exceeds parent's remaining budget (~A)."
+                                     requested-budget remaining)))))
+         (when requested-budget
+          (incf (chatbot-spent-tokens bot) requested-budget)))
+       (let* ((parent-dir (or (chatbot-scoped-directory bot)
+                             (chatbot-filesystem-root-directory bot)
+                             (uiop:default-temporary-directory)))
+             (child-dir (merge-pathnames (format nil "minion-sandbox-~A/" name) parent-dir)))
+         (ensure-directories-exist child-dir)
+         (let* ((child-depth (1+ (chatbot-depth bot)))
+               (sub-conv
+                 (spawn-subordinate-conversation
+                  bot
+                  name
+                  child-depth
+                  child-dir
+                  :persona-name persona-name
+                  :backend-kw backend-kw
+                  :model model
+                  :system-instruction system-instruction
+                  :requested-budget requested-budget
+                  :web-tools-p web-tools-p)))
+          (attach-subordinate-conversation bot sub-conv)
+          (format nil "Minion '~A' spawned successfully." name)))))))
 
 (defun execute-list-minions-tool (bot)
   "Runs the built-in listMinions tool."

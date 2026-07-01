@@ -1333,6 +1333,73 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
       (when (uiop:directory-exists-p mock-home)
         (uiop:delete-directory-tree mock-home :validate t)))))
 
+(fiveam:test test-spawn-minion-tool-is-idempotent-for-identical-input
+  (let* ((context (make-runtime-context))
+         (bot (conversation-chatbot (new-chat :backend :google
+                                              :runtime-context context
+                                              :token-budget 1000))))
+    (let ((first-result (execute-chatbot-tool-by-name
+                         bot
+                         "spawnMinion"
+                         '(("name" . "Bello")
+                           ("backend" . "google")
+                           ("model" . "gemini-3.5-flash")
+                           ("budget" . 250))))
+          (second-result (execute-chatbot-tool-by-name
+                          bot
+                          "spawnMinion"
+                          '(("name" . "Bello")
+                            ("backend" . "google")
+                            ("model" . "gemini-3.5-flash")
+                            ("budget" . 250)))))
+      (fiveam:is (string= "Minion 'Bello' spawned successfully." first-result))
+      (fiveam:is (string= first-result second-result))
+      (fiveam:is (= 1 (length (chatbot-subordinates bot))))
+      (fiveam:is (= 250 (chatbot-spent-tokens bot)))))
+
+(fiveam:test test-prompt-subordinate-tool-is-idempotent-for-identical-input
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-idempotent-minions/" temp-dir))
+         (http-calls 0)
+         (bot (conversation-chatbot (new-chat :backend :gemini :token-budget 2000 :depth 1))))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home))
+               (*gemini-api-key-function* (lambda () "mocked-api-key"))
+               (*http-post-function*
+                 (lambda (url &rest args)
+                   (declare (ignore url args))
+                   (incf http-calls)
+                   (values
+                    (make-string-input-stream
+                     "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"I need to delegate. [SPAWN-SUB: name=\\\"Minion-L3\\\", budget=400]\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-3.5-flash\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
+                    200)))))
+           (let ((spawn-res (execute-chatbot-tool-by-name bot "spawnMinion"
+                                                          '(("name" . "Minion-L2")
+                                                            ("budget" . 1000)))))
+             (fiveam:is (string= "Minion 'Minion-L2' spawned successfully." spawn-res)))
+           (let* ((minion-l2-conv (first (chatbot-subordinates bot)))
+                  (minion-l2-bot (conversation-chatbot minion-l2-conv))
+                  (first-result (execute-chatbot-tool-by-name
+                                 bot
+                                 "promptSubordinate"
+                                 '(("name" . "Minion-L2")
+                                   ("prompt" . "Delegate task"))))
+                  (second-result (execute-chatbot-tool-by-name
+                                  bot
+                                  "promptSubordinate"
+                                  '(("name" . "Minion-L2")
+                                    ("prompt" . "Delegate task")))))
+             (fiveam:is (string= first-result second-result))
+             (fiveam:is (= 1 http-calls))
+             (fiveam:is (= 1 (length (chatbot-subordinates minion-l2-bot))))
+             (fiveam:is (= 400 (chatbot-spent-tokens minion-l2-bot)))
+             (fiveam:is (not (null (search "Successfully spawned subordinate minion 'Minion-L3'"
+                                           first-result))))))
+      (when (uiop:directory-exists-p mock-home)
+        (uiop:delete-directory-tree mock-home :validate t)))))
+
 (fiveam:test test-minion-checkpoint-and-recovery
   (let* ((temp-dir (uiop:default-temporary-directory))
          (mock-home (merge-pathnames "mock-home-mcrs/" temp-dir))

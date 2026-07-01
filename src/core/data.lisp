@@ -272,7 +272,17 @@
     :initarg :runtime-context
     :accessor chatbot-runtime-context
     :initform nil
-    :documentation "Optional runtime context carrying shared configuration and startup state.")))
+    :documentation "Optional runtime context carrying shared configuration and startup state.")
+   (task-journal
+    :initarg :task-journal
+    :accessor chatbot-task-journal
+    :initform (make-hash-table :test 'equal)
+    :documentation "In-memory idempotency journal for agentic task executions keyed by immutable input.")
+   (task-journal-lock
+    :initarg :task-journal-lock
+    :accessor chatbot-task-journal-lock
+    :initform (sb-thread:make-mutex :name "chatbot-task-journal-lock")
+    :documentation "Mutex protecting task-journal reads, writes, and wait coordination.")))
 
 (defclass conversation ()
   ((chatbot
@@ -411,7 +421,9 @@
 (defun clone-chatbot (bot &rest initarg-overrides)
   "Returns a shallow clone of BOT with INITARG-OVERRIDES applied."
   (apply #'make-instance 'chatbot
-         (merge-initarg-overrides (copy-initargs-for-instance bot)
+         (merge-initarg-overrides (copy-initargs-for-instance bot
+                                                             :ignored-slots '(task-journal
+                                                                              task-journal-lock))
                                   initarg-overrides)))
 
 (defun clone-conversation (conversation &rest initarg-overrides)
