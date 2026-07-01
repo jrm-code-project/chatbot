@@ -238,29 +238,57 @@
                                         :usage usage
                                         :thought-text thought-text)))))
 
-(defun submit-google-turn (bot response-body-parser state)
-  "Submits one Google generateContent turn and returns a normalized outcome."
-  (declare (ignore response-body-parser))
+(defun google-api-key-or-error ()
+  "Returns the configured Google API key or signals when it is missing."
   (let ((api-key (gemini-api-key)))
     (unless (and api-key (string/= api-key ""))
       (error "Gemini API Key is not set. Please ensure (gemini-api-key) is configured."))
-    (let* ((payload-json
-             (cl-json:encode-json-to-string
-              (google-request-payload-alist bot
-                                           (getf state :request-contents)
-                                           (getf state :effective-generation-config))))
-           (url (google-request-url bot (getf state :effective-model)))
-           (headers (google-request-headers api-key)))
-      (multiple-value-bind (response-body status)
-          (post-web-request url headers payload-json)
-        (unless (= status 200)
-          (error "API responded with HTTP status ~A" status))
-        (google-response->provider-outcome
-         bot
-         state
-         response-body
-         status
-         (parse-google-response response-body))))))
+    api-key))
+
+(defun google-turn-request-payload-json (bot state)
+  "Returns the encoded generateContent request payload for STATE."
+  (cl-json:encode-json-to-string
+   (google-request-payload-alist bot
+                                 (getf state :request-contents)
+                                 (getf state :effective-generation-config))))
+
+(defun google-turn-request-details (bot state)
+  "Returns the request details plist for one Google generateContent turn."
+  (let ((api-key (google-api-key-or-error)))
+    (list :payload-json (google-turn-request-payload-json bot state)
+          :url (google-request-url bot (getf state :effective-model))
+          :headers (google-request-headers api-key))))
+
+(defun post-google-turn-request (request-details)
+  "Executes one Google generateContent request from REQUEST-DETAILS."
+  (multiple-value-bind (response-body status)
+      (post-web-request (getf request-details :url)
+                        (getf request-details :headers)
+                        (getf request-details :payload-json))
+    (unless (= status 200)
+      (error "API responded with HTTP status ~A" status))
+    (list :response-body response-body
+          :status status)))
+
+(defun google-http-response->provider-outcome (bot state http-response)
+  "Returns the provider outcome implied by HTTP-RESPONSE for STATE."
+  (let ((response-body (getf http-response :response-body))
+        (status (getf http-response :status)))
+    (google-response->provider-outcome
+     bot
+     state
+     response-body
+     status
+     (parse-google-response response-body))))
+
+(defun submit-google-turn (bot response-body-parser state)
+  "Submits one Google generateContent turn and returns a normalized outcome."
+  (declare (ignore response-body-parser))
+  (google-http-response->provider-outcome
+   bot
+   state
+   (post-google-turn-request
+    (google-turn-request-details bot state))))
 
 (defun chat-google (bot input conversation callback
                    &key file-attachments request-contents history-messages effective-model effective-generation-config

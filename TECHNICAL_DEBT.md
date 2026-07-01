@@ -52,6 +52,10 @@ These areas should not be treated as fresh debt, but as **partially retired debt
    - Planner and minion orchestration now also live in `src/mcp/planner-minion-tools.lisp`.
    - Remaining debt: `src/mcp/tool-execution.lisp` is now much narrower, and mostly holds built-in registrations and shared execution plumbing.
 
+6. **Provider backend phase splitting**
+   - `src/backends/backend-google.lisp` now separates Google request submission into API-key validation, request assembly, HTTP posting, and HTTP-response normalization helpers above `submit-google-turn`.
+   - Remaining debt: OpenAI and Gemini still have more provider-specific turn phases that can be peeled apart further, and Google still keeps retry/tool-recursion shaping in the same module.
+
 ## Suggested fix order
 
 1. **Retire the legacy-global/runtime-context bridge** enough that new work no longer depends on it.
