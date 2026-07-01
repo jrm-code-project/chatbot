@@ -45,28 +45,27 @@
 
 When ERROR-BUILDER is provided, tool execution errors are converted into result
 entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are sandboxed."
-  (let ((results nil))
-    (dolist (tool-call tool-calls (nreverse results))
-      (let* ((id (cdr (assoc :id tool-call)))
-             (name (cdr (assoc :name tool-call)))
-             (arguments-json (coerce (cdr (assoc :arguments tool-call)) 'string)))
-        (handler-case
-            (let ((res-text (execute-chatbot-tool-by-name-json-arguments
-                             bot
-                             name
-                             arguments-json
-                             (funcall context-builder name tool-call))))
-              (push (funcall result-builder id name arguments-json res-text tool-call) results))
-          (error (condition)
-            (if (or (typep condition 'agentic-loop-approval-required)
-                    (typep condition 'agentic-loop-interrupted))
-                (error condition)
-                (if error-builder
-                    (push (funcall error-builder id name arguments-json condition tool-call) results)
-                    (push (funcall result-builder id name arguments-json
+  (mapcar (lambda (tool-call)
+            (let* ((id (cdr (assoc :id tool-call)))
+                   (name (cdr (assoc :name tool-call)))
+                   (arguments-json (coerce (cdr (assoc :arguments tool-call)) 'string)))
+              (handler-case
+                  (let ((res-text (execute-chatbot-tool-by-name-json-arguments
+                                   bot
+                                   name
+                                   arguments-json
+                                   (funcall context-builder name tool-call))))
+                    (funcall result-builder id name arguments-json res-text tool-call))
+                (error (condition)
+                  (if (or (typep condition 'agentic-loop-approval-required)
+                          (typep condition 'agentic-loop-interrupted))
+                      (error condition)
+                      (if error-builder
+                          (funcall error-builder id name arguments-json condition tool-call)
+                          (funcall result-builder id name arguments-json
                                    (chatbot-tool-error-text name condition)
-                                   tool-call)
-                          results)))))))))
+                                   tool-call)))))))
+          tool-calls))
 
 (defun normalize-builtin-tool-integer-argument (value argument-name tool-name)
   "Normalizes VALUE to an integer argument or signals an execution error."
@@ -267,12 +266,14 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
                      #'<
                      :key (lambda (directory)
                             (length (namestring directory))))))
-    (let ((result nil))
-      (dolist (directory sorted (nreverse result))
-        (unless (some (lambda (approved)
-                        (filesystem-path-within-directory-p directory approved))
-                      result)
-          (push directory result))))))
+    (reduce (lambda (approved directory)
+              (if (some (lambda (existing)
+                         (filesystem-path-within-directory-p directory existing))
+                       approved)
+                  approved
+                  (append approved (list directory))))
+            sorted
+            :initial-value nil)))
 
 (defun chatbot-effective-filesystem-allowed-directories (bot tool-name)
   "Returns all effective allowed directories for BOT, including the persona root."
@@ -354,17 +355,6 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
                                          "filename"
                                          "File not found"))
 
-(defun logical-pathname-within-directory-p (path directory)
-  "Checks if PATH is logically within DIRECTORY without requiring PATH to exist on disk."
-  (let* ((clean-path (pathname (uiop:native-namestring (uiop:ensure-directory-pathname path))))
-         (clean-dir (pathname (uiop:native-namestring (uiop:ensure-directory-pathname directory))))
-         (dir-dir (pathname-directory clean-dir))
-         (path-dir (pathname-directory clean-path)))
-    (and (equalp (pathname-device clean-path) (pathname-device clean-dir))
-         (eq (car dir-dir) (car path-dir))
-         (>= (length path-dir) (length dir-dir))
-         (equal (subseq path-dir 0 (length dir-dir)) dir-dir))))
-
 (defun resolve-filesystem-tool-target-path (bot pathname tool-name)
   "Resolves PATHNAME for BOT as a write target inside the allowed filesystem root."
   (let* ((root (chatbot-filesystem-root-truename bot tool-name))
@@ -425,21 +415,21 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
            :tool-name tool-name
            :reason "endingLine must be >= beginningLine."))
   (with-open-file (stream path :direction :input)
-    (let ((lines nil)
-          (line-count 0)
-          (eof-marker (gensym "EOF")))
-      (loop for line = (read-line stream nil eof-marker)
-            until (eq line eof-marker)
-            do (incf line-count)
-               (when (<= beginning-line line-count ending-line)
-                 (push line lines)))
+    (let* ((eof-marker (gensym "EOF"))
+           (lines (loop for line = (read-line stream nil eof-marker)
+                        until (eq line eof-marker)
+                        collect line))
+           (line-count (length lines)))
       (when (< line-count beginning-line)
         (error 'mcp-tool-execution-error
                :tool-name tool-name
                :reason (format nil "beginningLine ~D is past end of file (~D lines)."
                                beginning-line
                                line-count)))
-      (format nil "~{~A~^~%~}" (nreverse lines)))))
+      (format nil "~{~A~^~%~}"
+              (subseq lines
+                      (1- beginning-line)
+                      (min ending-line line-count))))))
 
 (defun validate-directory-tool-pattern (pattern tool-name)
   "Validates PATTERN for the built-in directory tool."
@@ -473,17 +463,16 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
   "Serializes LINES using the requested line-ending controls."
   (if (null lines)
       ""
-      (let ((separator (if use-lf-only
-                           (string #\Linefeed)
-                           (format nil "~C~C" #\Return #\Linefeed))))
-        (with-output-to-string (stream)
-          (loop for line in lines
-                for firstp = t then nil
-                do (unless firstp
-                     (write-string separator stream))
-                   (write-string line stream))
-          (when end-with-eol
-            (write-string separator stream))))))
+      (let* ((separator (if use-lf-only
+                            (string #\Linefeed)
+                            (format nil "~C~C" #\Return #\Linefeed)))
+             (content (reduce (lambda (left right)
+                                (concatenate 'string left separator right))
+                              (rest lines)
+                              :initial-value (first lines))))
+        (if end-with-eol
+            (concatenate 'string content separator)
+            content))))
 
 (defun write-file-tool-result (target-path root lines use-lf-only end-with-eol)
   "Writes LINES to TARGET-PATH and returns a stable success string."

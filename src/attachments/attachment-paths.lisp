@@ -66,14 +66,17 @@
 
 (defun deduplicate-chat-input-files (pathnames)
   "Returns PATHNAMES with duplicate concrete files removed, preserving order."
-  (let ((seen (make-hash-table :test 'equal))
-        (result nil))
-    (dolist (pathname pathnames (nreverse result))
-      (let* ((resolved (truename pathname))
-             (key (string-downcase (namestring resolved))))
-        (unless (gethash key seen)
-          (setf (gethash key seen) t)
-          (push resolved result))))))
+  (labels ((deduplicate (remaining seen resolved-files)
+             (if (endp remaining)
+                 resolved-files
+                 (let* ((resolved (truename (first remaining)))
+                        (key (string-downcase (namestring resolved))))
+                   (if (member key seen :test #'string=)
+                       (deduplicate (rest remaining) seen resolved-files)
+                       (deduplicate (rest remaining)
+                                    (append seen (list key))
+                                    (append resolved-files (list resolved))))))))
+    (deduplicate pathnames nil nil)))
 
 (defun resolve-chat-input-files (files)
   "Resolves FILES into a stable deduplicated list of concrete file pathnames."

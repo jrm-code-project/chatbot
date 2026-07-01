@@ -357,24 +357,31 @@
   "Returns INSTANCE state as initargs, omitting any IGNORED-SLOTS by slot name."
   (let* ((class (ensure-class-finalized (class-of instance)))
          (ignored-slots (copy-list ignored-slots)))
-    (loop for slot in (sb-mop:class-slots class)
-          for slot-name = (sb-mop:slot-definition-name slot)
-          for initargs = (sb-mop:slot-definition-initargs slot)
-          unless (or (null initargs)
-                     (member slot-name ignored-slots))
-            append (let ((value (when (slot-boundp instance slot-name)
-                                  (slot-value instance slot-name))))
-                     (list (first initargs) value)))))
+    (mapcan (lambda (slot)
+              (let* ((slot-name (sb-mop:slot-definition-name slot))
+                     (initargs (sb-mop:slot-definition-initargs slot)))
+                (unless (or (null initargs)
+                            (member slot-name ignored-slots))
+                  (let ((value (when (slot-boundp instance slot-name)
+                                 (slot-value instance slot-name))))
+                    (list (first initargs) value)))))
+            (sb-mop:class-slots class))))
 
 (defun merge-initarg-overrides (base-initargs override-initargs)
   "Returns BASE-INITARGS with OVERRIDE-INITARGS replacing duplicate initargs."
-  (let ((override-keys
-          (loop for initarg in override-initargs by #'cddr
-                collect initarg)))
-    (append (loop for (initarg value) on base-initargs by #'cddr
-                  unless (member initarg override-keys)
-                    append (list initarg value))
-            override-initargs)))
+  (labels ((plist-pairs (plist)
+             (if (endp plist)
+                 nil
+                 (cons (list (first plist) (second plist))
+                       (plist-pairs (cddr plist))))))
+    (let* ((base-pairs (plist-pairs base-initargs))
+           (override-pairs (plist-pairs override-initargs))
+           (override-keys (mapcar #'first override-pairs)))
+      (append (mapcan (lambda (pair)
+                        (unless (member (first pair) override-keys)
+                          pair))
+                      base-pairs)
+              override-initargs))))
 
 (defun clone-chatbot (bot &rest initarg-overrides)
   "Returns a shallow clone of BOT with INITARG-OVERRIDES applied."
@@ -396,31 +403,54 @@
 
 (defun split-system-instruction-into-paragraphs (text)
   "Splits TEXT into trimmed paragraphs, preserving blank lines inside fenced blocks."
-  (let ((paragraphs nil)
-        (current-lines nil)
-        (in-fence-p nil))
-    (labels ((flush-paragraph ()
-               (when current-lines
-                 (let ((paragraph (string-trim '(#\Space #\Tab #\Return #\Linefeed)
-                                               (format nil "~{~A~^~%~}" (nreverse current-lines)))))
-                   (unless (string= paragraph "")
-                     (push paragraph paragraphs)))
-                 (setf current-lines nil))))
-      (dolist (line (cl-ppcre:split "\\r?\\n" text))
-        (cond
-          (in-fence-p
-           (push line current-lines)
-           (when (system-instruction-fence-line-p line)
-             (setf in-fence-p nil)))
-          ((system-instruction-fence-line-p line)
-           (push line current-lines)
-           (setf in-fence-p t))
-          ((string= "" (string-trim '(#\Space #\Tab #\Return) line))
-           (flush-paragraph))
-          (t
-           (push line current-lines))))
-      (flush-paragraph))
-    (coerce (nreverse paragraphs) 'vector)))
+  (labels ((state-value (state key)
+             (getf state key))
+           (make-state (&key paragraphs current-lines in-fence-p)
+             (list :paragraphs paragraphs
+                   :current-lines current-lines
+                   :in-fence-p in-fence-p))
+           (append-current-line (state line)
+             (make-state :paragraphs (state-value state :paragraphs)
+                         :current-lines (append (state-value state :current-lines)
+                                                (list line))
+                         :in-fence-p (state-value state :in-fence-p)))
+           (flush-paragraph (state)
+             (let ((current-lines (state-value state :current-lines)))
+               (if (null current-lines)
+                   state
+                   (let* ((paragraph (string-trim '(#\Space #\Tab #\Return #\Linefeed)
+                                                  (format nil "~{~A~^~%~}" current-lines)))
+                          (paragraphs (state-value state :paragraphs)))
+                     (make-state :paragraphs (if (string= paragraph "")
+                                                 paragraphs
+                                                 (append paragraphs (list paragraph)))
+                                 :current-lines nil
+                                 :in-fence-p (state-value state :in-fence-p))))))
+           (accumulate-line (state line)
+             (cond
+               ((state-value state :in-fence-p)
+                (let ((updated-state (append-current-line state line)))
+                  (if (system-instruction-fence-line-p line)
+                      (make-state :paragraphs (state-value updated-state :paragraphs)
+                                  :current-lines (state-value updated-state :current-lines)
+                                  :in-fence-p nil)
+                      updated-state)))
+               ((system-instruction-fence-line-p line)
+                (make-state :paragraphs (state-value state :paragraphs)
+                            :current-lines (append (state-value state :current-lines)
+                                                   (list line))
+                            :in-fence-p t))
+               ((string= "" (string-trim '(#\Space #\Tab #\Return) line))
+                (flush-paragraph state))
+               (t
+                (append-current-line state line)))))
+    (let* ((final-state (reduce #'accumulate-line
+                                (cl-ppcre:split "\\r?\\n" text)
+                                :initial-value (make-state :paragraphs nil
+                                                           :current-lines nil
+                                                           :in-fence-p nil)))
+           (paragraphs (state-value (flush-paragraph final-state) :paragraphs)))
+      (coerce paragraphs 'vector))))
 
 (defun system-instruction-paragraphs (system-instruction)
   "Returns SYSTEM-INSTRUCTION as a vector of paragraphs."

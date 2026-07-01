@@ -5,15 +5,13 @@
 
 (defun interaction-live-user-input-parts (chatbot input file-attachments &key effective-model)
   "Builds the Interactions API content parts for the current live user turn."
-  (let ((parts nil)
-        (decorated-input (decorate-live-user-input chatbot input
-                                                  :effective-model effective-model)))
-    (when (and (stringp decorated-input)
-               (string/= decorated-input ""))
-      (push `(("type" . "text") ("text" . ,decorated-input)) parts))
-    (dolist (attachment file-attachments)
-      (push (make-interaction-file-part attachment) parts))
-    (nreverse parts)))
+  (let* ((decorated-input (decorate-live-user-input chatbot input
+                                                    :effective-model effective-model))
+         (text-parts (when (and (stringp decorated-input)
+                                (string/= decorated-input ""))
+                       (list `(("type" . "text") ("text" . ,decorated-input)))))
+         (attachment-parts (mapcar #'make-interaction-file-part file-attachments)))
+    (append text-parts attachment-parts)))
 
 (defun interaction-live-user-input-value (chatbot input file-attachments &key effective-model)
   "Builds the Interactions API input value for the current live user turn."
@@ -27,24 +25,20 @@
 
 (defun interaction-request-tools (chatbot)
   "Builds the Gemini Interactions tool list for CHATBOT, including built-in and MCP tools."
-  (let ((tools nil))
-    (when (chatbot-google-search-p chatbot)
-      (push '(("type" . "google_search")) tools))
-    (when (chatbot-code-execution-p chatbot)
-      (push '(("type" . "code_execution")) tools))
-    (let ((chatbot-tools (get-all-chatbot-tools chatbot)))
-      (when chatbot-tools
-        (dolist (pair chatbot-tools)
-          (let* ((mcp-tool (cdr pair))
-                 (name (mcp-val :name mcp-tool))
-                 (description (mcp-val :description mcp-tool))
-                 (input-schema (mcp-val :input-schema mcp-tool)))
-            (push `(("type" . "function")
-                    ("name" . ,name)
-                    ("description" . ,(or description ""))
-                    ("parameters" . ,(gemini-tool-parameters input-schema)))
-                  tools)))))
-    (nreverse tools)))
+  (append (when (chatbot-google-search-p chatbot)
+            (list '(("type" . "google_search"))))
+          (when (chatbot-code-execution-p chatbot)
+            (list '(("type" . "code_execution"))))
+          (mapcar (lambda (pair)
+                    (let* ((mcp-tool (cdr pair))
+                           (name (mcp-val :name mcp-tool))
+                           (description (mcp-val :description mcp-tool))
+                           (input-schema (mcp-val :input-schema mcp-tool)))
+                      `(("type" . "function")
+                        ("name" . ,name)
+                        ("description" . ,(or description ""))
+                        ("parameters" . ,(gemini-tool-parameters input-schema)))))
+                  (or (get-all-chatbot-tools chatbot) nil))))
 
 (defun conversation-message->interaction-step (message)
   "Converts a stored conversation message to an Interactions API step."
@@ -79,41 +73,43 @@
 
 (defun make-interaction-payload (chatbot input &key previous-interaction-id (stream t) messages persona-memory persona-diary-entries file-attachments effective-model effective-generation-config)
   "Creates a JSON-serializable alist payload for the Gemini Interactions API."
-  (let ((payload (list (cons "model" (or effective-model
-                                        (chatbot-model chatbot)))
-                      (cons "input" (if previous-interaction-id
-                                         (if (and file-attachments
-                                                  (stringp input))
-                                             (interaction-live-user-input-value chatbot
-                                                                                input
-                                                                                file-attachments
-                                                                                :effective-model effective-model)
-                                             (decorate-live-user-input chatbot input :effective-model effective-model))
-                                         (build-initial-interaction-input messages
-                                                                          input
-                                                                          :chatbot chatbot
-                                                                          :persona-memory persona-memory
-                                                                          :persona-diary-entries persona-diary-entries
-                                                                          :file-attachments file-attachments
-                                                                          :effective-model effective-model)))
-                       (cons "stream" (if stream t :false))
-                       (cons "store" t))))
-    (when previous-interaction-id
-      (push (cons "previous_interaction_id" previous-interaction-id) payload))
-    (when (chatbot-system-instruction chatbot)
-      (push (cons "system_instruction"
-                  (system-instruction-text (chatbot-system-instruction chatbot)))
-            payload))
-    (when (or (getf effective-generation-config :temperature)
-              (getf effective-generation-config :top-p))
-      (push (cons "generation_config"
-                  (remove nil
-                          (list (when (getf effective-generation-config :temperature)
-                                  (cons "temperature" (getf effective-generation-config :temperature)))
-                                (when (getf effective-generation-config :top-p)
-                                  (cons "top_p" (getf effective-generation-config :top-p))))))
-            payload))
-    (let ((tools (interaction-request-tools chatbot)))
-      (when tools
-        (push (cons "tools" tools) payload)))
-    (nreverse payload)))
+  (let* ((model (or effective-model
+                    (chatbot-model chatbot)))
+         (request-input
+           (if previous-interaction-id
+               (if (and file-attachments
+                        (stringp input))
+                   (interaction-live-user-input-value chatbot
+                                                      input
+                                                      file-attachments
+                                                      :effective-model effective-model)
+                   (decorate-live-user-input chatbot input :effective-model effective-model))
+               (build-initial-interaction-input messages
+                                                input
+                                                :chatbot chatbot
+                                                :persona-memory persona-memory
+                                                :persona-diary-entries persona-diary-entries
+                                                :file-attachments file-attachments
+                                                :effective-model effective-model)))
+         (generation-config
+           (when (or (getf effective-generation-config :temperature)
+                     (getf effective-generation-config :top-p))
+             (remove nil
+                     (list (when (getf effective-generation-config :temperature)
+                             (cons "temperature" (getf effective-generation-config :temperature)))
+                           (when (getf effective-generation-config :top-p)
+                             (cons "top_p" (getf effective-generation-config :top-p)))))))
+         (tools (interaction-request-tools chatbot)))
+    (append (list (cons "store" t)
+                  (cons "stream" (if stream t :false))
+                  (cons "input" request-input)
+                  (cons "model" model))
+            (when previous-interaction-id
+              (list (cons "previous_interaction_id" previous-interaction-id)))
+            (when (chatbot-system-instruction chatbot)
+              (list (cons "system_instruction"
+                          (system-instruction-text (chatbot-system-instruction chatbot)))))
+            (when generation-config
+              (list (cons "generation_config" generation-config)))
+            (when tools
+              (list (cons "tools" tools))))))

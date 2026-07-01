@@ -40,36 +40,41 @@
 (defun wrap-text (text &key (width 80) (initial-prefix ""))
   "Wraps a single paragraph string to the specified width."
   (let ((words (cl-ppcre:split "\\s+" text))
-        (lines nil)
-        (current-line nil)
-        (current-length 0)
-        (first-line-p t)
         (initial-prefix-length (length initial-prefix)))
-    (dolist (word words)
-      (let* ((word-len (length word))
-            (line-prefix-length (if first-line-p initial-prefix-length 0))
-            (available-width (max 1 (- width line-prefix-length))))
-        (cond
-          ((null current-line)
-           (push word current-line)
-           (setf current-length word-len))
-          ((<= (+ current-length 1 word-len) available-width)
-           (push word current-line)
-           (incf current-length (1+ word-len)))
-          (t
-           (push (format nil "~A~{~A~^ ~}"
-                         (if first-line-p initial-prefix "")
-                         (nreverse current-line))
-                 lines)
-           (setf current-line (list word))
-           (setf current-length word-len)
-           (setf first-line-p nil)))))
-    (when current-line
-      (push (format nil "~A~{~A~^ ~}"
-                   (if first-line-p initial-prefix "")
-                   (nreverse current-line))
-           lines))
-    (nreverse lines)))
+    (labels ((line-string (line first-line-p)
+               (format nil "~A~{~A~^ ~}"
+                       (if first-line-p initial-prefix "")
+                       line))
+             (consume-words (remaining first-line-p current-line current-length lines)
+               (if (endp remaining)
+                   (if current-line
+                       (append lines (list (line-string current-line first-line-p)))
+                       lines)
+                   (let* ((word (first remaining))
+                          (word-len (length word))
+                          (line-prefix-length (if first-line-p initial-prefix-length 0))
+                          (available-width (max 1 (- width line-prefix-length))))
+                     (cond
+                       ((null current-line)
+                        (consume-words (rest remaining)
+                                       first-line-p
+                                       (list word)
+                                       word-len
+                                       lines))
+                       ((<= (+ current-length 1 word-len) available-width)
+                        (consume-words (rest remaining)
+                                       first-line-p
+                                       (append current-line (list word))
+                                       (+ current-length 1 word-len)
+                                       lines))
+                       (t
+                        (consume-words remaining
+                                       nil
+                                       nil
+                                       0
+                                       (append lines
+                                               (list (line-string current-line first-line-p))))))))))
+      (consume-words words t nil 0 nil))))
 
 (defun blank-line-p (line)
   "Returns true when LINE contains only whitespace."
