@@ -28,6 +28,57 @@
        ("assistant" "Alpha: Alpha one")
        ("user" "Beta: Beta one")))))
 
+(fiveam:test test-round-robin-state-machine-enforces-legal-transition-order
+  (let* ((session (new-round-robin-chat
+                   (list (make-round-robin-participant :name "Alpha"
+                                                       :conversation (new-chat :backend :google))
+                         (make-round-robin-participant :name "Beta"
+                                                       :conversation (new-chat :backend :google)))))
+         (participant-count (length (round-robin-session-participants session)))
+         (initial-state (round-robin-session-state session)))
+    (fiveam:is (equal '(:phase :awaiting-user-input :next-participant-index 0)
+                      initial-state))
+    (let ((after-user (advance-round-robin-session-state initial-state
+                                                         :user-entry-recorded
+                                                         participant-count)))
+      (fiveam:is (equal '(:phase :participant-ready :next-participant-index 0)
+                        after-user))
+      (let ((run-alpha (plan-round-robin-session-step after-user participant-count)))
+        (fiveam:is (eq :run-participant (getf run-alpha :kind)))
+        (fiveam:is (= 0 (getf run-alpha :participant-index)))
+        (fiveam:is (equal '(:phase :participant-running :next-participant-index 0)
+                          (getf run-alpha :next-state)))
+        (let* ((after-alpha (advance-round-robin-session-state (getf run-alpha :next-state)
+                                                               :participant-response-recorded
+                                                               participant-count))
+               (advance-to-beta (plan-round-robin-session-step after-alpha participant-count))
+               (beta-ready (getf advance-to-beta :next-state))
+               (run-beta (plan-round-robin-session-step beta-ready participant-count))
+               (after-beta (advance-round-robin-session-state (getf run-beta :next-state)
+                                                              :participant-response-recorded
+                                                              participant-count))
+               (finish-turn (plan-round-robin-session-step after-beta participant-count))
+               (reset-state (getf finish-turn :next-state)))
+          (fiveam:is (equal '(:phase :participant-complete :next-participant-index 0)
+                            after-alpha))
+          (fiveam:is (eq :advance (getf advance-to-beta :kind)))
+          (fiveam:is (equal '(:phase :participant-ready :next-participant-index 1)
+                            beta-ready))
+          (fiveam:is (eq :run-participant (getf run-beta :kind)))
+          (fiveam:is (= 1 (getf run-beta :participant-index)))
+          (fiveam:is (equal '(:phase :participant-complete :next-participant-index 1)
+                            after-beta))
+          (fiveam:is (eq :advance (getf finish-turn :kind)))
+          (fiveam:is (equal '(:phase :turn-complete :next-participant-index 0)
+                            reset-state))
+          (fiveam:is (eq :finish-turn
+                         (getf (plan-round-robin-session-step reset-state participant-count)
+                               :kind))))))
+    (fiveam:signals error
+      (advance-round-robin-session-state initial-state
+                                         :participant-response-recorded
+                                         participant-count))))
+
 (fiveam:test test-round-robin-clones-conversation-through-shared-copy-helpers
   (let* ((runtime-context (make-runtime-context))
          (allowed-directories (list #p"C:/tmp/allowed-a/" #p"C:/tmp/allowed-b/"))
@@ -133,6 +184,8 @@
                                     (cons (getf result :name)
                                           (getf result :response)))
                                   results)))
+        (fiveam:is (eq :awaiting-user-input (round-robin-session-phase session)))
+        (fiveam:is (= 0 (round-robin-session-next-participant-index session)))
         (let* ((decoded-first (cl-json:decode-json-from-string first-payload))
                (decoded-second (cl-json:decode-json-from-string second-payload))
                (first-contents (google-payload-contents decoded-first))

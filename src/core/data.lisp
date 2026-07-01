@@ -324,7 +324,17 @@
     :initarg :transcript
     :accessor round-robin-session-transcript
     :initform nil
-    :documentation "Chronological shared transcript entries for the round-robin session.")))
+    :documentation "Chronological shared transcript entries for the round-robin session.")
+   (phase
+    :initarg :phase
+    :accessor round-robin-session-phase
+    :initform :awaiting-user-input
+    :documentation "Explicit orchestration state for round-robin scheduling.")
+   (next-participant-index
+    :initarg :next-participant-index
+    :accessor round-robin-session-next-participant-index
+    :initform 0
+    :documentation "Index of the next participant allowed to run by the round-robin state machine.")))
 
 (defclass persona ()
   ((name

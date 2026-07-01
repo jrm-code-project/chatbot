@@ -139,64 +139,204 @@
 
   nil)
 
+(defun valid-round-robin-session-phase-p (phase)
+  "Returns true when PHASE is one of the explicit round-robin FSM states."
+  (member phase '(:awaiting-user-input
+                  :participant-ready
+                  :participant-running
+                  :participant-complete
+                  :turn-complete)))
+
+(defun make-round-robin-session-state (&key phase next-participant-index)
+  "Returns one explicit round-robin orchestration state plist."
+  (list :phase phase
+        :next-participant-index next-participant-index))
+
+(defun round-robin-session-state (session)
+  "Returns SESSION's current orchestration state as a pure plist."
+  (make-round-robin-session-state
+   :phase (round-robin-session-phase session)
+   :next-participant-index (round-robin-session-next-participant-index session)))
+
+(defun apply-round-robin-session-state (session state)
+  "Applies STATE to SESSION and returns SESSION."
+  (setf (round-robin-session-phase session) (getf state :phase))
+  (setf (round-robin-session-next-participant-index session)
+        (getf state :next-participant-index))
+  session)
+
+(defun validate-round-robin-session-state (state participant-count)
+  "Ensures STATE is valid for a round-robin session with PARTICIPANT-COUNT participants."
+  (let ((phase (getf state :phase))
+        (next-participant-index (getf state :next-participant-index)))
+    (unless (valid-round-robin-session-phase-p phase)
+      (error "Round-robin session is in an invalid phase: ~A" phase))
+    (unless (and (integerp next-participant-index)
+                 (<= 0 next-participant-index))
+      (error "Round-robin session has an invalid next participant index: ~A"
+             next-participant-index))
+    (when (and (> participant-count 0)
+               (member phase '(:participant-ready :participant-running :participant-complete))
+               (>= next-participant-index participant-count))
+      (error "Round-robin phase ~A cannot reference participant index ~A with only ~A participants."
+             phase
+             next-participant-index
+             participant-count))
+    state))
+
+(defun advance-round-robin-session-state (state event participant-count)
+  "Returns the next pure round-robin state implied by EVENT."
+  (validate-round-robin-session-state state participant-count)
+  (let ((phase (getf state :phase))
+        (next-participant-index (getf state :next-participant-index)))
+    (case event
+      (:user-entry-recorded
+       (unless (eq phase :awaiting-user-input)
+         (error "Cannot record round-robin user input while session phase is ~A." phase))
+       (make-round-robin-session-state :phase :participant-ready
+                                      :next-participant-index 0))
+      (:participant-response-recorded
+       (unless (eq phase :participant-running)
+         (error "Cannot record round-robin participant output while session phase is ~A." phase))
+       (make-round-robin-session-state :phase :participant-complete
+                                      :next-participant-index next-participant-index))
+      (t
+       (error "Unsupported round-robin state event: ~A" event)))))
+
+(defun plan-round-robin-session-step (state participant-count)
+  "Returns the next orchestration step for STATE as a pure plan plist."
+  (validate-round-robin-session-state state participant-count)
+  (let ((phase (getf state :phase))
+        (next-participant-index (getf state :next-participant-index)))
+    (case phase
+      (:awaiting-user-input
+       (list :kind :await-user-input
+             :next-state state))
+      (:participant-ready
+       (list :kind :run-participant
+             :participant-index next-participant-index
+             :next-state (make-round-robin-session-state
+                          :phase :participant-running
+                          :next-participant-index next-participant-index)))
+      (:participant-running
+       (error "Round-robin participant ~D is already running." next-participant-index))
+      (:participant-complete
+       (if (< (1+ next-participant-index) participant-count)
+           (list :kind :advance
+                 :next-state (make-round-robin-session-state
+                              :phase :participant-ready
+                              :next-participant-index (1+ next-participant-index)))
+           (list :kind :advance
+                 :next-state (make-round-robin-session-state
+                              :phase :turn-complete
+                              :next-participant-index 0))))
+      (:turn-complete
+       (list :kind :finish-turn
+             :next-state (make-round-robin-session-state
+                          :phase :awaiting-user-input
+                          :next-participant-index 0)))
+      (t
+       (error "Unsupported round-robin session phase: ~A" phase)))))
+
+(defun run-round-robin-participant-turn (session participant latest-entry history-transcript callback
+                                         file-attachments effective-generation-config)
+  "Runs one participant turn using the current transcript context."
+  (let* ((conversation (round-robin-participant-conversation participant))
+         (bot (conversation-chatbot conversation)))
+    (setf (conversation-messages conversation)
+          (build-round-robin-history-messages history-transcript
+                                             (round-robin-participant-name participant)))
+    (when (eq (chatbot-backend bot) :gemini)
+      (setf (conversation-interaction-id conversation) nil))
+    (multiple-value-bind (live-input effective-model)
+        (prepare-round-robin-live-input participant latest-entry)
+      (print-chat-speaker-header (round-robin-participant-name participant))
+      (let ((response
+              (call-with-runtime-context
+               (chatbot-runtime-context bot)
+               (lambda ()
+                 (let ((result
+                        (dispatch-chat-turn conversation
+                                           live-input
+                                           callback
+                                           :file-attachments (and (eq (round-robin-entry-speaker-kind latest-entry) :user)
+                                                                  file-attachments)
+                                           :effective-model effective-model
+                                           :effective-generation-config effective-generation-config)))
+                   (apply-chat-turn-result result conversation))))))
+        (terpri)
+        (terpri)
+        (append-round-robin-transcript-entry session
+                                           (round-robin-participant-name participant)
+                                           :bot
+                                           response)
+        (list :name (round-robin-participant-name participant)
+              :response response)))))
+
 (defun round-robin-chat (input &key session callback file files (temperature nil temperaturep) (top-p nil top-pp))
   "Runs one full round-robin turn for INPUT across SESSION participants."
   (unless (typep session 'round-robin-session)
     (error "ROUND-ROBIN-CHAT requires a :SESSION created by NEW-ROUND-ROBIN-CHAT."))
-  (let* ((effective-files (append (when file
+  (let* ((participants (round-robin-session-participants session))
+         (participant-count (length participants))
+         (effective-files (append (when file
                                    (list file))
                                   files))
          (file-attachments (and effective-files
                                 (prepare-chat-file-attachments effective-files))))
+    (validate-round-robin-session-state (round-robin-session-state session)
+                                       participant-count)
     (print-chat-speaker-block (round-robin-session-user-name session) input)
     (append-round-robin-transcript-entry session
-                                        (round-robin-session-user-name session)
-                                        :user
-                                        input)
-    (let ((results
-            (mapcar
-             (lambda (participant)
-               (multiple-value-bind (history-transcript latest-entry)
-                   (split-round-robin-transcript-for-live-turn
-                    (round-robin-session-transcript session))
-                 (let* ((conversation (round-robin-participant-conversation participant))
-                        (bot (conversation-chatbot conversation))
-                        (effective-generation-config
-                          (apply #'resolve-effective-generation-config
-                                 bot
-                                 (append (when temperaturep
+                                       (round-robin-session-user-name session)
+                                       :user
+                                       input)
+    (apply-round-robin-session-state
+     session
+     (advance-round-robin-session-state (round-robin-session-state session)
+                                       :user-entry-recorded
+                                       participant-count))
+    (let ((results nil))
+      (loop
+        for state = (round-robin-session-state session)
+        for plan = (plan-round-robin-session-step state participant-count)
+        do (case (getf plan :kind)
+             (:await-user-input
+              (return (nreverse results)))
+             (:advance
+              (apply-round-robin-session-state session (getf plan :next-state)))
+             (:finish-turn
+              (apply-round-robin-session-state session (getf plan :next-state))
+              (print-round-robin-user-turn-marker)
+              (return (nreverse results)))
+             (:run-participant
+              (let* ((participant-index (getf plan :participant-index))
+                     (participant (nth participant-index participants)))
+                (apply-round-robin-session-state session (getf plan :next-state))
+                (multiple-value-bind (history-transcript latest-entry)
+                    (split-round-robin-transcript-for-live-turn
+                     (round-robin-session-transcript session))
+                  (let* ((conversation (round-robin-participant-conversation participant))
+                         (bot (conversation-chatbot conversation))
+                         (effective-generation-config
+                           (apply #'resolve-effective-generation-config
+                                  bot
+                                  (append (when temperaturep
                                           (list :temperature temperature))
-                                        (when top-pp
+                                         (when top-pp
                                           (list :top-p top-p))))))
-                   (setf (conversation-messages conversation)
-                         (build-round-robin-history-messages history-transcript
-                                                            (round-robin-participant-name participant)))
-                   (when (eq (chatbot-backend bot) :gemini)
-                     (setf (conversation-interaction-id conversation) nil))
-                   (multiple-value-bind (live-input effective-model)
-                       (prepare-round-robin-live-input participant latest-entry)
-                     (print-chat-speaker-header (round-robin-participant-name participant))
-                     (let ((response
-                             (call-with-runtime-context
-                              (chatbot-runtime-context bot)
-                              (lambda ()
-                                (let ((result
-                                       (dispatch-chat-turn conversation
-                                                           live-input
+                    (push (run-round-robin-participant-turn session
+                                                           participant
+                                                           latest-entry
+                                                           history-transcript
                                                            callback
-                                                           :file-attachments (and (eq (round-robin-entry-speaker-kind latest-entry) :user)
-                                                                                  file-attachments)
-                                                           :effective-model effective-model
-                                                           :effective-generation-config effective-generation-config)))
-                                  (apply-chat-turn-result result conversation))))))
-                       (terpri)
-                       (terpri)
-                       (append-round-robin-transcript-entry session
-                                                           (round-robin-participant-name participant)
-                                                           :bot
-                                                           response)
-                       (list :name (round-robin-participant-name participant)
-                             :response response))))))
-             (round-robin-session-participants session))))
-      (print-round-robin-user-turn-marker)
-      results)))
+                                                           file-attachments
+                                                           effective-generation-config)
+                          results)
+                    (apply-round-robin-session-state
+                     session
+                     (advance-round-robin-session-state (round-robin-session-state session)
+                                                       :participant-response-recorded
+                                                       participant-count))))))
+             (t
+              (error "Unsupported round-robin session plan kind: ~A" (getf plan :kind))))))))

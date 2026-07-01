@@ -66,6 +66,10 @@ These areas should not be treated as fresh debt, but as **partially retired debt
    - `src/backends/backend-gemini.lisp` now separates Gemini Interactions submission into API-key validation, request assembly, streaming request posting, and stream-consumption setup helpers above `submit-gemini-turn`.
    - Remaining debt: provider modules still keep tool-recursion shaping in the same files, but submission phases are now consistently thinner across Google, OpenAI-compatible, and Gemini backends.
 
+7. **Round-robin orchestration state machine**
+   - `src/orchestration/round-robin.lisp` now drives participant scheduling through an explicit session FSM with pure transition helpers and a thin shell that applies the resulting state and runs the selected participant turn.
+   - Remaining debt: planner/minion delegation still uses more implicit orchestration than round-robin and should eventually adopt the same explicit state-transition discipline.
+
 ## Suggested fix order
 
 1. **Retire the legacy-global/runtime-context bridge** enough that new work no longer depends on it.
