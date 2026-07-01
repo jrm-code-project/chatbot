@@ -67,48 +67,6 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
                                    tool-call)))))))
           tool-calls))
 
-(defun ensure-system-instruction-tool-path (bot tool-name)
-  "Returns BOT's system-instruction path or signals an execution error."
-  (or (chatbot-system-instruction-path bot)
-      (error 'mcp-tool-execution-error
-             :tool-name tool-name
-             :reason "System-instruction tools require a persona-backed system instruction file.")))
-
-(defun system-instruction-storage-kind-name (storage-kind)
-  "Returns a lowercase string name for STORAGE-KIND."
-  (string-downcase (string storage-kind)))
-
-(defun system-instruction-tool-result (bot &key saved)
-  "Returns the current system-instruction paragraph state as JSON text."
-  (let ((payload `(("paragraphs" . ,(current-system-instruction-paragraphs bot))
-                   ("count" . ,(system-instruction-paragraph-count bot))
-                   ("storageKind" . ,(system-instruction-storage-kind-name
-                                      (chatbot-system-instruction-storage-kind bot)))
-                   ("path" . ,(if (chatbot-system-instruction-path bot)
-                                  (namestring (chatbot-system-instruction-path bot))
-                                  :null))
-                   ,@(when saved '(("saved" . t))))))
-    (cl-json:encode-json-to-string payload)))
-
-(defun sampling-parameters-tool-result (bot &key saved)
-  "Returns the current runtime sampling parameters as JSON text."
-  (let ((parameters (sampling-parameters bot)))
-    (cl-json:encode-json-to-string
-     `(("temperature" . ,(or (getf parameters :temperature) :null))
-       ("topP" . ,(or (getf parameters :top-p) :null))
-       ,@(when saved '(("saved" . t)))))))
-
-(defun save-system-instructions-or-tool-error (bot tool-name)
-  "Saves BOT's system instructions, mapping failures to tool errors."
-  (handler-case
-      (save-system-instructions bot)
-    (mcp-tool-execution-error (e)
-      (error e))
-    (error (e)
-      (error 'mcp-tool-execution-error
-             :tool-name tool-name
-             :reason (princ-to-string e)))))
-
 (defun whitespace-only-stream-remaining-p (stream)
   "Returns true when the remainder of STREAM contains only whitespace."
   (let ((eof-marker (gensym "EOF")))
@@ -650,7 +608,8 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
        (execute-approved-eval-expression expression form tool-name)))
 
 (define-builtin-tool "readSamplingParameters" (bot arguments)
-  (sampling-parameters-tool-result bot))
+  (declare (ignore arguments))
+  (execute-read-sampling-parameters-tool bot))
 
 (define-builtin-tool "startAgenticLoop" (bot arguments)
   (unless (current-active-conversation (chatbot-runtime-context bot))
@@ -734,33 +693,11 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
          (agentic-loop-public-json loop))))
 
 (define-builtin-tool "setSamplingParameters" (bot arguments)
-  (multiple-value-bind (temperature-foundp temperature-value)
-         (builtin-tool-argument arguments "temperature" :temperature)
-       (multiple-value-bind (top-p-foundp top-p-value)
-           (builtin-tool-argument arguments "topP" :top-p :top_p)
-         (unless (or temperature-foundp top-p-foundp)
-           (error 'mcp-tool-execution-error
-                  :tool-name tool-name
-                  :reason "At least one of temperature or topP is required."))
-         (handler-case
-             (progn
-               (apply #'set-sampling-parameters
-                      bot
-                      (append (when temperature-foundp
-                                (list :temperature
-                                      (normalize-builtin-tool-real-argument temperature-value "temperature" tool-name :allow-nil-p t)))
-                              (when top-p-foundp
-                                (list :top-p
-                                      (normalize-builtin-tool-real-argument top-p-value "topP" tool-name :allow-nil-p t)))))
-               (sampling-parameters-tool-result bot :saved t))
-           (error (e)
-             (error 'mcp-tool-execution-error
-                    :tool-name tool-name
-                    :reason (princ-to-string e)))))))
+     (execute-set-sampling-parameters-tool bot arguments tool-name))
 
 (define-builtin-tool "resetSamplingParameters" (bot arguments)
-  (reset-sampling-parameters bot)
-     (sampling-parameters-tool-result bot :saved t))
+     (declare (ignore arguments))
+     (execute-reset-sampling-parameters-tool bot))
 
 (define-builtin-tool "readFileLines" (bot arguments)
   (let* ((filename (mcp-val :filename arguments))
@@ -778,67 +715,20 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
        (read-file-lines-subset path beginning-line ending-line tool-name)))
 
 (define-builtin-tool "readSystemInstructions" (bot arguments)
-  (system-instruction-tool-result bot))
+  (declare (ignore arguments))
+  (execute-read-system-instructions-tool bot))
 
 (define-builtin-tool "insertSystemInstructionParagraph" (bot arguments)
-  (insert-system-instruction-paragraph
-   bot
-   (normalize-builtin-tool-string-argument
-    (or (mcp-val "paragraph" arguments)
-        (mcp-val :paragraph arguments))
-    "paragraph"
-    tool-name)
-   :index (normalize-builtin-tool-integer-argument
-           (or (mcp-val "index" arguments)
-               (mcp-val :index arguments))
-           "index"
-           tool-name))
-  (when (chatbot-system-instruction-path bot)
-    (save-system-instructions-or-tool-error bot tool-name))
-  (system-instruction-tool-result bot :saved (and (chatbot-system-instruction-path bot) t)))
+  (execute-insert-system-instruction-paragraph-tool bot arguments tool-name))
 
 (define-builtin-tool "updateSystemInstructionParagraph" (bot arguments)
-  (update-system-instruction-paragraph
-   bot
-   (normalize-builtin-tool-integer-argument
-    (or (mcp-val "index" arguments)
-        (mcp-val :index arguments))
-    "index"
-    tool-name)
-   (normalize-builtin-tool-string-argument
-    (or (mcp-val "paragraph" arguments)
-        (mcp-val :paragraph arguments))
-    "paragraph"
-    tool-name))
-  (when (chatbot-system-instruction-path bot)
-    (save-system-instructions-or-tool-error bot tool-name))
-  (system-instruction-tool-result bot :saved (and (chatbot-system-instruction-path bot) t)))
+  (execute-update-system-instruction-paragraph-tool bot arguments tool-name))
 
 (define-builtin-tool "deleteSystemInstructionParagraph" (bot arguments)
-  (delete-system-instruction-paragraph
-   bot
-   (normalize-builtin-tool-integer-argument
-    (or (mcp-val "index" arguments)
-        (mcp-val :index arguments))
-    "index"
-    tool-name))
-  (when (chatbot-system-instruction-path bot)
-    (save-system-instructions-or-tool-error bot tool-name))
-  (system-instruction-tool-result bot :saved (and (chatbot-system-instruction-path bot) t)))
+  (execute-delete-system-instruction-paragraph-tool bot arguments tool-name))
 
 (define-builtin-tool "replaceSystemInstructions" (bot arguments)
-  (multiple-value-bind (paragraphs-foundp paragraphs-value)
-      (builtin-tool-argument arguments "paragraphs" :paragraphs)
-    (replace-system-instruction-paragraphs
-     bot
-     (normalize-builtin-tool-string-sequence-argument
-      paragraphs-foundp
-      paragraphs-value
-      "paragraphs"
-      tool-name)))
-  (when (chatbot-system-instruction-path bot)
-    (save-system-instructions-or-tool-error bot tool-name))
-  (system-instruction-tool-result bot :saved (and (chatbot-system-instruction-path bot) t)))
+  (execute-replace-system-instructions-tool bot arguments tool-name))
 
 (define-builtin-tool "directory" (bot arguments)
   (multiple-value-bind (directory-path root)
