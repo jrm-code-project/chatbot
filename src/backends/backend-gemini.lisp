@@ -61,6 +61,199 @@
     ("result" . ,(list `(("type" . "text")
                          ("text" . ,(chatbot-tool-error-text name condition)))))))
 
+(defun gemini-request-url ()
+  "Returns the Gemini Interactions streaming endpoint."
+  (concatenate 'string *gemini-base-url* "/interactions?alt=sse"))
+
+(defun gemini-request-headers (api-key)
+  "Returns the Gemini Interactions request headers for API-KEY."
+  (list (cons "x-goog-api-key" api-key)
+        (cons "Api-Revision" (gemini-api-revision))
+        (cons "Content-Type" "application/json")))
+
+(defun gemini-append-buffer-text (buffer text)
+  "Appends TEXT to adjustable character BUFFER."
+  (loop for char across text
+        do (vector-push-extend char buffer))
+  buffer)
+
+(defun gemini-empty-function-call (id name)
+  "Returns a fresh function-call accumulator for ID and NAME."
+  (list (cons :id id)
+        (cons :name name)
+        (cons :arguments (make-array 0 :element-type 'character
+                                    :fill-pointer 0
+                                    :adjustable t))))
+
+(defun gemini-initial-stream-state (current-interaction-id)
+  "Returns the initial mutable state used while consuming a Gemini SSE stream."
+  (list :current-interaction-id current-interaction-id
+        :full-text (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t)
+        :full-thought-text (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t)
+        :active-fn-call nil
+        :function-calls-to-run nil
+        :completed-usage nil
+        :completed-stop-reason nil
+        :completed-interaction-p nil))
+
+(defun gemini-stream-state-current-interaction-id (stream-state)
+  "Returns STREAM-STATE's latest interaction id."
+  (getf stream-state :current-interaction-id))
+
+(defun gemini-stream-state-full-text (stream-state)
+  "Returns STREAM-STATE's accumulated visible text buffer."
+  (getf stream-state :full-text))
+
+(defun gemini-stream-state-full-thought-text (stream-state)
+  "Returns STREAM-STATE's accumulated thought text buffer."
+  (getf stream-state :full-thought-text))
+
+(defun gemini-stream-state-active-fn-call (stream-state)
+  "Returns STREAM-STATE's in-progress function call accumulator."
+  (getf stream-state :active-fn-call))
+
+(defun gemini-stream-state-function-calls-to-run (stream-state)
+  "Returns STREAM-STATE's completed function-call accumulator list."
+  (getf stream-state :function-calls-to-run))
+
+(defun gemini-stream-state-completed-usage (stream-state)
+  "Returns STREAM-STATE's completed usage payload."
+  (getf stream-state :completed-usage))
+
+(defun gemini-stream-state-completed-stop-reason (stream-state)
+  "Returns STREAM-STATE's completed stop reason."
+  (getf stream-state :completed-stop-reason))
+
+(defun gemini-stream-state-completed-interaction-p (stream-state)
+  "Returns whether STREAM-STATE observed interaction.completed."
+  (getf stream-state :completed-interaction-p))
+
+(defun gemini-handle-step-start (stream-state event)
+  "Updates STREAM-STATE for one Gemini step.start EVENT."
+  (let* ((step (cdr (assoc :step event)))
+         (type (cdr (assoc :type step)))
+         (id (cdr (assoc :id step)))
+         (name (cdr (assoc :name step))))
+    (when (string= type "function_call")
+      (setf (getf stream-state :active-fn-call)
+           (gemini-empty-function-call id name))))
+  stream-state)
+
+(defun gemini-handle-step-delta (stream-state delta callback)
+  "Updates STREAM-STATE for one Gemini step DELTA."
+  (let* ((delta-type (cdr (assoc :type delta)))
+         (delta-text (cdr (assoc :text delta)))
+         (delta-args (cdr (assoc :arguments delta)))
+         (active-fn-call (gemini-stream-state-active-fn-call stream-state)))
+    (cond
+      ((and (string= delta-type "text")
+           (stringp delta-text))
+       (gemini-append-buffer-text (gemini-stream-state-full-text stream-state) delta-text)
+       (when callback
+         (funcall callback delta-text)))
+      ((and (gemini-thought-delta-type-p delta-type)
+           (stringp delta-text))
+       (gemini-append-buffer-text (gemini-stream-state-full-thought-text stream-state) delta-text))
+      ((and active-fn-call delta-args)
+       (gemini-append-buffer-text (cdr (assoc :arguments active-fn-call)) delta-args))))
+  stream-state)
+
+(defun gemini-handle-step-stop (stream-state)
+  "Moves any active Gemini function call from in-progress to ready-to-run."
+  (let ((active-fn-call (gemini-stream-state-active-fn-call stream-state)))
+    (when active-fn-call
+      (push active-fn-call (getf stream-state :function-calls-to-run))
+      (setf (getf stream-state :active-fn-call) nil)))
+  stream-state)
+
+(defun gemini-handle-interaction-event (stream-state event event-type status)
+  "Updates STREAM-STATE for one Gemini interaction EVENT of EVENT-TYPE."
+  (let* ((interaction (cdr (assoc :interaction event)))
+         (id (cdr (assoc :id interaction))))
+    (when id
+      (setf (getf stream-state :current-interaction-id) id))
+    (when (string= event-type "interaction.completed")
+      (setf (getf stream-state :completed-interaction-p) t)
+      (setf (getf stream-state :completed-usage) (cdr (assoc :usage interaction)))
+      (setf (getf stream-state :completed-stop-reason) (response-stop-reason interaction))
+      (log-backend-response-stats
+       :gemini
+       :http-status status
+       :interaction-id id
+       :model (cdr (assoc :model interaction))
+       :finish-reason (gemini-stream-state-completed-stop-reason stream-state)
+       :usage (gemini-stream-state-completed-usage stream-state))))
+  stream-state)
+
+(defun gemini-handle-status-update (stream-state event)
+  "Updates STREAM-STATE for one Gemini interaction.status_update EVENT."
+  (let ((id (cdr (assoc :interaction--id event))))
+    (when id
+      (setf (getf stream-state :current-interaction-id) id)))
+  stream-state)
+
+(defun gemini-handle-stream-event (stream-state event callback status)
+  "Updates STREAM-STATE for one parsed Gemini SSE EVENT."
+  (let ((event-type (cdr (assoc :event--type event))))
+    (cond
+      ((string= event-type "step.start")
+       (gemini-handle-step-start stream-state event))
+      ((string= event-type "step.delta")
+       (gemini-handle-step-delta stream-state (cdr (assoc :delta event)) callback))
+      ((string= event-type "step.stop")
+       (gemini-handle-step-stop stream-state))
+      ((or (string= event-type "interaction.created")
+           (string= event-type "interaction.completed"))
+       (gemini-handle-interaction-event stream-state event event-type status))
+      ((string= event-type "interaction.status_update")
+       (gemini-handle-status-update stream-state event))
+      (t stream-state))))
+
+(defun collect-gemini-stream-state (stream callback stream-read-timeout status current-interaction-id)
+  "Consumes STREAM and returns the accumulated Gemini stream state."
+  (let ((stream-state (gemini-initial-stream-state current-interaction-id)))
+    (unwind-protect
+         (loop for line = (read-sse-line stream
+                                        :timeout-seconds stream-read-timeout
+                                        :timeout-context "Gemini streaming response")
+              until (eq line :eof)
+              do (let ((event (parse-sse-event line)))
+                   (when event
+                     (gemini-handle-stream-event stream-state event callback status))))
+      (close stream))
+    stream-state))
+
+(defun gemini-tool-call-outcome (state stream-state)
+  "Returns the provider tool outcome implied by STREAM-STATE."
+  (make-provider-turn-tool-outcome
+   (nreverse (gemini-stream-state-function-calls-to-run stream-state))
+   :interaction-id (gemini-stream-state-current-interaction-id stream-state)
+   :effective-model (getf state :effective-model)
+   :effective-generation-config (getf state :effective-generation-config)))
+
+(defun gemini-response-retryable-p (state stream-state)
+  "Returns true when STREAM-STATE should trigger the Google retry path."
+  (and (stringp (getf state :input))
+       (gemini-stream-state-completed-interaction-p stream-state)
+       (or (malformed-response-stop-reason-p
+           (gemini-stream-state-completed-stop-reason stream-state))
+           (= 0 (length (gemini-stream-state-full-text stream-state))))))
+
+(defun gemini-stream-state->provider-outcome (state stream-state)
+  "Returns the provider outcome implied by STREAM-STATE."
+  (cond
+    ((gemini-stream-state-function-calls-to-run stream-state)
+     (gemini-tool-call-outcome state stream-state))
+    ((gemini-response-retryable-p state stream-state)
+     (make-provider-turn-retry-outcome
+      :interaction-id (gemini-stream-state-current-interaction-id stream-state)))
+    (t
+     (make-provider-turn-final-outcome
+      (coerce (gemini-stream-state-full-text stream-state) 'string)
+      :interaction-id (gemini-stream-state-current-interaction-id stream-state)
+      :usage (gemini-stream-state-completed-usage stream-state)
+      :thought-text (coerce (gemini-stream-state-full-thought-text stream-state) 'string)))))
+
 (defun submit-gemini-turn (bot callback state)
   "Submits one Gemini Interactions turn and returns a normalized outcome."
   (let ((api-key (gemini-api-key)))
@@ -79,107 +272,21 @@
                            :effective-generation-config (getf state :effective-generation-config)
                            :stream t))
            (payload-json (cl-json:encode-json-to-string payload-alist))
-           (url (concatenate 'string *gemini-base-url* "/interactions?alt=sse"))
-           (headers (list (cons "x-goog-api-key" api-key)
-                          (cons "Api-Revision" (gemini-api-revision))
-                          (cons "Content-Type" "application/json")))
-           (stream-read-timeout (current-http-read-timeout))
-           (full-text (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t))
-           (full-thought-text (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t))
-           (active-fn-call nil)
-           (function-calls-to-run nil)
-           (completed-usage nil)
-           (completed-stop-reason nil)
-           (completed-interaction-p nil))
-      (funcall
-       (lambda ()
-         (multiple-value-bind (stream status)
-             (post-web-request url headers payload-json :want-stream t)
-           (unless (= status 200)
-             (error "API responded with HTTP status ~A" status))
-           (unwind-protect
-                (loop for line = (read-sse-line stream
-                                                :timeout-seconds stream-read-timeout
-                                                :timeout-context "Gemini streaming response")
-                      until (eq line :eof)
-                      do (let ((event (parse-sse-event line)))
-                           (when event
-                             (let ((event-type (cdr (assoc :event--type event))))
-                               (cond
-                                 ((string= event-type "step.start")
-                                  (let* ((step (cdr (assoc :step event)))
-                                         (type (cdr (assoc :type step)))
-                                         (id (cdr (assoc :id step)))
-                                         (name (cdr (assoc :name step))))
-                                    (when (string= type "function_call")
-                                      (setf active-fn-call
-                                            (list (cons :id id)
-                                                  (cons :name name)
-                                                  (cons :arguments (make-array 0 :element-type 'character
-                                                                               :fill-pointer 0
-                                                                               :adjustable t)))))))
-                                 ((string= event-type "step.delta")
-                                  (let* ((delta (cdr (assoc :delta event)))
-                                         (delta-type (cdr (assoc :type delta)))
-                                         (delta-text (cdr (assoc :text delta)))
-                                         (delta-args (cdr (assoc :arguments delta))))
-                                    (cond
-                                      ((and (string= delta-type "text")
-                                            (stringp delta-text))
-                                       (loop for char across delta-text
-                                             do (vector-push-extend char full-text))
-                                       (when callback
-                                         (funcall callback delta-text)))
-                                      ((and (gemini-thought-delta-type-p delta-type)
-                                            (stringp delta-text))
-                                       (loop for char across delta-text
-                                             do (vector-push-extend char full-thought-text)))
-                                      ((and active-fn-call delta-args)
-                                       (loop for char across delta-args
-                                             do (vector-push-extend char (cdr (assoc :arguments active-fn-call))))))))
-                                 ((string= event-type "step.stop")
-                                  (when active-fn-call
-                                    (push active-fn-call function-calls-to-run)
-                                    (setf active-fn-call nil)))
-                                 ((or (string= event-type "interaction.created")
-                                      (string= event-type "interaction.completed"))
-                                  (let* ((interaction (cdr (assoc :interaction event)))
-                                         (id (cdr (assoc :id interaction))))
-                                    (when id
-                                      (setf current-interaction-id id))
-                                    (when (string= event-type "interaction.completed")
-                                      (setf completed-interaction-p t)
-                                      (setf completed-usage (cdr (assoc :usage interaction)))
-                                      (setf completed-stop-reason (response-stop-reason interaction))
-                                      (log-backend-response-stats
-                                       :gemini
-                                       :http-status status
-                                       :interaction-id id
-                                       :model (cdr (assoc :model interaction))
-                                       :finish-reason completed-stop-reason
-                                       :usage completed-usage))))
-                                 ((string= event-type "interaction.status_update")
-                                  (let ((id (cdr (assoc :interaction--id event))))
-                                    (when id
-                                      (setf current-interaction-id id)))))))))
-             (close stream)))))
-      (cond
-        (function-calls-to-run
-         (make-provider-turn-tool-outcome
-          (nreverse function-calls-to-run)
-          :interaction-id current-interaction-id
-          :effective-model (getf state :effective-model)
-          :effective-generation-config (getf state :effective-generation-config)))
-        ((and (stringp (getf state :input))
-              completed-interaction-p
-              (or (malformed-response-stop-reason-p completed-stop-reason)
-                  (= 0 (length full-text))))
-         (make-provider-turn-retry-outcome :interaction-id current-interaction-id))
-        (t
-         (make-provider-turn-final-outcome (coerce full-text 'string)
-                                           :interaction-id current-interaction-id
-                                           :usage completed-usage
-                                           :thought-text (coerce full-thought-text 'string)))))))
+           (url (gemini-request-url))
+           (headers (gemini-request-headers api-key))
+           (stream-read-timeout (current-http-read-timeout)))
+      (multiple-value-bind (stream status)
+          (post-web-request url headers payload-json :want-stream t)
+        (unless (= status 200)
+          (error "API responded with HTTP status ~A" status))
+        (gemini-stream-state->provider-outcome
+         state
+         (collect-gemini-stream-state
+          stream
+          callback
+          stream-read-timeout
+          status
+          current-interaction-id))))))
 
 (defun chat-gemini (bot input conversation callback &key file-attachments effective-model effective-generation-config
                                                      return-turn-result-p
