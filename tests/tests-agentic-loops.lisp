@@ -235,9 +235,65 @@
       (clear-agentic-loops))))
 
 
+(fiveam:test test-monitor-restarts-failed-agentic-loop-within-budget
+  (let* ((*agentic-loop-supervisor-max-restarts* 1)
+        (*agentic-loop-supervisor-restart-backoff-seconds* 0.0d0)
+        (calls 0)
+        (*agentic-loop-chat-function*
+         (lambda (prompt &key conversation callback file files temperature top-p)
+           (declare (ignore prompt conversation callback file files temperature top-p))
+           (incf calls)
+           (if (= calls 1)
+               (error "Malformed response from minion.")
+               "FINAL: recovered after restart")))
+        (conversation (new-chat :backend :openai)))
+    (unwind-protect
+        (let ((loop (start-agentic-loop conversation "Recover from failure" :max-iterations 2)))
+          (fiveam:is (eq :failed
+                         (wait-for-agentic-loop-status loop '(:failed :completed :limit-reached))))
+          (fiveam:is (= 1 calls))
+          (monitor-agentic-loops-once)
+          (monitor-agentic-loops-once)
+          (fiveam:is (eq :completed
+                         (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
+          (fiveam:is (= 2 calls))
+          (fiveam:is (= 1 (agentic-loop-supervisor-restart-count loop)))
+          (fiveam:is (string= "recovered after restart" (agentic-loop-result-summary loop))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
+(fiveam:test test-monitor-restarts-timed-out-agentic-loop-step
+  (let* ((*agentic-loop-supervisor-timeout-seconds* 0.05d0)
+        (*agentic-loop-supervisor-max-restarts* 1)
+        (*agentic-loop-supervisor-restart-backoff-seconds* 0.0d0)
+        (calls 0)
+        (*agentic-loop-chat-function*
+         (lambda (prompt &key conversation callback file files temperature top-p)
+           (declare (ignore prompt conversation callback file files temperature top-p))
+           (incf calls)
+           (if (= calls 1)
+               (loop do (sleep 0.01))
+               "FINAL: completed after timeout restart")))
+        (conversation (new-chat :backend :openai)))
+    (unwind-protect
+        (let ((loop (start-agentic-loop conversation "Recover from timeout" :max-iterations 2)))
+          (fiveam:is (eq :running
+                         (wait-for-agentic-loop-status loop '(:running :completed :failed :limit-reached))))
+          (sleep 0.08)
+          (monitor-agentic-loops-once)
+          (monitor-agentic-loops-once)
+          (fiveam:is (eq :completed
+                         (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
+          (fiveam:is (= 2 calls))
+          (fiveam:is (= 1 (agentic-loop-supervisor-restart-count loop)))
+          (fiveam:is (string= "completed after timeout restart" (agentic-loop-result-summary loop))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
+
 (fiveam:test test-agentic-loop-registry-context-isolation
   (let* ((context-a (make-runtime-context))
-         (context-b (make-runtime-context))
+        (context-b (make-runtime-context))
          (conv-a (new-chat :backend :openai :runtime-context context-a))
          (conv-b (new-chat :backend :openai :runtime-context context-b))
          (*agentic-loop-chat-function*

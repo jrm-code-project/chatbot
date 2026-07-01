@@ -18,6 +18,15 @@
 (defvar *agentic-loop-chat-function* nil
   "Optional test seam overriding the chat function used by agentic loops.")
 
+(defvar *agentic-loop-supervisor-timeout-seconds* 30.0d0
+  "Maximum seconds an in-flight loop step may run before the watchdog restarts it.")
+
+(defvar *agentic-loop-supervisor-max-restarts* 2
+  "Maximum watchdog-managed restarts for one agentic loop before it is left failed.")
+
+(defvar *agentic-loop-supervisor-restart-backoff-seconds* 1.0d0
+  "Seconds the watchdog waits before respawning a restarted loop.")
+
 (define-condition agentic-loop-approval-required (error)
   ((loop-id :initarg :loop-id :reader agentic-loop-approval-required-loop-id)
    (kind :initarg :kind :reader agentic-loop-approval-required-kind)
@@ -105,6 +114,34 @@
     :initarg :pending-step-prompt
     :accessor agentic-loop-pending-step-prompt
     :initform nil)
+   (active-step-started-at
+    :initarg :active-step-started-at
+    :accessor agentic-loop-active-step-started-at
+    :initform nil)
+   (active-step-snapshot
+    :initarg :active-step-snapshot
+    :accessor agentic-loop-active-step-snapshot
+    :initform nil)
+   (supervisor-restart-count
+    :initarg :supervisor-restart-count
+    :accessor agentic-loop-supervisor-restart-count
+    :initform 0)
+   (supervisor-max-restarts
+    :initarg :supervisor-max-restarts
+    :accessor agentic-loop-supervisor-max-restarts
+    :initform *agentic-loop-supervisor-max-restarts*)
+   (supervisor-restart-backoff-seconds
+    :initarg :supervisor-restart-backoff-seconds
+    :accessor agentic-loop-supervisor-restart-backoff-seconds
+    :initform *agentic-loop-supervisor-restart-backoff-seconds*)
+   (supervisor-restart-not-before
+    :initarg :supervisor-restart-not-before
+    :accessor agentic-loop-supervisor-restart-not-before
+    :initform nil)
+   (supervisor-timeout-seconds
+    :initarg :supervisor-timeout-seconds
+    :accessor agentic-loop-supervisor-timeout-seconds
+    :initform *agentic-loop-supervisor-timeout-seconds*)
    (created-at
     :initarg :created-at
     :reader agentic-loop-created-at
@@ -456,6 +493,12 @@
                                                :note (princ-to-string condition))
         :outcome :interrupted))
 
+(defun clear-agentic-loop-active-step-state (loop)
+  "Clears LOOP's in-flight step bookkeeping."
+  (setf (agentic-loop-active-step-started-at loop) nil)
+  (setf (agentic-loop-active-step-snapshot loop) nil)
+  loop)
+
 (defun apply-agentic-loop-step-state (loop state)
   "Applies one computed step STATE to LOOP and returns the step outcome keyword."
   (setf (agentic-loop-current-iteration loop) (getf state :current-iteration))
@@ -468,6 +511,7 @@
     (setf (agentic-loop-status loop) (getf state :status)))
   (when (member :result-summary state)
     (setf (agentic-loop-result-summary loop) (getf state :result-summary)))
+  (clear-agentic-loop-active-step-state loop)
   (getf state :outcome))
 
 (defun agentic-loop-log (level loop message &key context)
@@ -527,6 +571,8 @@
          (snapshot (snapshot-conversation-state conversation))
          (iteration (1+ (agentic-loop-current-iteration loop))))
     (setf (agentic-loop-pending-step-prompt loop) prompt)
+    (setf (agentic-loop-active-step-started-at loop) (get-high-precision-timestamp))
+    (setf (agentic-loop-active-step-snapshot loop) snapshot)
     (handler-case
         (progn
           (ensure-agentic-loop-not-interrupted loop)
@@ -543,6 +589,93 @@
         (apply-agentic-loop-step-state
          loop
          (make-agentic-loop-interruption-state loop iteration prompt condition))))))
+
+(defun agentic-loop-watchdog-restart-allowed-p (loop)
+  "Returns true when LOOP still has restart budget remaining."
+  (< (agentic-loop-supervisor-restart-count loop)
+     (agentic-loop-supervisor-max-restarts loop)))
+
+(defun agentic-loop-watchdog-backoff-elapsed-p (loop now)
+  "Returns true when LOOP's restart backoff window has elapsed at NOW."
+  (let ((not-before (agentic-loop-supervisor-restart-not-before loop)))
+    (or (null not-before)
+       (>= now not-before))))
+
+(defun agentic-loop-watchdog-timeout-expired-p (loop now)
+  "Returns true when LOOP's current step has exceeded its watchdog timeout."
+  (let ((timeout-seconds (agentic-loop-supervisor-timeout-seconds loop))
+       (started-at (agentic-loop-active-step-started-at loop)))
+    (and (eq (agentic-loop-status loop) :running)
+        started-at
+        timeout-seconds
+        (> (- now started-at) timeout-seconds))))
+
+(defun terminate-agentic-loop-worker-thread (loop)
+  "Forcefully terminates LOOP's worker thread when it is still alive."
+  (let ((thread (agentic-loop-thread loop)))
+    (when (and thread (sb-thread:thread-alive-p thread))
+      (sb-thread:terminate-thread thread)))
+  (setf (agentic-loop-thread loop) nil)
+  loop)
+
+(defun restore-agentic-loop-active-snapshot (loop)
+  "Restores LOOP's conversation to the most recent safe snapshot when available."
+  (let ((snapshot (agentic-loop-active-step-snapshot loop)))
+    (when snapshot
+      (restore-conversation-state (agentic-loop-conversation loop) snapshot)))
+  loop)
+
+(defun mark-agentic-loop-supervisor-failed (loop reason)
+  "Marks LOOP as permanently failed under watchdog supervision with REASON."
+  (terminate-agentic-loop-worker-thread loop)
+  (restore-agentic-loop-active-snapshot loop)
+  (clear-agentic-loop-active-step-state loop)
+  (sb-thread:with-mutex ((agentic-loop-lock loop))
+    (setf (agentic-loop-status loop) :failed)
+    (setf (agentic-loop-last-error loop) reason)
+    (setf (agentic-loop-result-summary loop) reason)
+    (setf (agentic-loop-finished-at loop) (get-high-precision-timestamp))
+    (setf (agentic-loop-pending-approval loop) nil)
+    (setf (agentic-loop-pending-approval-decision loop) nil))
+  (agentic-loop-log :error loop "watchdog exhausted restart budget"
+                   :context `(("reason" . ,reason)
+                              ("restart-count" . ,(agentic-loop-supervisor-restart-count loop))))
+  loop)
+
+(defun schedule-agentic-loop-watchdog-restart (loop reason &key terminate-thread-p)
+  "Schedules LOOP for watchdog-managed restart and returns LOOP."
+  (when terminate-thread-p
+    (terminate-agentic-loop-worker-thread loop))
+  (restore-agentic-loop-active-snapshot loop)
+  (clear-agentic-loop-active-step-state loop)
+  (sb-thread:with-mutex ((agentic-loop-lock loop))
+    (incf (agentic-loop-supervisor-restart-count loop))
+    (setf (agentic-loop-status loop) :pending)
+    (setf (agentic-loop-last-error loop) reason)
+    (setf (agentic-loop-result-summary loop) reason)
+    (setf (agentic-loop-finished-at loop) nil)
+    (setf (agentic-loop-pending-approval loop) nil)
+    (setf (agentic-loop-pending-approval-decision loop) nil)
+    (setf (agentic-loop-supervisor-restart-not-before loop)
+         (+ (get-high-precision-timestamp)
+            (agentic-loop-supervisor-restart-backoff-seconds loop))))
+  (append-agentic-loop-step-record
+   loop
+   (make-agentic-loop-step-record (1+ (agentic-loop-current-iteration loop))
+                                 :interrupted
+                                 :prompt (agentic-loop-pending-step-prompt loop)
+                                 :note reason))
+  (agentic-loop-log :warn loop "watchdog scheduled restart"
+                   :context `(("reason" . ,reason)
+                              ("restart-count" . ,(agentic-loop-supervisor-restart-count loop))
+                              ("max-restarts" . ,(agentic-loop-supervisor-max-restarts loop))))
+  loop)
+
+(defun ensure-agentic-loop-watchdog-restart (loop reason &key terminate-thread-p)
+  "Restarts LOOP under watchdog policy when allowed, otherwise leaves it failed."
+  (if (agentic-loop-watchdog-restart-allowed-p loop)
+      (schedule-agentic-loop-watchdog-restart loop reason :terminate-thread-p terminate-thread-p)
+      (mark-agentic-loop-supervisor-failed loop reason)))
 
 (defun run-agentic-loop-worker (loop)
   "Runs LOOP to completion, pause, interruption, or failure."
@@ -585,6 +718,7 @@
     (progn
       (when (eq (agentic-loop-status loop) :running)
         (setf (agentic-loop-status loop) :completed))
+      (clear-agentic-loop-active-step-state loop)
       (setf (agentic-loop-finished-at loop) (get-high-precision-timestamp))
       (setf (agentic-loop-thread loop) nil))))
 
@@ -696,33 +830,46 @@
 
 (defun monitor-agentic-loops-once (&optional context)
   "Scans all registered loops and pushes stuck, pending, or zombie loops into valid states."
-  (dolist (loop (list-agentic-loops context))
-    (let ((status (agentic-loop-status loop))
-          (alive (agentic-loop-thread-alive-p loop)))
+  (let ((now (get-high-precision-timestamp)))
+    (dolist (loop (list-agentic-loops context))
+      (let ((status (agentic-loop-status loop))
+            (alive (agentic-loop-thread-alive-p loop)))
       (cond
         ;; 1. Stuck in :pending (registered but worker thread never spawned/started)
         ((eq status :pending)
-         (log-message :info (format nil "Monitor: Spawning pending loop ~A" (agentic-loop-id loop)))
-         (spawn-agentic-loop-thread loop))
+         (when (agentic-loop-watchdog-backoff-elapsed-p loop now)
+           (log-message :info (format nil "Monitor: Spawning pending loop ~A" (agentic-loop-id loop)))
+           (setf (agentic-loop-supervisor-restart-not-before loop) nil)
+           (spawn-agentic-loop-thread loop)))
 
-        ;; 2. Zombie state: status is :running or :awaiting-approval, but the worker thread is dead.
-        ;; We push it to :failed (aborted) to ensure it doesn't stay stuck forever.
+        ;; 2. Timed-out running steps are killed and restarted under watchdog policy.
+        ((agentic-loop-watchdog-timeout-expired-p loop now)
+         (log-message :warn (format nil "Monitor: Detected timed-out loop ~A" (agentic-loop-id loop)))
+         (ensure-agentic-loop-watchdog-restart
+          loop
+          (format nil "Watchdog timeout after ~,2F seconds."
+                  (- now (agentic-loop-active-step-started-at loop)))
+          :terminate-thread-p t))
+
+        ;; 3. Zombie state: status expects a worker thread, but the worker is gone.
         ((and (agentic-loop-live-status-p status) (not alive))
-         (log-message :warn (format nil "Monitor: Detected zombie loop ~A (status: ~A, thread dead)" 
+         (log-message :warn (format nil "Monitor: Detected zombie loop ~A (status: ~A, thread dead)"
                                     (agentic-loop-id loop) status))
-         (sb-thread:with-mutex ((agentic-loop-lock loop))
-           (setf (agentic-loop-status loop) :failed)
-           (setf (agentic-loop-last-error loop) "Worker thread terminated unexpectedly.")
-           (setf (agentic-loop-finished-at loop) (get-high-precision-timestamp))))
+         (ensure-agentic-loop-watchdog-restart loop
+                                               "Worker thread terminated unexpectedly."))
 
-        ;; 3. Invalid/unrecognized states that are not completed or aborted should be pushed to failed.
+        ;; 4. Retry failed loops under watchdog policy instead of leaving them dead immediately.
+        ((eq status :failed)
+         (ensure-agentic-loop-watchdog-restart loop
+                                               (or (agentic-loop-last-error loop)
+                                                   "Loop failed unexpectedly.")))
+
+        ;; 5. Invalid/unrecognized states that are not completed or aborted should be pushed to failed.
         ((not (member status '(:pending :running :awaiting-approval :completed :failed :limit-reached :interrupted)))
-         (log-message :error (format nil "Monitor: Detected loop ~A in invalid state: ~A. Aborting." 
+         (log-message :error (format nil "Monitor: Detected loop ~A in invalid state: ~A. Aborting."
                                      (agentic-loop-id loop) status))
-         (sb-thread:with-mutex ((agentic-loop-lock loop))
-           (setf (agentic-loop-status loop) :failed)
-           (setf (agentic-loop-last-error loop) (format nil "Unrecognized loop status: ~A" status))
-           (setf (agentic-loop-finished-at loop) (get-high-precision-timestamp))))))))
+         (mark-agentic-loop-supervisor-failed loop
+                                              (format nil "Unrecognized loop status: ~A" status))))))))
 
 (defvar *reaper-interval-seconds* 600
   "Interval in seconds between thread and memory reaper sweeps (default 10 minutes).")

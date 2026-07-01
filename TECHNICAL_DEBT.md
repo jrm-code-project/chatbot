@@ -36,6 +36,7 @@ These areas should not be treated as fresh debt, but as **partially retired debt
 
 2. **Agentic loop and minion functional cleanup**
    - Loop-step state and minion restoration are clearer than before.
+   - Agentic loop supervision now also enforces watchdog-style timeout, failure, and zombie recovery through capped restarts, restart backoff, and last-safe-snapshot restoration in the monitor path.
    - Remaining debt: orchestration still depends on global registries, threads, and runtime-context bridging.
 
 3. **Reader vs accessor cleanup**
