@@ -259,6 +259,119 @@ Use NEW-CHAT instead when no persona should be loaded."
            (get-string-plist-value msg key-str))))
     (t nil)))
 
+(defun parse-minion-state-file (file)
+  "Returns FILE decoded from JSON, or NIL after logging a warning."
+  (handler-case
+      (cl-json:decode-json-from-string (uiop:read-file-string file))
+    (error (e)
+      (log-message :warn "Failed to parse minion state file"
+                  :context `(("file" . ,(namestring file))
+                             ("error" . ,(princ-to-string e))))
+      nil)))
+
+(defun minion-state-depth (state)
+  "Returns STATE's depth, defaulting to 1."
+  (or (get-string-plist-value state "depth") 1))
+
+(defun load-sorted-minion-states (directory)
+  "Returns DIRECTORY's minion states sorted shallowest-first."
+  (sort (remove nil
+               (mapcar #'parse-minion-state-file
+                       (uiop:directory-files directory "*.json")))
+        #'<
+        :key #'minion-state-depth))
+
+(defun normalize-restored-system-instruction (raw-system-instruction)
+  "Returns RAW-SYSTEM-INSTRUCTION normalized for NEW-CHAT."
+  (cond
+    ((null raw-system-instruction) nil)
+    ((stringp raw-system-instruction) raw-system-instruction)
+    ((listp raw-system-instruction) (coerce raw-system-instruction 'vector))
+    (t nil)))
+
+(defun normalize-restored-message (msg)
+  "Returns MSG normalized to the internal role/content alist shape."
+  (list (cons "role" (get-message-field msg :role "role"))
+        (cons "content" (get-message-field msg :content "content"))))
+
+(defun restored-minion-history (messages)
+  "Returns normalized restored MESSAGES with the crash-recovery handshake appended."
+  (let ((normalized-messages
+         (if (and messages (listp messages))
+             (mapcar #'normalize-restored-message messages)
+             nil)))
+    (append normalized-messages
+           (list (list (cons "role" "user")
+                       (cons "content"
+                             "[SYSTEM: Recovered from unexpected shutdown. Please review your context and resume your last uncompleted task.]"))))))
+
+(defun minion-restoration-spec (state root-bot)
+  "Returns a normalized restoration spec for one saved minion STATE."
+  (let* ((name (get-string-plist-value state "name"))
+        (backend-str (get-string-plist-value state "backend"))
+        (scoped-dir-str (get-string-plist-value state "scopedDirectory")))
+    (list :name name
+         :backend (if (and backend-str (string/= backend-str ""))
+                      (intern (string-upcase backend-str) "KEYWORD")
+                      :gemini)
+         :model (get-string-plist-value state "model")
+         :parent-name (get-string-plist-value state "parentName")
+         :depth (minion-state-depth state)
+         :token-budget (get-string-plist-value state "tokenBudget")
+         :spent-tokens (or (get-string-plist-value state "spentTokens") 0)
+         :scoped-directory (and scoped-dir-str
+                                (uiop:ensure-directory-pathname scoped-dir-str))
+         :system-instruction
+         (normalize-restored-system-instruction
+          (get-string-plist-value state "systemInstruction"))
+         :interaction-id (get-string-plist-value state "interactionId")
+         :history (restored-minion-history (get-string-plist-value state "messages"))
+         :runtime-context (chatbot-runtime-context root-bot))))
+
+(defun instantiate-restored-minion (restoration)
+  "Returns one restored subordinate conversation from RESTORATION."
+  (let* ((name (getf restoration :name))
+        (sub-conv (new-chat :backend (getf restoration :backend)
+                            :model (getf restoration :model)
+                            :system-instruction (getf restoration :system-instruction)
+                            :parent-name (getf restoration :parent-name)
+                            :depth (getf restoration :depth)
+                            :token-budget (getf restoration :token-budget)
+                            :spent-tokens (getf restoration :spent-tokens)
+                            :scoped-directory (getf restoration :scoped-directory)
+                            :runtime-context (getf restoration :runtime-context)))
+        (sub-bot (conversation-chatbot sub-conv))
+        (interaction-id (getf restoration :interaction-id)))
+    (when name
+      (terminate-active-threads-by-name name)
+      (setf (chatbot-persona-name sub-bot) name))
+    (when (and interaction-id (string/= interaction-id ""))
+      (setf (conversation-interaction-id sub-conv) interaction-id))
+    (setf (conversation-messages sub-conv) (getf restoration :history))
+    sub-conv))
+
+(defun restoration-parent-is-root-p (restoration root-bot)
+  "Returns true when RESTORATION should attach directly beneath ROOT-BOT."
+  (let ((parent-name (getf restoration :parent-name)))
+    (or (null parent-name)
+        (string= parent-name "")
+        (string-equal parent-name (chatbot-persona-name root-bot)))))
+
+(defun attach-restored-minion (root-bot restored-convs restoration sub-conv)
+  "Attaches SUB-CONV according to RESTORATION using RESTORED-CONVS for parent lookup."
+  (let ((name (getf restoration :name))
+        (parent-name (getf restoration :parent-name)))
+    (when name
+      (setf (gethash name restored-convs) sub-conv))
+    (if (restoration-parent-is-root-p restoration root-bot)
+        (attach-subordinate-conversation root-bot sub-conv)
+        (let ((parent-conv (gethash parent-name restored-convs)))
+         (if parent-conv
+             (attach-subordinate-conversation (conversation-chatbot parent-conv) sub-conv)
+             (log-message :warn "Orphaned minion: parent not found"
+                          :context `(("name" . ,name)
+                                     ("parent" . ,parent-name))))))))
+
 (defun terminate-active-threads-by-name (name-substring)
   "Finds and terminates any active SBCL threads whose name contains NAME-SUBSTRING case-insensitively."
   #+sbcl
@@ -281,97 +394,13 @@ Use NEW-CHAT instead when no persona should be loaded."
   "Scans data/minions/ directory and reconstructs the minion hierarchy under ROOT-BOT."
   (let ((dir (minions-data-directory)))
     (when (uiop:directory-exists-p dir)
-      (let ((files (uiop:directory-files dir "*.json"))
-            (minion-states nil))
-        (dolist (f files)
-          (handler-case
-              (let* ((raw-text (uiop:read-file-string f))
-                     (parsed (cl-json:decode-json-from-string raw-text)))
-                (push parsed minion-states))
-            (error (e)
-              (log-message :warn "Failed to parse minion state file"
-                           :context `(("file" . ,(namestring f))
-                                      ("error" . ,(princ-to-string e)))))))
-        
-        ;; Sort by depth ascending
-        (setf minion-states
-              (sort minion-states #'< :key (lambda (x)
-                                             (or (get-string-plist-value x "depth") 1))))
-        
-        ;; Now instantiate in order
-        (let ((restored-convs (make-hash-table :test #'equal)))
-          (dolist (state minion-states)
-            (let* ((name (get-string-plist-value state "name"))
-                   (backend-str (get-string-plist-value state "backend"))
-                   (backend-kw (if (and backend-str (string/= backend-str ""))
-                                   (intern (string-upcase backend-str) "KEYWORD")
-                                   :gemini))
-                   (model (get-string-plist-value state "model"))
-                   (parent-name (get-string-plist-value state "parentName"))
-                   (depth (or (get-string-plist-value state "depth") 1))
-                   (token-budget (get-string-plist-value state "tokenBudget"))
-                   (spent-tokens (or (get-string-plist-value state "spentTokens") 0))
-                   (scoped-dir-str (get-string-plist-value state "scopedDirectory"))
-                   (scoped-dir (and scoped-dir-str (uiop:ensure-directory-pathname scoped-dir-str)))
-                   (system-instruction-raw (get-string-plist-value state "systemInstruction"))
-                   (system-instruction (cond
-                                         ((null system-instruction-raw) nil)
-                                         ((stringp system-instruction-raw) system-instruction-raw)
-                                         ((listp system-instruction-raw) (coerce system-instruction-raw 'vector))
-                                         (t nil)))
-                   (interaction-id (get-string-plist-value state "interactionId"))
-                   (messages (get-string-plist-value state "messages")))
-              ;; Terminate any active pre-existing background threads matching the minion name
-              (when name
-                (terminate-active-threads-by-name name))
-              ;; Instantiate minion
-              (let* ((sub-conv (new-chat :backend backend-kw
-                                         :model model
-                                         :system-instruction system-instruction
-                                         :parent-name parent-name
-                                         :depth depth
-                                         :token-budget token-budget
-                                         :spent-tokens spent-tokens
-                                         :scoped-directory scoped-dir
-                                         :runtime-context (chatbot-runtime-context root-bot)))
-                     (sub-bot (conversation-chatbot sub-conv)))
-                (setf (chatbot-persona-name sub-bot) name)
-                
-                ;; Restore Gemini interaction-id and Stateless messages history
-                (when (and interaction-id (string/= interaction-id ""))
-                  (setf (conversation-interaction-id sub-conv) interaction-id))
-                
-                ;; Build messages alist structure back correctly
-                (when (and messages (listp messages))
-                  (setf (conversation-messages sub-conv)
-                        (mapcar (lambda (msg)
-                                  (list (cons "role" (get-message-field msg :role "role"))
-                                        (cons "content" (get-message-field msg :content "content"))))
-                                messages)))
-                
-                ;; 4. Crash-Recovery Handshake: Append a system recovery prompt to the end of the history
-                (let ((handshake "[SYSTEM: Recovered from unexpected shutdown. Please review your context and resume your last uncompleted task.]"))
-                  (setf (conversation-messages sub-conv)
-                        (append (conversation-messages sub-conv)
-                                (list (list (cons "role" "user")
-                                            (cons "content" handshake))))))
-                
-                ;; Store restored conversation in hash table for lookup
-                (setf (gethash name restored-convs) sub-conv)
-                
-                ;; Link to the resolved parent
-                (if (or (null parent-name) (string= parent-name "") (string-equal parent-name (chatbot-persona-name root-bot)))
-                    ;; Attach to root bot
-                    (setf (chatbot-subordinates root-bot)
-                          (append (chatbot-subordinates root-bot) (list sub-conv)))
-                    ;; Attach to its resolved parent minion
-                    (let ((parent-conv (gethash parent-name restored-convs)))
-                      (if parent-conv
-                          (let ((parent-bot (conversation-chatbot parent-conv)))
-                            (setf (chatbot-subordinates parent-bot)
-                                  (append (chatbot-subordinates parent-bot) (list sub-conv))))
-                          (log-message :warn "Orphaned minion: parent not found"
-                                       :context `(("name" . ,name) ("parent" . ,parent-name)))))))))))
+      (let ((restored-convs (make-hash-table :test #'equal)))
+        (dolist (restoration
+                 (mapcar (lambda (state)
+                           (minion-restoration-spec state root-bot))
+                         (load-sorted-minion-states dir)))
+          (let ((sub-conv (instantiate-restored-minion restoration)))
+            (attach-restored-minion root-bot restored-convs restoration sub-conv))))
       (log-message :info "MCRS: Restoration bootloader completed successfully."))))
 
 (defun summarize-old-history (messages bot)

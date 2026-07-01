@@ -85,6 +85,47 @@
   "Returns the persona memory.json pathname when present."
   (probe-file (merge-pathnames "memory.json" persona-dir)))
 
+(defun persona-memory-jsonl-lines (raw-text)
+  "Returns non-empty trimmed JSONL lines from RAW-TEXT."
+  (remove ""
+          (mapcar (lambda (line)
+                    (string-trim '(#\Space #\Tab #\Return #\Linefeed) line))
+                  (cl-ppcre:split "\\r?\\n" raw-text))
+          :test #'string=))
+
+(defun normalize-persona-memory-jsonl-record (record memory-json-path)
+  "Returns RECORD normalized to a typed persona memory entry."
+  (let ((type (string-downcase
+               (or (mcp-val :type record)
+                   (mcp-val "type" record)
+                   ""))))
+    (cond
+      ((string= type "entity")
+       (cons :entity
+             `((:name . ,(mcp-val :name record))
+               (:entity-type . ,(or (mcp-val :entity-type record)
+                                    (mcp-val "entityType" record)))
+               (:observations . ,(json-array-elements (mcp-val :observations record))))))
+      ((string= type "relation")
+       (cons :relation
+             `((:from . ,(mcp-val :from record))
+               (:to . ,(mcp-val :to record))
+               (:relation-type . ,(or (mcp-val :relation-type record)
+                                      (mcp-val "relationType" record))))))
+      (t
+       (error "Unsupported persona memory record type ~S in ~A."
+              (or (mcp-val :type record)
+                  (mcp-val "type" record))
+              memory-json-path)))))
+
+(defun parse-persona-memory-jsonl-records (raw-text memory-json-path)
+  "Returns RAW-TEXT parsed into typed persona memory JSONL records."
+  (mapcar (lambda (line)
+            (normalize-persona-memory-jsonl-record
+             (parse-json-or-error line :context "persona memory JSONL")
+             memory-json-path))
+          (persona-memory-jsonl-lines raw-text)))
+
 (defun persona-memory-json-records (memory-json-path)
   "Returns MEMORY-JSON-PATH as normalized entity/relation records."
   (let* ((raw-text (uiop:read-file-string memory-json-path))
@@ -92,36 +133,15 @@
     (if (persona-memory-graph-json-p json-data)
         (list :entities (json-array-elements (mcp-val :entities json-data))
               :relations (json-array-elements (mcp-val :relations json-data)))
-        (let ((entities nil)
-              (relations nil))
-          (dolist (line (cl-ppcre:split "\\r?\\n" raw-text))
-            (let ((trimmed (string-trim '(#\Space #\Tab #\Return #\Linefeed) line)))
-              (unless (string= trimmed "")
-                (let* ((record (parse-json-or-error trimmed :context "persona memory JSONL"))
-                       (type (string-downcase
-                              (or (mcp-val :type record)
-                                  (mcp-val "type" record)
-                                  ""))))
-                  (cond
-                    ((string= type "entity")
-                     (push `((:name . ,(mcp-val :name record))
-                             (:entity-type . ,(or (mcp-val :entity-type record)
-                                                  (mcp-val "entityType" record)))
-                             (:observations . ,(json-array-elements (mcp-val :observations record))))
-                           entities))
-                    ((string= type "relation")
-                     (push `((:from . ,(mcp-val :from record))
-                             (:to . ,(mcp-val :to record))
-                             (:relation-type . ,(or (mcp-val :relation-type record)
-                                                    (mcp-val "relationType" record))))
-                           relations))
-                    (t
-                     (error "Unsupported persona memory record type ~S in ~A."
-                            (or (mcp-val :type record)
-                                (mcp-val "type" record))
-                            memory-json-path)))))))
-          (list :entities (nreverse entities)
-                :relations (nreverse relations))))))
+        (let ((records (parse-persona-memory-jsonl-records raw-text memory-json-path)))
+          (list :entities (mapcan (lambda (entry)
+                                    (when (eq (car entry) :entity)
+                                      (list (cdr entry))))
+                                  records)
+                :relations (mapcan (lambda (entry)
+                                     (when (eq (car entry) :relation)
+                                       (list (cdr entry))))
+                                   records))))))
 
 (defun persona-memory-entity-summary-line (entity)
   "Returns a concise one-line summary for ENTITY."
@@ -148,19 +168,18 @@
 
 (defun persona-memory-records->compressed-text (records)
   "Returns a concise text summary for persona memory RECORDS."
-  (let ((entities (safe-getf records :entities))
-        (relations (safe-getf records :relations))
-        (sections nil))
-    (when entities
-      (push (format nil "Entities:~%~{~A~^~%~}"
-                    (mapcar #'persona-memory-entity-summary-line entities))
-            sections))
-    (when relations
-      (push (format nil "Relations:~%~{~A~^~%~}"
-                    (mapcar #'persona-memory-relation-summary-line relations))
-            sections))
+  (let* ((entities (safe-getf records :entities))
+         (relations (safe-getf records :relations))
+         (sections
+           (remove nil
+                   (list (when entities
+                           (format nil "Entities:~%~{~A~^~%~}"
+                                   (mapcar #'persona-memory-entity-summary-line entities)))
+                         (when relations
+                           (format nil "Relations:~%~{~A~^~%~}"
+                                   (mapcar #'persona-memory-relation-summary-line relations)))))))
     (if sections
-        (format nil "~{~A~^~%~%~}" (nreverse sections))
+        (format nil "~{~A~^~%~%~}" sections)
         "Knowledge graph is empty.")))
 
 (defun save-compressed-persona-memory (persona-name-or-directory)
@@ -240,20 +259,27 @@
                                                   ("error" . ,(princ-to-string condition)))))))))
                  (persona-memory-compression-thread-name persona-dir))))))
 
+(defun merge-persona-diary-file (files-by-name file)
+  "Returns FILES-BY-NAME with FILE added or replaced by filename."
+  (let ((filename (file-namestring file)))
+    (acons filename
+           file
+           (remove filename files-by-name :key #'car :test #'string=))))
+
 (defun persona-diary-files (persona-dir)
   "Returns a list of preferred diary file pathnames, preferring CompressedDiary/ over Diary/."
   (let* ((diary-dir (uiop:directory-exists-p (merge-pathnames "Diary/" persona-dir)))
          (comp-dir (uiop:directory-exists-p (merge-pathnames "CompressedDiary/" persona-dir)))
-         (files (make-hash-table :test #'equal)))
-    (when diary-dir
-      (dolist (f (uiop:directory-files diary-dir))
-        (setf (gethash (file-namestring f) files) f)))
-    (when comp-dir
-      (dolist (f (uiop:directory-files comp-dir))
-        (setf (gethash (file-namestring f) files) f)))
-    (let ((result nil))
-      (maphash (lambda (k v) (declare (ignore k)) (push v result)) files)
-      result)))
+         (preferred-files (append (if diary-dir
+                                      (uiop:directory-files diary-dir)
+                                      nil)
+                                  (if comp-dir
+                                      (uiop:directory-files comp-dir)
+                                      nil))))
+    (mapcar #'cdr
+            (reduce #'merge-persona-diary-file
+                    preferred-files
+                    :initial-value nil))))
 
 (defun diary-filename-leading-integer (pathname)
   "Returns the leading integer from PATHNAME's stem, or NIL when absent."
@@ -319,24 +345,25 @@
 
 (defun persona-memory-graph-json->jsonl (graph)
   "Converts a knowledge-graph GRAPH object to server-memory JSONL storage."
-  (let ((lines nil))
-    (dolist (entity (json-array-elements (mcp-val :entities graph)))
-      (push (cl-json:encode-json-to-string
-             `(("type" . "entity")
-               ("name" . ,(mcp-val :name entity))
-               ("entityType" . ,(or (mcp-val :entity-type entity)
-                                    (mcp-val "entityType" entity)))
-               ("observations" . ,(json-array-elements (mcp-val :observations entity)))))
-            lines))
-    (dolist (relation (json-array-elements (mcp-val :relations graph)))
-      (push (cl-json:encode-json-to-string
-             `(("type" . "relation")
-               ("from" . ,(mcp-val :from relation))
-               ("to" . ,(mcp-val :to relation))
-               ("relationType" . ,(or (mcp-val :relation-type relation)
-                                      (mcp-val "relationType" relation)))))
-            lines))
-    (format nil "~{~A~^~%~}" (nreverse lines))))
+  (let ((lines
+          (append
+           (mapcar (lambda (entity)
+                     (cl-json:encode-json-to-string
+                      `(("type" . "entity")
+                        ("name" . ,(mcp-val :name entity))
+                        ("entityType" . ,(or (mcp-val :entity-type entity)
+                                             (mcp-val "entityType" entity)))
+                        ("observations" . ,(json-array-elements (mcp-val :observations entity))))))
+                   (json-array-elements (mcp-val :entities graph)))
+           (mapcar (lambda (relation)
+                     (cl-json:encode-json-to-string
+                      `(("type" . "relation")
+                        ("from" . ,(mcp-val :from relation))
+                        ("to" . ,(mcp-val :to relation))
+                        ("relationType" . ,(or (mcp-val :relation-type relation)
+                                               (mcp-val "relationType" relation))))))
+                   (json-array-elements (mcp-val :relations graph))))))
+    (format nil "~{~A~^~%~}" lines)))
 
 (defun ensure-persona-memory-server-storage-format (memory-json-path)
   "Migrates MEMORY-JSON-PATH in place when it is still in graph-object JSON format."

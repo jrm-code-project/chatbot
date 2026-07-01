@@ -28,21 +28,29 @@
                        (cdr normalized-entry))))
            environment)))
 
+(defun mcp-environment-key= (left right)
+  "Returns true when LEFT and RIGHT name the same environment key."
+  (string-equal (string left)
+               (string right)))
+
 (defun merge-mcp-server-environments (&rest environments)
   "Merges ENVIRONMENTS, letting later entries override earlier ones by key."
-  (let ((merged nil))
-    (dolist (environment environments)
-      (dolist (entry environment)
-        (let* ((normalized-entry (mcp-environment-entry->cons entry))
-              (key (car normalized-entry))
-              (existing (assoc key merged
-                               :test (lambda (left right)
-                                       (string-equal (string left)
-                                                     (string right))))))
-         (if existing
-             (setf (cdr existing) (cdr normalized-entry))
-             (push normalized-entry merged)))))
-    (nreverse merged)))
+  (flet ((merge-entry (merged entry)
+           (let* ((normalized-entry (mcp-environment-entry->cons entry))
+                 (key (car normalized-entry)))
+            (if (assoc key merged :test #'mcp-environment-key=)
+                (mapcar (lambda (existing)
+                          (if (mcp-environment-key= (car existing) key)
+                              normalized-entry
+                              existing))
+                        merged)
+                (append merged (list normalized-entry))))))
+    (reduce (lambda (merged environment)
+              (reduce #'merge-entry
+                      environment
+                      :initial-value merged))
+            environments
+            :initial-value nil)))
 
 (defun current-process-environment ()
   "Returns the current process environment in a UIOP-compatible shape."

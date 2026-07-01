@@ -315,11 +315,52 @@ Example:
                 (list (cons "role" "assistant")
                       (cons "content" response)))))
 
+(defun sandbox-query-chat-arguments (&key file files temperature include-temperature-p top-p include-top-p)
+  "Returns CHAT keyword arguments for one sandbox persona query."
+  (append (when file
+            (list :file file))
+          (when files
+            (list :files files))
+          (when include-temperature-p
+            (list :temperature temperature))
+          (when include-top-p
+            (list :top-p top-p))))
+
+(defun sandbox-persona-updated-history (persona bot effective-input response conversation)
+  "Returns PERSONA's next isolated history after one query RESPONSE."
+  (case (chatbot-backend bot)
+    (:gemini
+     (extend-persona-history (persona-history persona)
+                             effective-input
+                             response))
+    (t
+     (copy-tree (conversation-messages conversation)))))
+
+(defun sandbox-persona-response-result (persona response)
+  "Returns PERSONA's public query result payload."
+  (list :name (persona-name persona)
+        :response response))
+
+(defun make-arena-turn-result (persona-count ordered-personas turn-index prompt response)
+  "Returns one arena result record for TURN-INDEX."
+  (list :round (1+ (floor turn-index persona-count))
+        :turn (1+ turn-index)
+        :name (persona-name (nth (mod turn-index persona-count) ordered-personas))
+        :prompt prompt
+        :response response))
+
 (defun query-one-persona (persona prompt &key callback file files (temperature nil temperaturep) (top-p nil top-pp))
   "Runs PROMPT through PERSONA, preserving isolated sandbox history."
   (let* ((conversation (persona-conversation persona))
          (bot (conversation-chatbot conversation))
-         (history-copy (copy-tree (persona-history persona))))
+         (history-copy (copy-tree (persona-history persona)))
+         (query-arguments
+           (sandbox-query-chat-arguments :file file
+                                         :files files
+                                         :temperature temperature
+                                         :include-temperature-p temperaturep
+                                         :top-p top-p
+                                         :include-top-p top-pp)))
     (setf (conversation-messages conversation) history-copy)
     (when (eq (chatbot-backend bot) :gemini)
       (setf (conversation-interaction-id conversation) nil))
@@ -327,57 +368,46 @@ Example:
         (resolve-prompt-model-override bot prompt)
       (declare (ignore ignored-effective-model))
       (let* ((response
-               (call-with-runtime-context
+              (call-with-runtime-context
                 (chatbot-runtime-context bot)
                 (lambda ()
                   (apply #'chat
                          prompt
                          :conversation conversation
                          :callback callback
-                         (append (when file
-                                   (list :file file))
-                                 (when files
-                                   (list :files files))
-                                 (when temperaturep
-                                   (list :temperature temperature))
-                                 (when top-pp
-                                   (list :top-p top-p)))))))
+                         query-arguments))))
              (updated-history
-               (case (chatbot-backend bot)
-                 (:gemini
-                  (extend-persona-history (persona-history persona)
-                                          effective-input
-                                          response))
-                 (t
-                  (copy-tree (conversation-messages conversation))))))
+               (sandbox-persona-updated-history persona
+                                                bot
+                                                effective-input
+                                                response
+                                                conversation)))
         (setf (persona-history persona) updated-history)
         (setf (conversation-messages conversation) updated-history)
         response))))
 
 (defun query-all (prompt &key personas callback file files (temperature nil temperaturep) (top-p nil top-pp) registry)
   "Sends PROMPT to each selected sandbox persona and returns ordered results."
-  (let ((results nil))
-    (dolist (persona (normalize-query-personas personas :registry registry))
-      (print-chat-speaker-header (persona-name persona))
-      (let ((response
-              (apply #'query-one-persona
-                     persona
-                     prompt
-                     :callback callback
-                     (append (when file
-                               (list :file file))
-                             (when files
-                               (list :files files))
-                             (when temperaturep
-                               (list :temperature temperature))
-                             (when top-pp
-                               (list :top-p top-p))))))
-        (terpri)
-        (terpri)
-        (push (list :name (persona-name persona)
-                    :response response)
-              results)))
-    (nreverse results)))
+  (let ((query-arguments
+         (sandbox-query-chat-arguments :file file
+                                       :files files
+                                       :temperature temperature
+                                       :include-temperature-p temperaturep
+                                       :top-p top-p
+                                       :include-top-p top-pp)))
+    (mapcar (lambda (persona)
+             (print-chat-speaker-header (persona-name persona))
+             (let ((result (sandbox-persona-response-result
+                            persona
+                            (apply #'query-one-persona
+                                   persona
+                                   prompt
+                                   :callback callback
+                                   query-arguments))))
+               (terpri)
+               (terpri)
+               result))
+           (normalize-query-personas personas :registry registry))))
 
 (defun format-arena-relay-prompt (speaker response listener)
   "Returns the labeled relay prompt passed from SPEAKER to LISTENER."
@@ -399,32 +429,41 @@ Example:
   (let* ((ordered-personas (normalize-query-personas personas :registry registry))
          (persona-count (length ordered-personas))
          (total-turns (* rounds persona-count))
-         (results nil)
-         (current-prompt prompt))
+         (query-arguments
+           (sandbox-query-chat-arguments :file file
+                                         :files files
+                                         :temperature temperature
+                                         :include-temperature-p temperaturep
+                                         :top-p top-p
+                                         :include-top-p top-pp)))
     (unless (>= persona-count 2)
       (error "RUN-ARENA requires at least two personas."))
     (print-chat-speaker-block "User" prompt)
-    (loop for turn-index from 0 below total-turns
-          for persona = (nth (mod turn-index persona-count) ordered-personas)
-          do (let ((response
-                     (query-one-persona persona
-                                        current-prompt
-                                        :callback callback
-                                        :file file
-                                        :files files
-                                        :temperature (when temperaturep temperature)
-                                        :top-p (when top-pp top-p))))
-               (print-chat-speaker-block (persona-name persona) response)
-               (push (list :round (1+ (floor turn-index persona-count))
-                           :turn (1+ turn-index)
-                           :name (persona-name persona)
-                           :prompt current-prompt
-                           :response response)
-                     results)
-               (setf current-prompt
-                     (format-arena-relay-prompt (persona-name persona)
-                                                response
-                                                (persona-name (nth (mod (1+ turn-index) persona-count)
-                                                                   ordered-personas))))))
-    (print-arena-user-turn-marker)
-    (nreverse results)))
+    (let ((arena-state
+            (reduce (lambda (state turn-index)
+                      (let* ((current-prompt (getf state :current-prompt))
+                             (persona (nth (mod turn-index persona-count) ordered-personas))
+                             (response (apply #'query-one-persona
+                                              persona
+                                              current-prompt
+                                              :callback callback
+                                              query-arguments)))
+                        (print-chat-speaker-block (persona-name persona) response)
+                        (list :current-prompt
+                              (format-arena-relay-prompt (persona-name persona)
+                                                         response
+                                                         (persona-name
+                                                          (nth (mod (1+ turn-index) persona-count)
+                                                               ordered-personas)))
+                              :results
+                              (cons (make-arena-turn-result persona-count
+                                                            ordered-personas
+                                                            turn-index
+                                                            current-prompt
+                                                            response)
+                                    (getf state :results)))))
+                    (loop for turn-index from 0 below total-turns collect turn-index)
+                    :initial-value (list :current-prompt prompt
+                                         :results nil))))
+      (print-arena-user-turn-marker)
+      (reverse (getf arena-state :results)))))
