@@ -98,36 +98,7 @@ The handler takes BOT and ARGUMENTS. TOOL-NAME is implicitly bound lexically for
      (execute-hyperspec-search-tool bot arguments tool-name))
 
 (define-builtin-tool "gitCall" (bot arguments)
-  (unless (chatbot-enable-git-tools-p bot)
-       (error 'mcp-tool-execution-error
-              :tool-name tool-name
-              :reason "Git tool is not enabled."))
-     (let* ((args-list (or (mcp-val "args" arguments)
-                           (mcp-val :args arguments)))
-            (args (loop for arg in args-list
-                        collect (typecase arg
-                                  (string arg)
-                                  (t (format nil "~A" arg)))))
-            (dir (or (chatbot-scoped-directory bot)
-                     (namestring (uiop:getcwd)))))
-       (multiple-value-bind (stdout stderr exit-code)
-           (uiop:run-program (cons "git" args)
-                             :directory dir
-                             :output :string
-                             :error-output :string
-                             :ignore-error-status t)
-         (format nil (concatenate 'string
-                                  "~&[Git Executed]~%"
-                                  "Command: git ~{~A ~}~%"
-                                  "Directory: ~A~%"
-                                  "Exit Code: ~D~@[~%"
-                                  "STDOUT:~%"
-                                  "~A~]~@[~%"
-                                  "STDERR:~%"
-                                  "~A~]")
-                 args dir exit-code
-                 (and (string/= stdout "") stdout)
-                 (and (string/= stderr "") stderr)))))
+  (execute-git-call-tool bot arguments tool-name))
 
 (define-builtin-tool "eval" (bot arguments)
      (execute-eval-tool bot arguments tool-name))
