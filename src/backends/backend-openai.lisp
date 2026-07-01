@@ -4,7 +4,7 @@
 (in-package "CHATBOT")
 
 (defun openai-request-state (bot input conversation file-attachments effective-generation-config
-                               &key request-messages history-messages)
+                               &key request-messages history-messages malformed-response-retry-attempted-p)
   "Builds the provider-runner state for an OpenAI-compatible turn."
   (let* ((system-inst (chatbot-system-instruction bot))
          (current-messages (conversation-messages conversation))
@@ -13,6 +13,7 @@
     (list :input input
           :file-attachments file-attachments
           :effective-generation-config effective-generation-config
+          :malformed-response-retry-attempted-p malformed-response-retry-attempted-p
           :history-messages (or history-messages
                                (stateless-history-messages current-messages input))
           :request-messages (or request-messages
@@ -172,17 +173,27 @@
              accumulated-tool-calls)
     (nreverse tool-calls)))
 
+(defun openai-final-text-retryable-p (state text)
+  "Returns true when TEXT should trigger one retry for malformed OpenAI-compatible output."
+  (and (not (getf state :malformed-response-retry-attempted-p))
+       (or (null text)
+           (string= text "")
+           (markup-only-text-p text))))
+
 (defun openai-stream-state->provider-outcome (state stream-state)
   "Returns the provider outcome implied by STREAM-STATE."
-  (let ((tool-calls (accumulated-openai-tool-calls
-                     (getf stream-state :accumulated-tool-calls))))
+  (let* ((tool-calls (accumulated-openai-tool-calls
+                     (getf stream-state :accumulated-tool-calls)))
+         (text (getf stream-state :text)))
     (if tool-calls
         (make-provider-turn-tool-outcome tool-calls
-                                         :history-messages (getf state :history-messages)
-                                         :request-messages (getf state :request-messages)
-                                         :file-attachments (getf state :file-attachments)
-                                         :effective-generation-config (getf state :effective-generation-config))
-        (make-provider-turn-final-outcome (getf stream-state :text)))))
+                                        :history-messages (getf state :history-messages)
+                                        :request-messages (getf state :request-messages)
+                                        :file-attachments (getf state :file-attachments)
+                                        :effective-generation-config (getf state :effective-generation-config))
+        (if (openai-final-text-retryable-p state text)
+            (make-provider-turn-retry-outcome :reason :malformed-response)
+            (make-provider-turn-final-outcome text)))))
 
 (defun openai-api-key-or-error (request-target)
   "Returns REQUEST-TARGET's configured API key or signals when it is missing."
@@ -242,6 +253,12 @@
            (lambda (state current-depth)
              (declare (ignore current-depth))
              (submit-openai-turn bot callback state))
+           :retry-turn
+           (lambda (state outcome current-depth step)
+             (declare (ignore outcome))
+             (let ((retry-state (copy-list state)))
+               (setf (getf retry-state :malformed-response-retry-attempted-p) t)
+               (funcall step retry-state current-depth)))
            :continue-with-tools
            (lambda (state outcome next-depth step)
              (declare (ignore state))

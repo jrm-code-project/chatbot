@@ -56,6 +56,23 @@ data: [DONE]")
            ("user" "How are you?")
            ("assistant" "Hello OpenAI")))))))
 
+(fiveam:test test-openai-chat-retries-markup-only-response-once
+  (let ((calls 0))
+    (let* ((*openai-api-key* "test-key")
+           (context (make-runtime-context
+                    :http-post-function
+                    (lambda (url &rest args)
+                      (declare (ignore url args))
+                      (incf calls)
+                      (values (make-string-input-stream
+                               (if (= calls 1)
+                                   "data: {\"choices\": [{\"delta\": {\"content\": \"<antmlThinking>\"}}]}\n data: [DONE]"
+                                   "data: {\"choices\": [{\"delta\": {\"content\": \"Hello OpenAI\"}}]}\n data: [DONE]"))
+                              200))))
+           (conv (new-chat :backend :openai :runtime-context context)))
+      (fiveam:is (string= "Hello OpenAI" (chat "Hi there" :conversation conv)))
+      (fiveam:is (= 2 calls)))))
+
 (fiveam:test test-openai-chat-joins-system-instruction-paragraph-vectors
   (let ((captured-payload nil))
     (let* ((*openai-api-key* "test-key")

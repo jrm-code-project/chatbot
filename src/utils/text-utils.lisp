@@ -37,6 +37,14 @@
       (unless (string= payload "[DONE]")
         (parse-json-or-error payload :context "SSE event")))))
 
+(defun markup-only-text-p (text)
+  "Returns true when TEXT contains only markup-like tags and whitespace."
+  (when (stringp text)
+    (let* ((trimmed (string-trim '(#\Space #\Tab #\Return #\Linefeed) text))
+           (without-tags (cl-ppcre:regex-replace-all "<[^>]+>" trimmed "")))
+      (and (string/= trimmed "")
+           (string= "" (string-trim '(#\Space #\Tab #\Return #\Linefeed) without-tags))))))
+
 (defun wrap-text (text &key (width 80) (initial-prefix ""))
   "Wraps a single paragraph string to the specified width."
   (let ((words (cl-ppcre:split "\\s+" text))
