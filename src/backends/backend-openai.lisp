@@ -212,11 +212,14 @@
 (defun openai-turn-request-details (bot state)
   "Returns the request details plist for one OpenAI-compatible turn."
   (let* ((request-target (openai-request-target bot))
-         (api-key (openai-api-key-or-error request-target)))
+         (api-key (openai-api-key-or-error request-target))
+         (backend (getf request-target :backend))
+         (read-timeout (backend-http-read-timeout backend)))
     (list :payload-json (openai-turn-request-payload-json bot state)
           :url (openai-request-url (getf request-target :base-url))
           :headers (openai-request-headers api-key)
-          :stream-read-timeout (current-http-read-timeout))))
+          :http-read-timeout read-timeout
+          :stream-read-timeout read-timeout)))
 
 (defun post-openai-turn-request (request-details)
   "Executes one OpenAI-compatible streaming request from REQUEST-DETAILS."
@@ -224,7 +227,8 @@
       (post-web-request (getf request-details :url)
                         (getf request-details :headers)
                         (getf request-details :payload-json)
-                        :want-stream t)
+                        :want-stream t
+                        :read-timeout (getf request-details :http-read-timeout))
     (unless (= status 200)
       (error "API responded with HTTP status ~A" status))
     stream))

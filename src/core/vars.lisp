@@ -170,11 +170,21 @@ Unknown backends fall back to the Gemini default."
 (defvar *lm-studio-api-key* nil
   "The API key for the LM Studio API.")
 
+(defvar *lm-studio-http-read-timeout* 600
+  "Minimum HTTP response timeout in seconds for the LM Studio backend.")
+
 (defun lm-studio-api-key ()
   "Returns the LM Studio API key. First checks *lm-studio-api-key*, then the LM_API_TOKEN environment variable."
   (or *lm-studio-api-key*
       (funcall (current-getenv-function) "LM_API_TOKEN")
       (require-non-empty-string *lm-studio-default-api-key* "LM Studio default API key")))
+
+(defun backend-http-read-timeout (backend)
+  "Returns the effective HTTP read timeout for BACKEND."
+  (let ((default-timeout (current-http-read-timeout)))
+    (if (eq backend :lm-studio)
+        (max default-timeout *lm-studio-http-read-timeout*)
+        default-timeout)))
 
 (defun gemini-api-key ()
   "Returns the Gemini API key using the current runtime seam."

@@ -71,7 +71,7 @@ Accepted signatures:
 
 (defun make-chat-turn-result (text &key messages interaction-id usage thought-text conversation)
   "Returns the normalized result of one chat turn."
-  (list :text text
+  (list :text (sanitize-chat-response-text text)
         :messages messages
         :interaction-id interaction-id
         :usage usage
@@ -115,12 +115,13 @@ Accepted signatures:
 
 (defun emit-chat-response-text (text &key callback usage thought-text)
   "Formats TEXT for display, writes token USAGE when present, optionally calls CALLBACK, and returns TEXT."
-  (format-paragraphs text :width 80)
-  (when usage
-    (write-turn-token-summary usage :thought-text thought-text))
-  (when callback
-    (funcall callback text))
-  text)
+  (let ((sanitized-text (sanitize-chat-response-text text)))
+    (format-paragraphs sanitized-text :width 80)
+    (when usage
+      (write-turn-token-summary usage :thought-text thought-text))
+    (when callback
+      (funcall callback sanitized-text))
+    sanitized-text))
 
 (defun finish-stateless-text-turn (&rest args)
   "Emits final text and returns a normalized turn result.
@@ -138,19 +139,20 @@ Accepted signatures:
          (callback (getf options :callback))
          (usage (getf options :usage))
          (thought-text (getf options :thought-text))
+         (sanitized-text (sanitize-chat-response-text text))
          (interaction-id (or (getf options :interaction-id)
                              (and conversation
                                   (conversation-interaction-id conversation))))
          (result
            (progn
-             (emit-chat-response-text text :callback callback :usage usage :thought-text thought-text)
+             (emit-chat-response-text sanitized-text :callback callback :usage usage :thought-text thought-text)
              (make-chat-turn-result
-              text
+              sanitized-text
               :messages
               (update-conversation-stateless-history
                history-messages
                (list (cons "role" role)
-                     (cons "content" text)))
+                     (cons "content" sanitized-text)))
               :interaction-id interaction-id
               :usage usage
               :thought-text thought-text

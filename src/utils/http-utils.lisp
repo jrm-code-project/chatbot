@@ -57,10 +57,12 @@
                           (setf ,delay-var (* ,delay-var 2)))
                         (error ,err-var))))))))
 
-(defun post-web-request (url headers content &key want-stream)
+(defun post-web-request (url headers content &key want-stream connect-timeout read-timeout)
   "Logs and sends an outbound HTTP POST request."
-  (let ((connect-timeout (current-http-connect-timeout))
-        (read-timeout (current-http-read-timeout)))
+  (let ((connect-timeout (or connect-timeout
+                             (current-http-connect-timeout)))
+        (read-timeout (or read-timeout
+                          (current-http-read-timeout))))
     (log-message :info "HTTP POST request"
                  :context `(("url" . ,(sanitize-url-for-log url))))
     (let ((http-post-function (current-http-post-function)))
@@ -78,10 +80,12 @@
                      :connect-timeout connect-timeout
                      :read-timeout read-timeout))))))
 
-(defun get-web-request (url &key headers want-stream)
+(defun get-web-request (url &key headers want-stream connect-timeout read-timeout)
   "Logs and sends an outbound HTTP GET request."
-  (let ((connect-timeout (current-http-connect-timeout))
-        (read-timeout (current-http-read-timeout)))
+  (let ((connect-timeout (or connect-timeout
+                             (current-http-connect-timeout)))
+        (read-timeout (or read-timeout
+                          (current-http-read-timeout))))
     (log-message :info "HTTP GET request"
                  :context `(("url" . ,(sanitize-url-for-log url))))
     (let ((http-get-function (current-http-get-function)))

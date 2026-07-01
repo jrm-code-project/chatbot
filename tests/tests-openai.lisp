@@ -73,6 +73,23 @@ data: [DONE]")
       (fiveam:is (string= "Hello OpenAI" (chat "Hi there" :conversation conv)))
       (fiveam:is (= 2 calls)))))
 
+(fiveam:test test-lm-studio-chat-uses-ample-read-timeout
+  (let ((captured-read-timeout nil))
+    (let* ((*lm-studio-api-key* "test-key")
+           (context (make-runtime-context
+                    :http-read-timeout 120
+                    :http-post-function
+                    (lambda (url &rest args)
+                      (declare (ignore url))
+                      (setf captured-read-timeout (getf args :read-timeout))
+                      (values (make-string-input-stream
+                               "data: {\"choices\": [{\"delta\": {\"content\": \"Hello LM Studio\"}}]}
+data: [DONE]")
+                              200))))
+           (conv (new-chat :backend :lm-studio :runtime-context context)))
+      (fiveam:is (string= "Hello LM Studio" (chat "Hi there" :conversation conv)))
+      (fiveam:is (= *lm-studio-http-read-timeout* captured-read-timeout)))))
+
 (fiveam:test test-openai-chat-joins-system-instruction-paragraph-vectors
   (let ((captured-payload nil))
     (let* ((*openai-api-key* "test-key")

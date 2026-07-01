@@ -45,6 +45,23 @@
       (and (string/= trimmed "")
            (string= "" (string-trim '(#\Space #\Tab #\Return #\Linefeed) without-tags))))))
 
+(defun sanitize-chat-response-text (text)
+  "Returns TEXT with AntML thinking blocks removed from visible chat output."
+  (if (not (stringp text))
+      text
+      (let* ((tag-pattern "an(?:t|dt)mlthin[kg]ing")
+             (without-blocks
+               (cl-ppcre:regex-replace-all
+                (format nil "(?is)<\\s*~A\\s*>.*?<\\s*/\\s*~A\\s*>" tag-pattern tag-pattern)
+                text
+                ""))
+             (without-tags
+               (cl-ppcre:regex-replace-all
+                (format nil "(?is)<\\s*/?\\s*~A\\s*>" tag-pattern)
+                without-blocks
+                "")))
+        (string-trim '(#\Space #\Tab #\Return #\Linefeed) without-tags))))
+
 (defun wrap-text (text &key (width 80) (initial-prefix ""))
   "Wraps a single paragraph string to the specified width."
   (let ((words (cl-ppcre:split "\\s+" text))

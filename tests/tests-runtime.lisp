@@ -225,6 +225,17 @@
      (fiveam:is (null (search "[Thoughts]" output)))
      (fiveam:is (null (search "Do not print this" output))))))
 
+(fiveam:test test-sanitize-chat-response-text-removes-antml-thinking-blocks
+  (fiveam:is (string= "Visible reply"
+                     (sanitize-chat-response-text
+                      "<antmlThinking>hidden</antmlThinking>Visible reply")))
+  (fiveam:is (string= "Visible reply"
+                     (sanitize-chat-response-text
+                      "<andtmlThinking>hidden</antmlThinging>Visible reply")))
+  (fiveam:is (string= "Visible reply"
+                     (sanitize-chat-response-text
+                      "<antmlThinking>Visible reply"))))
+
 (fiveam:test test-finish-stateless-text-turn-emits-and-persists-history
   (let* ((conversation (new-chat :backend :google))
         (history-messages (list (list (cons "role" "user")
@@ -237,6 +248,25 @@
                                                      "model"
                                                      "Shared final"))))
     (fiveam:is (search "Shared final" (get-output-stream-string stream)))
+    (fiveam:is (equal (append history-messages
+                             (list (list (cons "role" "model")
+                                         (cons "content" "Shared final"))))
+                     (conversation-messages conversation)))))
+
+(fiveam:test test-finish-stateless-text-turn-sanitizes-visible-and-stored-text
+  (let* ((conversation (new-chat :backend :google))
+        (history-messages (list (list (cons "role" "user")
+                                      (cons "content" "hello"))))
+        (stream (make-string-output-stream)))
+    (let ((*standard-output* stream))
+     (fiveam:is (string= "Shared final"
+                         (finish-stateless-text-turn conversation
+                                                     history-messages
+                                                     "model"
+                                                     "<andtmlThinking>secret</antmlThinging>Shared final"))))
+    (let ((output (get-output-stream-string stream)))
+     (fiveam:is (search "Shared final" output))
+     (fiveam:is-false (search "secret" output)))
     (fiveam:is (equal (append history-messages
                              (list (list (cons "role" "model")
                                          (cons "content" "Shared final"))))
