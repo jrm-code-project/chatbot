@@ -28,6 +28,7 @@ These areas should not be treated as fresh debt, but as **partially retired debt
 
 1. **Pure chat loop migration**
    - The normalized turn-result flow and thinner `chat` shell were a major improvement.
+   - Backend selection for `dispatch-chat-turn` now flows through focused backend-invocation helpers in `src/core/chat.lisp` instead of one inline case form.
    - Remaining debt: compatibility routing, checkpoint persistence, and planner routing still sit close to the main entry path.
 
 2. **Agentic loop and minion functional cleanup**

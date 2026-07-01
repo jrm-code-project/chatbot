@@ -39,42 +39,67 @@
     (checkpoint-conversation-after-chat effective-conversation)
     (chat-turn-result-text result)))
 
+(defun chat-backend-dispatch-key (bot)
+  "Returns the backend dispatch key for BOT."
+  (chatbot-backend bot))
+
+(defun invoke-gemini-chat-turn (bot conversation input callback file-attachments effective-model effective-generation-config)
+  "Invokes one Gemini backend turn."
+  (chat-gemini bot
+               input
+               conversation
+               callback
+               :file-attachments file-attachments
+               :effective-model effective-model
+               :effective-generation-config effective-generation-config
+               :return-turn-result-p t))
+
+(defun invoke-openai-chat-turn (bot conversation input callback file-attachments effective-generation-config)
+  "Invokes one OpenAI-compatible backend turn."
+  (chat-openai bot input conversation callback
+               :file-attachments file-attachments
+               :effective-generation-config effective-generation-config
+               :return-turn-result-p t))
+
+(defun invoke-google-chat-turn (bot conversation input callback file-attachments effective-model effective-generation-config)
+  "Invokes one Google generateContent backend turn."
+  (chat-google bot
+               input
+               conversation
+               callback
+               :file-attachments file-attachments
+               :effective-model effective-model
+               :effective-generation-config effective-generation-config
+               :return-turn-result-p t))
+
+(defun invoke-chat-backend-turn (bot conversation input callback
+                                 &key file-attachments effective-model effective-generation-config)
+  "Invokes the backend-specific chat turn for BOT."
+  (case (chat-backend-dispatch-key bot)
+    (:gemini
+     (invoke-gemini-chat-turn bot conversation input callback
+                              file-attachments effective-model effective-generation-config))
+    ((:openai :lm-studio)
+     (invoke-openai-chat-turn bot conversation input callback
+                              file-attachments effective-generation-config))
+    (:google
+     (invoke-google-chat-turn bot conversation input callback
+                              file-attachments effective-model effective-generation-config))
+    (t
+     (error "Unknown chatbot backend: ~S" (chatbot-backend bot)))))
+
 (defun dispatch-chat-turn (conversation input callback
                            &key file-attachments effective-model effective-generation-config)
   "Dispatches one prepared chat turn for CONVERSATION's backend."
   (let* ((bot (conversation-chatbot conversation))
          (result
-           (case (chatbot-backend bot)
-             (:gemini
-              (chat-gemini bot
-                           input
-                           conversation
-                           callback
-                           :file-attachments file-attachments
-                           :effective-model effective-model
-                           :effective-generation-config effective-generation-config
-                           :return-turn-result-p t))
-             (:openai
-              (chat-openai bot input conversation callback
-                           :file-attachments file-attachments
-                           :effective-generation-config effective-generation-config
-                           :return-turn-result-p t))
-             (:lm-studio
-              (chat-openai bot input conversation callback
-                           :file-attachments file-attachments
-                           :effective-generation-config effective-generation-config
-                           :return-turn-result-p t))
-             (:google
-              (chat-google bot
-                           input
-                           conversation
-                           callback
-                           :file-attachments file-attachments
-                           :effective-model effective-model
-                           :effective-generation-config effective-generation-config
-                           :return-turn-result-p t))
-             (t
-              (error "Unknown chatbot backend: ~S" (chatbot-backend bot))))))
+           (invoke-chat-backend-turn bot
+                                     conversation
+                                     input
+                                     callback
+                                     :file-attachments file-attachments
+                                     :effective-model effective-model
+                                     :effective-generation-config effective-generation-config)))
     (annotate-chat-turn-result result conversation)))
 
 (defun chat-turn (input &key conversation callback file files
