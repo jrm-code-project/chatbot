@@ -109,113 +109,158 @@
                    (chatbot-model bot))
                 +google-gemini-model-override-model+))
 
+(defun google-generation-config-alist (effective-generation-config)
+  "Returns the Google generationConfig alist implied by EFFECTIVE-GENERATION-CONFIG."
+  (remove nil
+          (list (when (getf effective-generation-config :temperature)
+                  (cons "temperature" (getf effective-generation-config :temperature)))
+                (when (getf effective-generation-config :top-p)
+                  (cons "topP" (getf effective-generation-config :top-p))))))
+
+(defun google-request-payload-alist (bot request-contents effective-generation-config)
+  "Returns the generateContent payload alist for BOT."
+  (let* ((system-inst (chatbot-system-instruction bot))
+         (gemini-tools (generate-content-request-tools bot))
+         (generation-config (google-generation-config-alist effective-generation-config)))
+    (append (list (cons "contents" (coerce request-contents 'vector)))
+            (when system-inst
+              (list (cons "systemInstruction"
+                         (list (cons "parts"
+                                     (system-instruction-text-parts system-inst))))))
+            (when gemini-tools
+              (list (cons "tools" gemini-tools)))
+            (when generation-config
+              (list (cons "generationConfig" generation-config))))))
+
+(defun google-request-url (bot effective-model)
+  "Returns the generateContent URL for BOT and EFFECTIVE-MODEL."
+  (concatenate 'string
+               *gemini-base-url*
+               "/models/"
+               (generate-content-model-name (or effective-model
+                                               (chatbot-model bot)))
+               ":generateContent"))
+
+(defun google-request-headers (api-key)
+  "Returns the Google request headers for API-KEY."
+  (list (cons "x-goog-api-key" api-key)
+        (cons "Content-Type" "application/json")))
+
+(defun google-response-primary-parts (response-alist)
+  "Returns the primary candidate parts from RESPONSE-ALIST."
+  (let* ((candidates (cdr (assoc :candidates response-alist)))
+         (first-candidate (car candidates))
+         (content (cdr (assoc :content first-candidate))))
+    (cdr (assoc :parts content))))
+
+(defun parse-google-response (response-body)
+  "Returns RESPONSE-BODY decoded into normalized Google response fields."
+  (let* ((response-alist (cl-json:decode-json-from-string response-body))
+         (candidates (cdr (assoc :candidates response-alist)))
+         (first-candidate (car candidates))
+         (parts (google-response-primary-parts response-alist))
+         (function-call-part (find-if #'google-part-function-call parts))
+         (fn-call (and function-call-part
+                      (google-part-function-call function-call-part))))
+    (list :usage (cdr (assoc :usage-metadata response-alist))
+          :response-id (cdr (assoc :response-id response-alist))
+          :model-version (cdr (assoc :model-version response-alist))
+          :finish-reason (response-stop-reason first-candidate)
+          :parts parts
+          :function-call fn-call
+          :thought-signature (and function-call-part
+                                 (google-part-thought-signature function-call-part))
+          :thought-text (join-google-part-texts
+                        (remove-if-not #'google-part-thought-p parts))
+          :final-text (join-google-part-texts
+                      (remove-if #'google-part-thought-p parts)))))
+
+(defun google-tool-call-outcome (state fn-call thought-signature)
+  "Returns the provider tool outcome for one Google FN-CALL."
+  (let ((name (cdr (assoc :name fn-call)))
+        (raw-args (cdr (assoc :args fn-call))))
+    (make-provider-turn-tool-outcome
+     (list (list (cons :id nil)
+                 (cons :name name)
+                 (cons :arguments (coerce (cl-json:encode-json-to-string
+                                          (if raw-args
+                                              (json-encodable-value raw-args)
+                                              (empty-json-object)))
+                                         'simple-string))
+                 (cons :raw-args raw-args)
+                 (cons :thought-signature thought-signature)))
+     :history-messages (getf state :history-messages)
+     :request-contents (getf state :request-contents)
+     :file-attachments (getf state :file-attachments)
+     :effective-model (getf state :effective-model)
+     :effective-generation-config (getf state :effective-generation-config)
+     :malformed-response-fallback-attempted-p
+     (getf state :malformed-response-fallback-attempted-p))))
+
+(defun google-final-text-retryable-p (bot state final-text)
+  "Returns true when FINAL-TEXT should trigger the gemini-pro-latest retry path."
+  (and (or (null final-text)
+           (string= final-text ""))
+       (not (getf state :malformed-response-fallback-attempted-p))
+       (not (google-model-override-active-p bot (getf state :effective-model)))))
+
+(defun google-response->provider-outcome (bot state response-body status parsed-response)
+  "Returns the provider outcome implied by PARSED-RESPONSE."
+  (let ((usage (getf parsed-response :usage))
+        (response-id (getf parsed-response :response-id))
+        (model-version (getf parsed-response :model-version))
+        (finish-reason (getf parsed-response :finish-reason))
+        (fn-call (getf parsed-response :function-call))
+        (thought-signature (getf parsed-response :thought-signature))
+        (thought-text (getf parsed-response :thought-text))
+        (final-text (getf parsed-response :final-text)))
+    (log-backend-response-stats
+     :google
+     :http-status status
+     :response-id response-id
+     :model model-version
+     :finish-reason finish-reason
+     :usage usage)
+    (cond
+      ((and (not (getf state :malformed-response-fallback-attempted-p))
+            (not (google-model-override-active-p bot (getf state :effective-model)))
+            (malformed-response-stop-reason-p finish-reason))
+       (make-provider-turn-retry-outcome :reason :malformed-response))
+      (fn-call
+       (google-tool-call-outcome state fn-call thought-signature))
+      ((google-final-text-retryable-p bot state final-text)
+       (make-provider-turn-retry-outcome :reason :empty-response))
+      ((or (null final-text)
+           (string= final-text ""))
+       (error "No text returned from Gemini API response: ~A" response-body))
+      (t
+       (make-provider-turn-final-outcome final-text
+                                        :usage usage
+                                        :thought-text thought-text)))))
+
 (defun submit-google-turn (bot response-body-parser state)
   "Submits one Google generateContent turn and returns a normalized outcome."
   (declare (ignore response-body-parser))
   (let ((api-key (gemini-api-key)))
     (unless (and api-key (string/= api-key ""))
       (error "Gemini API Key is not set. Please ensure (gemini-api-key) is configured."))
-    (let* ((system-inst (chatbot-system-instruction bot))
-           (request-contents (getf state :request-contents))
-           (contents (coerce request-contents 'vector))
-           (effective-model (getf state :effective-model))
-           (effective-generation-config (getf state :effective-generation-config))
-           (gemini-tools (generate-content-request-tools bot))
-           (payload-alist (list (cons "contents" contents)))
-           (url (concatenate 'string
-                            *gemini-base-url*
-                            "/models/"
-                            (generate-content-model-name (or effective-model
-                                                             (chatbot-model bot)))
-                            ":generateContent"))
-           (headers (list (cons "x-goog-api-key" api-key)
-                         (cons "Content-Type" "application/json"))))
-      (when system-inst
-        (setf payload-alist
-              (append payload-alist
-                     (list (cons "systemInstruction"
-                                 (list (cons "parts"
-                                             (system-instruction-text-parts system-inst))))))))
-      (when gemini-tools
-        (setf payload-alist
-              (append payload-alist (list (cons "tools" gemini-tools)))))
-      (when (or (getf effective-generation-config :temperature)
-                (getf effective-generation-config :top-p))
-        (setf payload-alist
-              (append payload-alist
-                     (list (cons "generationConfig"
-                                 (remove nil
-                                         (list (when (getf effective-generation-config :temperature)
-                                                 (cons "temperature" (getf effective-generation-config :temperature)))
-                                               (when (getf effective-generation-config :top-p)
-                                                 (cons "topP" (getf effective-generation-config :top-p))))))))))
-      (let ((payload-json (cl-json:encode-json-to-string payload-alist)))
-        (multiple-value-bind (response-body status)
-            (post-web-request url headers payload-json)
-          (unless (= status 200)
-            (error "API responded with HTTP status ~A" status))
-          (let* ((response-alist (cl-json:decode-json-from-string response-body))
-                 (usage (cdr (assoc :usage-metadata response-alist)))
-                 (response-id (cdr (assoc :response-id response-alist)))
-                 (model-version (cdr (assoc :model-version response-alist)))
-                 (candidates (cdr (assoc :candidates response-alist)))
-                 (first-candidate (car candidates))
-                 (finish-reason (cdr (assoc :finish-reason first-candidate)))
-                 (content (cdr (assoc :content first-candidate)))
-                 (parts (cdr (assoc :parts content)))
-                 (function-call-part (find-if #'google-part-function-call parts))
-                 (fn-call (and function-call-part
-                              (google-part-function-call function-call-part)))
-                 (thought-signature (and function-call-part
-                                        (google-part-thought-signature function-call-part)))
-                 (thought-text (join-google-part-texts
-                               (remove-if-not #'google-part-thought-p parts)))
-                 (final-str (join-google-part-texts
-                            (remove-if #'google-part-thought-p parts))))
-            (log-backend-response-stats
-             :google
-             :http-status status
-             :response-id response-id
-             :model model-version
-             :finish-reason finish-reason
-             :usage usage)
-            (cond
-              ((and (not (getf state :malformed-response-fallback-attempted-p))
-                   (not (google-model-override-active-p bot effective-model))
-                   (malformed-response-stop-reason-p finish-reason))
-               (make-provider-turn-retry-outcome :reason :malformed-response))
-              (fn-call
-               (let ((name (cdr (assoc :name fn-call)))
-                    (raw-args (cdr (assoc :args fn-call))))
-                 (make-provider-turn-tool-outcome
-                  (list (list (cons :id nil)
-                             (cons :name name)
-                             (cons :arguments (coerce (cl-json:encode-json-to-string
-                                                       (if raw-args
-                                                           (json-encodable-value raw-args)
-                                                           (empty-json-object)))
-                                                      'simple-string))
-                             (cons :raw-args raw-args)
-                             (cons :thought-signature thought-signature)))
-                  :history-messages (getf state :history-messages)
-                  :request-contents request-contents
-                  :file-attachments (getf state :file-attachments)
-                  :effective-model effective-model
-                  :effective-generation-config effective-generation-config
-                  :malformed-response-fallback-attempted-p
-                  (getf state :malformed-response-fallback-attempted-p))))
-              ((and (or (null final-str)
-                       (string= final-str ""))
-                   (not (getf state :malformed-response-fallback-attempted-p))
-                   (not (google-model-override-active-p bot effective-model)))
-               (make-provider-turn-retry-outcome :reason :empty-response))
-              ((or (null final-str)
-                   (string= final-str ""))
-               (error "No text returned from Gemini API response: ~A" response-body))
-              (t
-               (make-provider-turn-final-outcome final-str
-                                                :usage usage
-                                                :thought-text thought-text)))))))))
+    (let* ((payload-json
+             (cl-json:encode-json-to-string
+              (google-request-payload-alist bot
+                                           (getf state :request-contents)
+                                           (getf state :effective-generation-config))))
+           (url (google-request-url bot (getf state :effective-model)))
+           (headers (google-request-headers api-key)))
+      (multiple-value-bind (response-body status)
+          (post-web-request url headers payload-json)
+        (unless (= status 200)
+          (error "API responded with HTTP status ~A" status))
+        (google-response->provider-outcome
+         bot
+         state
+         response-body
+         status
+         (parse-google-response response-body))))))
 
 (defun chat-google (bot input conversation callback
                    &key file-attachments request-contents history-messages effective-model effective-generation-config
