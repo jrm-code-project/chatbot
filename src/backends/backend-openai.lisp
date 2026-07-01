@@ -184,29 +184,49 @@
                                          :effective-generation-config (getf state :effective-generation-config))
         (make-provider-turn-final-outcome (getf stream-state :text)))))
 
-(defun submit-openai-turn (bot callback state)
-  "Submits one OpenAI-compatible streaming turn and returns a normalized outcome."
-  (let* ((request-target (openai-request-target bot))
-         (api-key (getf request-target :api-key))
-         (base-url (getf request-target :base-url)))
+(defun openai-api-key-or-error (request-target)
+  "Returns REQUEST-TARGET's configured API key or signals when it is missing."
+  (let ((api-key (getf request-target :api-key)))
     (unless (and api-key (string/= api-key ""))
       (error "~A API Key is not set." (getf request-target :backend-label)))
-    (let* ((request-messages (getf state :request-messages))
-           (effective-generation-config (getf state :effective-generation-config))
-           (stream-read-timeout (current-http-read-timeout))
-           (payload-alist (openai-request-payload-alist bot
-                                                        request-messages
-                                                        effective-generation-config))
-           (payload-json (cl-json:encode-json-to-string payload-alist))
-           (url (openai-request-url base-url))
-           (headers (openai-request-headers api-key)))
-      (multiple-value-bind (stream status)
-          (post-web-request url headers payload-json :want-stream t)
-        (unless (= status 200)
-          (error "API responded with HTTP status ~A" status))
-        (openai-stream-state->provider-outcome
-         state
-         (collect-openai-stream-state stream callback stream-read-timeout))))))
+    api-key))
+
+(defun openai-turn-request-payload-json (bot state)
+  "Returns the encoded chat completions request payload for STATE."
+  (cl-json:encode-json-to-string
+   (openai-request-payload-alist bot
+                                 (getf state :request-messages)
+                                 (getf state :effective-generation-config))))
+
+(defun openai-turn-request-details (bot state)
+  "Returns the request details plist for one OpenAI-compatible turn."
+  (let* ((request-target (openai-request-target bot))
+         (api-key (openai-api-key-or-error request-target)))
+    (list :payload-json (openai-turn-request-payload-json bot state)
+          :url (openai-request-url (getf request-target :base-url))
+          :headers (openai-request-headers api-key)
+          :stream-read-timeout (current-http-read-timeout))))
+
+(defun post-openai-turn-request (request-details)
+  "Executes one OpenAI-compatible streaming request from REQUEST-DETAILS."
+  (multiple-value-bind (stream status)
+      (post-web-request (getf request-details :url)
+                        (getf request-details :headers)
+                        (getf request-details :payload-json)
+                        :want-stream t)
+    (unless (= status 200)
+      (error "API responded with HTTP status ~A" status))
+    stream))
+
+(defun submit-openai-turn (bot callback state)
+  "Submits one OpenAI-compatible streaming turn and returns a normalized outcome."
+  (let ((request-details (openai-turn-request-details bot state)))
+    (openai-stream-state->provider-outcome
+     state
+     (collect-openai-stream-state
+      (post-openai-turn-request request-details)
+      callback
+      (getf request-details :stream-read-timeout)))))
 
 (defun chat-openai (bot input conversation callback
                     &key file-attachments request-messages history-messages effective-generation-config
