@@ -46,7 +46,8 @@ These areas should not be treated as fresh debt, but as **partially retired debt
    - Built-in tool argument normalization now lives in `src/mcp/tool-arguments.lisp`, and filesystem tool helpers now live in `src/mcp/filesystem-tools.lisp`.
    - System-instruction and sampling tool helpers now also live in `src/mcp/chatbot-state-tools.lisp`.
    - Eval and grounding helpers now also live in `src/mcp/eval-grounding-tools.lisp`.
-   - Remaining debt: planner/minion orchestration still keeps `src/mcp/tool-execution.lisp` broader than ideal.
+   - Planner and minion orchestration now also live in `src/mcp/planner-minion-tools.lisp`.
+   - Remaining debt: `src/mcp/tool-execution.lisp` is now much narrower, but git-tool behavior and shared execution plumbing still sit there.
 
 ## Suggested fix order
 
