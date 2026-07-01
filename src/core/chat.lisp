@@ -102,19 +102,17 @@
                                      :effective-generation-config effective-generation-config)))
     (annotate-chat-turn-result result conversation)))
 
-(defun chat-turn (input &key conversation callback file files
-                       (temperature nil temperature-specified-p)
-                       (top-p nil top-p-specified-p)
-                       ((:temperature-specified-p explicit-temperature-specified-p) temperature-specified-p)
-                       ((:top-p-specified-p explicit-top-p-specified-p) top-p-specified-p)
-                       context)
-  "Runs one chat turn and returns a normalized turn result without mutating the source conversation."
-  (let* ((base-conversation (require-chat-conversation conversation context))
-         (conversation (route-chat-turn-conversation base-conversation input context))
-         (bot (conversation-chatbot conversation))
-         (effective-files (append (when file
-                                    (list file))
-                                  files))
+(defun chat-turn-effective-files (file files)
+  "Returns the normalized per-turn file list."
+  (append (when file
+            (list file))
+          files))
+
+(defun chat-turn-prepared-state (conversation input file files bot
+                                 explicit-temperature-specified-p temperature
+                                 explicit-top-p-specified-p top-p)
+  "Returns the pure prepared state for one chat turn."
+  (let* ((effective-files (chat-turn-effective-files file files))
          (file-attachments (and effective-files
                                 (prepare-chat-file-attachments effective-files)))
          (effective-generation-config
@@ -129,14 +127,39 @@
                                                 :messages pruned-messages)))
     (multiple-value-bind (effective-input effective-model)
         (resolve-prompt-model-override bot input)
-      (annotate-chat-turn-result
-       (dispatch-chat-turn turn-conversation
-                           effective-input
-                           callback
-                           :file-attachments file-attachments
-                           :effective-model effective-model
-                           :effective-generation-config effective-generation-config)
-       conversation))))
+      (list :turn-conversation turn-conversation
+            :effective-input effective-input
+            :effective-model effective-model
+            :file-attachments file-attachments
+            :effective-generation-config effective-generation-config))))
+
+(defun chat-turn (input &key conversation callback file files
+                       (temperature nil temperature-specified-p)
+                       (top-p nil top-p-specified-p)
+                       ((:temperature-specified-p explicit-temperature-specified-p) temperature-specified-p)
+                       ((:top-p-specified-p explicit-top-p-specified-p) top-p-specified-p)
+                       context)
+  "Runs one chat turn and returns a normalized turn result without mutating the source conversation."
+  (let* ((base-conversation (require-chat-conversation conversation context))
+         (conversation (route-chat-turn-conversation base-conversation input context))
+         (bot (conversation-chatbot conversation))
+         (prepared-state (chat-turn-prepared-state conversation
+                                                  input
+                                                  file
+                                                  files
+                                                  bot
+                                                  explicit-temperature-specified-p
+                                                  temperature
+                                                  explicit-top-p-specified-p
+                                                  top-p)))
+    (annotate-chat-turn-result
+     (dispatch-chat-turn (getf prepared-state :turn-conversation)
+                         (getf prepared-state :effective-input)
+                         callback
+                         :file-attachments (getf prepared-state :file-attachments)
+                         :effective-model (getf prepared-state :effective-model)
+                         :effective-generation-config (getf prepared-state :effective-generation-config))
+     conversation)))
 
 (defun chat (input &key conversation callback file files (temperature nil temperaturep) (top-p nil top-pp))
   "Sends user input to the active conversation using the appropriate backend API.
