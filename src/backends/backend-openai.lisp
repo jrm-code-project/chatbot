@@ -54,93 +54,159 @@
       ("content" . nil)
       ("tool_calls" . ,assistant-tool-calls))))
 
+(defun openai-request-target (bot)
+  "Returns BOT's resolved backend, API key, base URL, and backend label."
+  (let ((backend (chatbot-backend bot)))
+    (list :backend backend
+          :api-key (if (eq backend :lm-studio)
+                       (lm-studio-api-key)
+                       (openai-api-key))
+          :base-url (if (eq backend :lm-studio)
+                        (lm-studio-api-base-url)
+                        *openai-base-url*)
+          :backend-label (if (eq backend :lm-studio) "LM Studio" "OpenAI"))))
+
+(defun openai-request-payload-alist (bot request-messages effective-generation-config)
+  "Returns the chat completions payload alist for BOT."
+  (let ((openai-tools (openai-request-tools bot)))
+    (append (list (cons "model" (chatbot-model bot))
+                  (cons "messages" request-messages)
+                  (cons "stream" t))
+            (when (getf effective-generation-config :temperature)
+              (list (cons "temperature" (getf effective-generation-config :temperature))))
+            (when (getf effective-generation-config :top-p)
+              (list (cons "top_p" (getf effective-generation-config :top-p))))
+            (when openai-tools
+              (list (cons "tools" openai-tools))))))
+
+(defun openai-request-url (base-url)
+  "Returns the chat completions URL under BASE-URL."
+  (concatenate 'string base-url "/chat/completions"))
+
+(defun openai-request-headers (api-key)
+  "Returns the standard OpenAI-compatible request headers for API-KEY."
+  (list (cons "Authorization" (concatenate 'string "Bearer " api-key))
+        (cons "Content-Type" "application/json")))
+
+(defun openai-empty-tool-call-entry ()
+  "Returns a fresh mutable tool-call accumulator entry."
+  (list (cons :id nil)
+        (cons :name nil)
+        (cons :arguments (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t))))
+
+(defun ensure-openai-tool-call-entry (accumulated-tool-calls index)
+  "Returns the accumulator entry for INDEX in ACCUMULATED-TOOL-CALLS, creating it when absent."
+  (or (gethash index accumulated-tool-calls)
+      (setf (gethash index accumulated-tool-calls)
+            (openai-empty-tool-call-entry))))
+
+(defun append-string-to-buffer (buffer text)
+  "Appends TEXT to adjustable character BUFFER."
+  (loop for char across text
+        do (vector-push-extend char buffer))
+  buffer)
+
+(defun accumulate-openai-tool-call (accumulated-tool-calls tool-call)
+  "Merges one streaming TOOL-CALL delta into ACCUMULATED-TOOL-CALLS."
+  (let* ((index (cdr (assoc :index tool-call)))
+         (id (cdr (assoc :id tool-call)))
+         (function (cdr (assoc :function tool-call)))
+         (name (cdr (assoc :name function)))
+         (args (cdr (assoc :arguments function)))
+         (existing (ensure-openai-tool-call-entry accumulated-tool-calls index)))
+    (when id
+      (setf (cdr (assoc :id existing)) id))
+    (when name
+      (setf (cdr (assoc :name existing)) name))
+    (when args
+      (append-string-to-buffer (cdr (assoc :arguments existing)) args))
+    existing))
+
+(defun handle-openai-stream-delta (delta callback full-text accumulated-tool-calls)
+  "Applies one streaming DELTA to FULL-TEXT and ACCUMULATED-TOOL-CALLS."
+  (let ((tool-calls (cdr (assoc :tool--calls delta)))
+        (delta-text (cdr (assoc :content delta))))
+    (when (and (stringp delta-text) (string/= delta-text ""))
+      (append-string-to-buffer full-text delta-text)
+      (when callback
+        (funcall callback delta-text)))
+    (when tool-calls
+      (dolist (tool-call tool-calls)
+        (accumulate-openai-tool-call accumulated-tool-calls tool-call)))))
+
+(defun parse-openai-stream-event (event callback full-text accumulated-tool-calls)
+  "Applies one parsed SSE EVENT to FULL-TEXT and ACCUMULATED-TOOL-CALLS."
+  (let* ((choices (cdr (assoc :choices event)))
+         (first-choice (car choices))
+         (delta (cdr (assoc :delta first-choice))))
+    (when delta
+      (handle-openai-stream-delta delta callback full-text accumulated-tool-calls))))
+
+(defun collect-openai-stream-state (stream callback stream-read-timeout)
+  "Consumes STREAM and returns the accumulated full text and tool calls."
+  (let ((full-text (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t))
+        (accumulated-tool-calls (make-hash-table :test 'equal)))
+    (unwind-protect
+         (loop for line = (read-sse-line stream
+                                         :timeout-seconds stream-read-timeout
+                                         :timeout-context "OpenAI streaming response")
+               until (or (eq line :eof)
+                         (and (stringp line)
+                              (alexandria:starts-with-subseq "data: [DONE]" line)))
+               do (let ((event (parse-sse-event line)))
+                    (when event
+                      (parse-openai-stream-event event
+                                                 callback
+                                                 full-text
+                                                 accumulated-tool-calls))))
+      (close stream))
+    (list :text (coerce full-text 'string)
+          :accumulated-tool-calls accumulated-tool-calls)))
+
+(defun accumulated-openai-tool-calls (accumulated-tool-calls)
+  "Returns ACCUMULATED-TOOL-CALLS as the list shape expected by provider outcomes."
+  (let ((tool-calls nil))
+    (maphash (lambda (key value)
+               (declare (ignore key))
+               (push value tool-calls))
+             accumulated-tool-calls)
+    (nreverse tool-calls)))
+
+(defun openai-stream-state->provider-outcome (state stream-state)
+  "Returns the provider outcome implied by STREAM-STATE."
+  (let ((tool-calls (accumulated-openai-tool-calls
+                     (getf stream-state :accumulated-tool-calls))))
+    (if tool-calls
+        (make-provider-turn-tool-outcome tool-calls
+                                         :history-messages (getf state :history-messages)
+                                         :request-messages (getf state :request-messages)
+                                         :file-attachments (getf state :file-attachments)
+                                         :effective-generation-config (getf state :effective-generation-config))
+        (make-provider-turn-final-outcome (getf stream-state :text)))))
+
 (defun submit-openai-turn (bot callback state)
   "Submits one OpenAI-compatible streaming turn and returns a normalized outcome."
-  (let* ((backend (chatbot-backend bot))
-         (api-key (if (eq backend :lm-studio)
-                      (lm-studio-api-key)
-                      (openai-api-key)))
-         (base-url (if (eq backend :lm-studio)
-                       (lm-studio-api-base-url)
-                       *openai-base-url*)))
+  (let* ((request-target (openai-request-target bot))
+         (api-key (getf request-target :api-key))
+         (base-url (getf request-target :base-url)))
     (unless (and api-key (string/= api-key ""))
-      (error "~A API Key is not set." (if (eq backend :lm-studio) "LM Studio" "OpenAI")))
+      (error "~A API Key is not set." (getf request-target :backend-label)))
     (let* ((request-messages (getf state :request-messages))
            (effective-generation-config (getf state :effective-generation-config))
-           (openai-tools (openai-request-tools bot))
            (stream-read-timeout (current-http-read-timeout))
-           (payload-alist (list (cons "model" (chatbot-model bot))
-                                (cons "messages" request-messages)
-                                (cons "stream" t))))
-      (when (getf effective-generation-config :temperature)
-        (push (cons "temperature" (getf effective-generation-config :temperature)) payload-alist))
-      (when (getf effective-generation-config :top-p)
-        (push (cons "top_p" (getf effective-generation-config :top-p)) payload-alist))
-      (when openai-tools
-        (push (cons "tools" openai-tools) payload-alist))
-      (let* ((payload-json (cl-json:encode-json-to-string payload-alist))
-             (url (concatenate 'string base-url "/chat/completions"))
-             (headers (list (cons "Authorization" (concatenate 'string "Bearer " api-key))
-                            (cons "Content-Type" "application/json")))
-             (full-text (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t))
-             (accumulated-tool-calls (make-hash-table :test 'equal)))
-        (multiple-value-bind (stream status)
-            (post-web-request url headers payload-json :want-stream t)
-          (unless (= status 200)
-            (error "API responded with HTTP status ~A" status))
-          (unwind-protect
-               (loop for line = (read-sse-line stream
-                                               :timeout-seconds stream-read-timeout
-                                               :timeout-context "OpenAI streaming response")
-                     until (or (eq line :eof)
-                               (and (stringp line)
-                                    (alexandria:starts-with-subseq "data: [DONE]" line)))
-                     do (let ((event (parse-sse-event line)))
-                          (when event
-                            (let* ((choices (cdr (assoc :choices event)))
-                                   (first-choice (car choices))
-                                   (delta (cdr (assoc :delta first-choice)))
-                                   (tool-calls (cdr (assoc :tool--calls delta)))
-                                   (delta-text (cdr (assoc :content delta))))
-                              (when (and (stringp delta-text) (string/= delta-text ""))
-                                (loop for char across delta-text
-                                      do (vector-push-extend char full-text))
-                                (when callback
-                                  (funcall callback delta-text)))
-                              (when tool-calls
-                                (dolist (tool-call tool-calls)
-                                  (let* ((index (cdr (assoc :index tool-call)))
-                                         (id (cdr (assoc :id tool-call)))
-                                         (function (cdr (assoc :function tool-call)))
-                                         (name (cdr (assoc :name function)))
-                                         (args (cdr (assoc :arguments function)))
-                                         (existing (gethash index accumulated-tool-calls)))
-                                    (unless existing
-                                      (setf existing (list (cons :id nil)
-                                                           (cons :name nil)
-                                                           (cons :arguments (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t))))
-                                      (setf (gethash index accumulated-tool-calls) existing))
-                                    (when id
-                                      (setf (cdr (assoc :id existing)) id))
-                                    (when name
-                                      (setf (cdr (assoc :name existing)) name))
-                                    (when args
-                                      (loop for char across args
-                                            do (vector-push-extend char (cdr (assoc :arguments existing))))))))))))
-            (close stream)))
-        (let ((tool-calls nil))
-          (maphash (lambda (key value)
-                     (declare (ignore key))
-                     (push value tool-calls))
-                   accumulated-tool-calls)
-          (setf tool-calls (nreverse tool-calls))
-          (if tool-calls
-              (make-provider-turn-tool-outcome tool-calls
-                                               :history-messages (getf state :history-messages)
-                                               :request-messages request-messages
-                                               :file-attachments (getf state :file-attachments)
-                                               :effective-generation-config effective-generation-config)
-              (make-provider-turn-final-outcome (coerce full-text 'string))))))))
+           (payload-alist (openai-request-payload-alist bot
+                                                        request-messages
+                                                        effective-generation-config))
+           (payload-json (cl-json:encode-json-to-string payload-alist))
+           (url (openai-request-url base-url))
+           (headers (openai-request-headers api-key)))
+      (multiple-value-bind (stream status)
+          (post-web-request url headers payload-json :want-stream t)
+        (unless (= status 200)
+          (error "API responded with HTTP status ~A" status))
+        (openai-stream-state->provider-outcome
+         state
+         (collect-openai-stream-state stream callback stream-read-timeout))))))
 
 (defun chat-openai (bot input conversation callback
                     &key file-attachments request-messages history-messages effective-generation-config
