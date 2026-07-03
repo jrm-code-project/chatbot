@@ -28,6 +28,10 @@
   "You are an autonomous agent executing the current goal. Focus on the goal, use available tools when helpful, follow configured safety and approval constraints, and reply tersely without conversational filler."
   "Compact system instruction used for agentic-loop startup clones.")
 
+(defvar *isolated-agentic-loop-start-system-instruction*
+  "You are a background process. Reply in JSON."
+  "Brutally sterile system instruction used for isolated agentic-loop startup clones.")
+
 (defvar *agentic-loop-supervisor-max-restarts* 2
   "Maximum watchdog-managed restarts for one agentic loop before it is left failed.")
 
@@ -194,10 +198,12 @@
     (and aligned-history
          (copy-tree aligned-history))))
 
-(defun clone-chatbot-for-agentic-loop (chatbot)
-  "Returns a loop-owned CHATBOT clone with compact startup instructions."
+(defun clone-chatbot-for-agentic-loop (chatbot &key isolate-p)
+  "Returns a loop-owned CHATBOT clone with loop-specific startup instructions."
   (clone-chatbot chatbot
-                 :system-instruction *agentic-loop-start-system-instruction*
+                 :system-instruction (if isolate-p
+                                         *isolated-agentic-loop-start-system-instruction*
+                                         *agentic-loop-start-system-instruction*)
                  :system-instruction-path nil
                  :system-instruction-storage-kind :transient))
 
@@ -206,7 +212,7 @@
   (let ((chatbot (conversation-chatbot conversation)))
     (if isolate-p
         (clone-conversation conversation
-                            :chatbot (clone-chatbot-for-agentic-loop chatbot)
+                            :chatbot (clone-chatbot-for-agentic-loop chatbot :isolate-p t)
                             :persona-memory nil
                             :persona-diary-entries nil
                             :messages nil

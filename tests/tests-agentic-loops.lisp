@@ -92,6 +92,25 @@ blind polling alone under heavier full-suite load."
                            (chatbot-system-instruction
                             (conversation-chatbot cloned))))))))
 
+(fiveam:test test-clone-conversation-for-isolated-agentic-loop-uses-brutally-sterile-instruction
+  (let ((conversation (new-chat :backend :openai)))
+    (setf (chatbot-system-instruction (conversation-chatbot conversation))
+          "Original persona instruction that should not survive isolated loop startup.")
+    (setf (conversation-persona-memory conversation) "Stored persona memory.")
+    (setf (conversation-persona-diary-entries conversation) '("Diary 1"))
+    (setf (conversation-messages conversation)
+          '((("role" . "user") ("content" . "recent user"))
+            (("role" . "assistant") ("content" . "recent assistant"))))
+    (let ((cloned (clone-conversation-for-agentic-loop conversation :isolate-p t)))
+      (fiveam:is (null (conversation-persona-memory cloned)))
+      (fiveam:is (null (conversation-persona-diary-entries cloned)))
+      (fiveam:is (null (conversation-messages cloned)))
+      (fiveam:is (null (conversation-interaction-id cloned)))
+      (fiveam:is (string= *isolated-agentic-loop-start-system-instruction*
+                          (system-instruction-text
+                           (chatbot-system-instruction
+                            (conversation-chatbot cloned))))))))
+
 (fiveam:test test-start-agentic-loop-completes-and-records-result
   (let ((*agentic-loop-chat-function*
          (lambda (prompt &key conversation callback file files temperature top-p)
@@ -320,6 +339,50 @@ blind polling alone under heavier full-suite load."
             (setf (current-active-conversation context) previous-active-conversation)))
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))
+
+(fiveam:test test-start-agentic-loop-tool-isolate-uses-sterile-system-instruction
+  (let* ((observed-system-instruction nil)
+        (observed-messages nil)
+        (*agentic-loop-chat-function*
+        (lambda (prompt &key conversation callback file files temperature top-p)
+          (declare (ignore prompt callback file files temperature top-p))
+          (setf observed-system-instruction
+                (system-instruction-text
+                 (chatbot-system-instruction
+                  (conversation-chatbot conversation))))
+          (setf observed-messages (conversation-messages conversation))
+          (test-agentic-loop-response "final" "isolated tool start"))))
+    (let ((conversation (new-chat :backend :openai)))
+      (setf (chatbot-system-instruction (conversation-chatbot conversation))
+           "Large inherited instruction.")
+      (setf (conversation-messages conversation)
+           '((("role" . "user") ("content" . "recent user"))
+             (("role" . "assistant") ("content" . "recent assistant"))))
+      (unwind-protect
+          (let* ((context (chatbot-runtime-context (conversation-chatbot conversation)))
+                 (previous-active-conversation (current-active-conversation context)))
+            (unwind-protect
+                 (let* ((json (progn
+                                (setf (current-active-conversation context) conversation)
+                                (default-execute-builtin-chatbot-tool
+                                 (conversation-chatbot conversation)
+                                 "startAgenticLoop"
+                                 '(("goal" . "Isolated tool goal")
+                                   ("maxIterations" . 2)
+                                   ("isolate" . t)))))
+                        (payload (parse-json-or-error json :context "agentic loop tool result"))
+                        (loop-id (mcp-val :id payload))
+                        (loop (find-agentic-loop loop-id)))
+                   (fiveam:is (typep loop 'agentic-loop))
+                   (fiveam:is (string= "Isolated tool goal" (agentic-loop-goal loop)))
+                   (fiveam:is (eq :completed
+                                  (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
+                   (fiveam:is (string= *isolated-agentic-loop-start-system-instruction*
+                                       observed-system-instruction))
+                   (fiveam:is (null observed-messages)))
+              (setf (current-active-conversation context) previous-active-conversation)))
+       (abort-agentic-loops :force t)
+       (clear-agentic-loops)))))
 
 
 (fiveam:test test-monitor-restarts-failed-agentic-loop-within-budget
