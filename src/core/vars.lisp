@@ -581,6 +581,16 @@ as a compatibility alias."
          (setf (runtime-context-default-conversation resolved-context) value)))))
   value)
 
+(defun call-with-default-conversation-compatibility (context thunk)
+  "Calls THUNK with CONTEXT's default conversation mirrored through the legacy special.
+Only the canonical default runtime context still requires this compatibility shell."
+  (let ((*default-conversation*
+         (runtime-context-default-conversation context)))
+    (unwind-protect
+         (funcall thunk)
+      (setf (runtime-context-default-conversation context)
+           *default-conversation*))))
+
 (define-context-owned-runtime-context-helper current-mcp-config-path
   runtime-context-mcp-config-path
   *mcp-config-path*
@@ -697,9 +707,10 @@ as a compatibility alias."
 
 (defun call-with-runtime-context (context thunk)
   "Calls THUNK with the resolved runtime context active.
-Only *DEFAULT-CONVERSATION* still requires legacy special rebinding. Function
-seams now resolve through the active runtime context directly, with default-
-context approval compatibility synchronized after the call."
+Only the canonical default runtime context still requires *DEFAULT-CONVERSATION*
+legacy rebinding. Function seams now resolve through the active runtime context
+directly, with default-context approval compatibility synchronized after the
+call."
   (let* ((resolved-context (resolve-runtime-context context :sync-from-globals-p t))
          (default-context-p (default-runtime-context-p resolved-context)))
     (cond
@@ -709,13 +720,11 @@ context approval compatibility synchronized after the call."
        (funcall thunk))
       (t
        (let ((result
-               (let ((*active-runtime-context* resolved-context)
-                     (*default-conversation*
-                      (runtime-context-default-conversation resolved-context)))
+               (let ((*active-runtime-context* resolved-context))
                  (unwind-protect
-                      (funcall thunk)
-                   (setf (runtime-context-default-conversation resolved-context)
-                         *default-conversation*)
+                      (if default-context-p
+                          (call-with-default-conversation-compatibility resolved-context thunk)
+                          (funcall thunk))
                    (when default-context-p
                      (setf (runtime-context-getenv-function resolved-context) *getenv-function*)
                      (setf (runtime-context-http-post-function resolved-context) *http-post-function*)

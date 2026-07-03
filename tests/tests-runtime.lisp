@@ -585,6 +585,48 @@
       (setf *default-conversation* original-legacy-conversation)
       (setf (runtime-context-default-conversation default-context) original-default-conversation))))
 
+(fiveam:test test-call-with-runtime-context-explicit-context-does-not-rebind-legacy-default-conversation
+  (let* ((legacy-conversation (new-chat))
+         (context-conversation (new-chat))
+         (context (make-runtime-context :default-conversation context-conversation))
+         (original-legacy-conversation *default-conversation*))
+    (unwind-protect
+         (progn
+           (setf *default-conversation* legacy-conversation)
+           (call-with-runtime-context
+            context
+            (lambda ()
+              (fiveam:is (eq context-conversation
+                           (current-default-conversation)))
+              (fiveam:is (eq legacy-conversation *default-conversation*))
+              (setf (current-default-conversation) nil)
+              (fiveam:is (null (current-default-conversation)))
+              (fiveam:is (eq legacy-conversation *default-conversation*))))
+           (fiveam:is (null (runtime-context-default-conversation context)))
+           (fiveam:is (eq legacy-conversation *default-conversation*)))
+      (setf *default-conversation* original-legacy-conversation))))
+
+(fiveam:test test-call-with-runtime-context-default-context-still-rebinds-legacy-default-conversation
+  (let* ((default-context *default-runtime-context*)
+         (legacy-conversation (new-chat))
+         (context-conversation (new-chat))
+         (original-legacy-conversation *default-conversation*)
+         (original-default-conversation (runtime-context-default-conversation default-context)))
+    (unwind-protect
+         (progn
+           (setf *default-conversation* legacy-conversation)
+           (setf (runtime-context-default-conversation default-context) context-conversation)
+           (call-with-runtime-context
+            default-context
+            (lambda ()
+              (fiveam:is (eq legacy-conversation *default-conversation*))
+              (setf *default-conversation* legacy-conversation)))
+           (fiveam:is (eq legacy-conversation
+                        (runtime-context-default-conversation default-context)))
+           (fiveam:is (eq legacy-conversation *default-conversation*)))
+      (setf *default-conversation* original-legacy-conversation)
+      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
+
 (fiveam:test test-explicit-runtime-context-mcp-config-path-does-not-rely-on-legacy-mirroring
   (let* ((default-context *default-runtime-context*)
          (legacy-path "legacy-config.lisp")
