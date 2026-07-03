@@ -40,7 +40,7 @@
 (defun resolve-chat-entry-context (conversation)
   "Returns the initial runtime context for a public chat entry."
   (or (chat-conversation-runtime-context conversation nil)
-      (resolve-runtime-context nil :sync-from-globals-p t)))
+      (resolve-runtime-context nil)))
 
 (defun call-with-active-chat-conversation (conversation context thunk)
   "Calls THUNK with CONVERSATION recorded as the current active conversation for CONTEXT."

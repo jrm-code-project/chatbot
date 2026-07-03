@@ -27,6 +27,23 @@
         (setf *default-conversation* original-default-conversation)
         (setf (runtime-context-default-conversation *default-runtime-context*) original-context-default)))))
 
+(fiveam:test test-resolve-chat-entry-context-does-not-sync-legacy-default-conversation-into-runtime-context
+  (let* ((default-context *default-runtime-context*)
+        (legacy-conversation (new-chat))
+        (context-conversation (new-chat))
+        (original-legacy-conversation *default-conversation*)
+        (original-default-conversation (runtime-context-default-conversation default-context)))
+    (unwind-protect
+        (progn
+          (setf *default-conversation* legacy-conversation)
+          (setf (runtime-context-default-conversation default-context) context-conversation)
+          (fiveam:is (eq default-context (resolve-chat-entry-context nil)))
+          (fiveam:is (eq context-conversation
+                        (runtime-context-default-conversation default-context)))
+          (fiveam:is (eq legacy-conversation *default-conversation*)))
+      (setf *default-conversation* original-legacy-conversation)
+      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
+
 (fiveam:test test-chat-with-ambient-default-conversation-uses-conversation-runtime-context
   (let* ((custom-context (make-runtime-context))
         (conv (new-chat :backend :google :runtime-context custom-context))
