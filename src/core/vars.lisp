@@ -526,11 +526,22 @@ as a compatibility alias."
         (legacy-global-value legacy-symbol))))
 
 (defun set-transient-runtime-context-value (value context accessor legacy-symbol)
-  "Stores transient runtime state in both CONTEXT and the legacy compatibility global."
+  "Stores transient runtime state in CONTEXT, mirroring to legacy globals only for
+the canonical default runtime context."
   (let ((resolved-context (resolve-runtime-context context)))
-    (when resolved-context
-      (set-runtime-context-accessor-value resolved-context accessor value))
-    (setf (symbol-value legacy-symbol) value))
+    (cond
+      ((and (null context)
+            *active-runtime-context*
+            (not (default-runtime-context-p *active-runtime-context*)))
+       (set-runtime-context-accessor-value *active-runtime-context* accessor value))
+      (resolved-context
+       (set-runtime-context-accessor-value resolved-context accessor value)
+       (when (default-runtime-context-p resolved-context)
+         (setf (symbol-value legacy-symbol) value)))
+      (t
+       (setf (symbol-value legacy-symbol) value)
+       (when (default-runtime-context-p *default-runtime-context*)
+         (set-runtime-context-accessor-value *default-runtime-context* accessor value)))))
   value)
 
 (defmacro define-transient-runtime-context-helper (name accessor legacy-symbol getter-doc setter-doc)
