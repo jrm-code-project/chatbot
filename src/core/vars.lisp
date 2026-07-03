@@ -846,8 +846,14 @@ runtime settings are read from the runtime context directly."
 (defvar *max-minion-depth* 3
   "The global maximum nesting depth allowed for the minion hierarchy.")
 
-(defvar *context-pruning-threshold-characters* 64000
-  "The total character length of the conversation history above which auto-pruning is triggered.")
+(defvar *context-pruning-estimated-max-tokens* 100000
+  "Estimated prompt-token ceiling above which conversation history is auto-pruned.")
+
+(defvar *context-pruning-estimated-target-tokens* 90000
+  "Estimated prompt-token target after pruning oversized conversation history.")
+
+(defvar *context-pruning-threshold-characters* 400000
+  "Compatibility character ceiling for auto-pruning, aligned with the default estimated token window.")
 
 (defvar *active-planner* nil
   "Tracks the active planner minion conversation, or NIL if not in Planner Mode.")

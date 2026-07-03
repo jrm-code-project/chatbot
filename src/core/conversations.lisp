@@ -444,26 +444,80 @@ Use NEW-CHAT instead when no persona should be loaded."
                   (apply-chat-turn-result result conv)))))))
     summary))
 
+(defun message-content-string (message)
+  "Returns MESSAGE content as a printable string for pruning heuristics."
+  (let ((content (cdr (assoc "content" message :test #'string=))))
+    (typecase content
+      (null "")
+      (string content)
+      (t (princ-to-string content)))))
+
+(defun estimate-text-token-count (text)
+  "Returns a coarse token estimate for TEXT using a 4-characters-per-token heuristic."
+  (ceiling (/ (length text) 4.0)))
+
+(defun estimate-message-token-count (message)
+  "Returns a coarse token estimate for one conversation MESSAGE."
+  (estimate-text-token-count (message-content-string message)))
+
+(defun estimated-history-token-count (messages)
+  "Returns a coarse token estimate for MESSAGES."
+  (loop for message in messages
+        sum (estimate-message-token-count message)))
+
+(defun effective-context-pruning-max-tokens ()
+  "Returns the effective estimated max-token ceiling, including the compatibility character cap."
+  (let ((max-tokens *context-pruning-estimated-max-tokens*)
+        (char-threshold *context-pruning-threshold-characters*))
+    (if (and char-threshold (> char-threshold 0))
+        (min max-tokens
+             (estimate-text-token-count (make-string char-threshold :initial-element #\X)))
+        max-tokens)))
+
+(defun effective-context-pruning-target-tokens ()
+  "Returns the effective estimated post-prune target token count."
+  (let* ((max-tokens (effective-context-pruning-max-tokens))
+         (configured-target *context-pruning-estimated-target-tokens*))
+    (min configured-target
+         (max 1 (floor (* max-tokens 0.9))))))
+
+(defun select-recent-messages-for-pruning (history)
+  "Returns the newest raw messages to keep after pruning HISTORY."
+  (let ((minimum-keep-count 4)
+        (target-tokens (effective-context-pruning-target-tokens))
+        (kept nil)
+        (kept-tokens 0))
+    (dolist (message (reverse history) (nreverse kept))
+      (let ((message-tokens (estimate-message-token-count message)))
+        (when (or (< (length kept) minimum-keep-count)
+                  (<= (+ kept-tokens message-tokens) target-tokens))
+          (push message kept)
+          (incf kept-tokens message-tokens))))))
+
 (defun prune-conversation-context-if-needed (conversation)
   "Returns CONVERSATION's effective history after pruning oversized context when needed."
   (let* ((bot (conversation-chatbot conversation))
          (history (conversation-messages conversation))
-         (total-len (loop for msg in history
-                          sum (length (cdr (assoc "content" msg :test #'string=))))))
-    (if (<= total-len *context-pruning-threshold-characters*)
+         (estimated-total-tokens (estimated-history-token-count history))
+         (max-tokens (effective-context-pruning-max-tokens)))
+    (if (<= estimated-total-tokens max-tokens)
         history
-        (let* ((keep-count 4)
+        (let* ((raw-messages (select-recent-messages-for-pruning history))
+               (keep-count (length raw-messages))
                (history-len (length history)))
           (if (<= history-len keep-count)
               history
               (let* ((old-messages (subseq history 0 (- history-len keep-count)))
-                     (raw-messages (subseq history (- history-len keep-count)))
                      (digest (summarize-old-history old-messages bot))
                      (digest-msg (list (cons "role" "system")
                                       (cons "content" (format nil "[State Digest of previous turns: ~A]" digest))))
                      (pruned-history (append (list digest-msg) raw-messages)))
                 (log-message :info "Pruned and compressed conversation history context"
-                            :context `(("old-messages-count" . ,(princ-to-string (length old-messages)))
+                            :context `(("estimated-total-tokens" . ,(princ-to-string estimated-total-tokens))
+                                       ("effective-max-tokens" . ,(princ-to-string max-tokens))
+                                       ("effective-target-tokens" . ,(princ-to-string (effective-context-pruning-target-tokens)))
+                                       ("old-messages-count" . ,(princ-to-string (length old-messages)))
+                                       ("kept-messages-count" . ,(princ-to-string keep-count))
                                        ("digest-length" . ,(princ-to-string (length digest)))))
                 pruned-history))))))
 

@@ -1088,7 +1088,39 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (fiveam:is (string= "Mocked response." response))
         ;; Verify that the history was successfully pruned and a State Digest was inserted
         (let ((history (conversation-messages conv)))
-          ;; History length should be pruned: 1 State Digest + 4 kept raw messages + 2 new turn messages = 7 total!
-          (fiveam:is (= 7 (length history)))
+          (fiveam:is (<= (length history) 8))
           (fiveam:is (string= "system" (cdr (assoc "role" (first history) :test #'string=))))
-          (fiveam:is (search "State Digest" (cdr (assoc "content" (first history) :test #'string=)))))))))
+          (fiveam:is (search "State Digest" (cdr (assoc "content" (first history) :test #'string=))))
+          (fiveam:is (string= "Mocked response."
+                              (cdr (assoc "content" (car (last history)) :test #'string=)))))))))
+
+(fiveam:test test-context-pruning-uses-estimated-token-window
+  (let* ((*context-pruning-threshold-characters* nil)
+        (*context-pruning-estimated-max-tokens* 100)
+        (*context-pruning-estimated-target-tokens* 90)
+        (conv (new-chat :backend :google))
+        (long-text (make-string 160 :initial-element #\A))
+        (calls '()))
+    (setf (conversation-messages conv)
+         (list (list (cons "role" "user") (cons "content" long-text))
+               (list (cons "role" "model") (cons "content" "response 1"))
+               (list (cons "role" "user") (cons "content" long-text))
+               (list (cons "role" "model") (cons "content" "response 2"))
+               (list (cons "role" "user") (cons "content" long-text))
+               (list (cons "role" "model") (cons "content" "response 3"))))
+    (let ((*gemini-api-key-function* (lambda () "mocked-api-key"))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore args))
+             (push url calls)
+             (values
+              "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Mocked response.\"}], \"role\": \"model\"}}]}"
+              200))))
+      (let ((response (chat "Hello latest prompt" :conversation conv)))
+        (fiveam:is (string= "Mocked response." response))
+        (let ((history (conversation-messages conv)))
+         (fiveam:is (<= (length history) 8))
+         (fiveam:is (string= "system" (cdr (assoc "role" (first history) :test #'string=))))
+         (fiveam:is (search "State Digest" (cdr (assoc "content" (first history) :test #'string=))))
+         (fiveam:is (string= "Mocked response."
+                             (cdr (assoc "content" (car (last history)) :test #'string=)))))))))
