@@ -390,7 +390,7 @@ compatibility-only ambient special variables."
 (defun runtime-context-function-seam-value (context accessor legacy-symbol)
   "Returns the function seam value for ACCESSOR and LEGACY-SYMBOL."
   (let ((resolved-context (and context
-                              (resolve-runtime-context context :sync-from-globals-p t))))
+                              (resolve-runtime-context context))))
     (cond
       ((and (null context)
             *active-runtime-context*
@@ -404,7 +404,7 @@ compatibility-only ambient special variables."
 (defun set-runtime-context-function-seam-value (value context accessor legacy-symbol)
   "Stores VALUE through the function seam bridge for ACCESSOR and LEGACY-SYMBOL."
   (let ((resolved-context (and context
-                              (resolve-runtime-context context :sync-from-globals-p t))))
+                              (resolve-runtime-context context))))
     (cond
       ((and (null context)
             *active-runtime-context*
@@ -435,7 +435,7 @@ compatibility-only ambient special variables."
 (defun runtime-context-approval-function-value (context accessor legacy-symbol)
   "Returns the approval function seam value for ACCESSOR and LEGACY-SYMBOL."
   (let ((resolved-context (and context
-                              (resolve-runtime-context context :sync-from-globals-p t))))
+                              (resolve-runtime-context context))))
     (cond
       ((and (null context)
             *active-runtime-context*
@@ -454,7 +454,7 @@ compatibility-only ambient special variables."
 Default-context active execution still mirrors the legacy special binding for
 compatibility with approval overrides."
   (let ((resolved-context (and context
-                              (resolve-runtime-context context :sync-from-globals-p t))))
+                              (resolve-runtime-context context))))
     (cond
       ((and (null context)
             *active-runtime-context*

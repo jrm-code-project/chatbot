@@ -154,6 +154,65 @@
       (setf (runtime-context-default-conversation default-context) original-default-conversation)
       (setf (runtime-context-startup-chatbot default-context) original-context-startup-chatbot))))
 
+(fiveam:test test-function-seam-helpers-do-not-sync-legacy-default-conversation-into-runtime-context
+  (let* ((default-context *default-runtime-context*)
+         (legacy-conversation (new-chat))
+         (context-conversation (new-chat))
+         (original-legacy-conversation *default-conversation*)
+         (original-default-conversation (runtime-context-default-conversation default-context))
+         (original-getenv-function *getenv-function*)
+         (context-getenv-function (lambda (name)
+                                    (if (string= name "OPENAI_API_KEY")
+                                        "context-env-key"
+                                        nil))))
+    (unwind-protect
+         (progn
+           (setf *default-conversation* legacy-conversation)
+           (setf (runtime-context-default-conversation default-context) context-conversation)
+           (setf (runtime-context-getenv-function default-context) context-getenv-function)
+           (fiveam:is (eq context-getenv-function
+                         (current-getenv-function default-context)))
+           (setf (current-getenv-function default-context)
+                 (lambda (name)
+                   (if (string= name "OPENAI_API_KEY")
+                       "updated-context-env-key"
+                       nil)))
+           (fiveam:is (eq context-conversation
+                         (runtime-context-default-conversation default-context)))
+           (fiveam:is (eq legacy-conversation *default-conversation*)))
+      (setf *default-conversation* original-legacy-conversation)
+      (setf (runtime-context-default-conversation default-context) original-default-conversation)
+      (setf *getenv-function* original-getenv-function))))
+
+(fiveam:test test-approval-helpers-do-not-sync-legacy-default-conversation-into-runtime-context
+  (let* ((default-context *default-runtime-context*)
+         (legacy-conversation (new-chat))
+         (context-conversation (new-chat))
+         (original-legacy-conversation *default-conversation*)
+         (original-default-conversation (runtime-context-default-conversation default-context))
+         (original-approval-function *filesystem-access-approval-function*)
+         (context-approval-function (lambda (&rest ignored)
+                                      (declare (ignore ignored))
+                                      :context-approval)))
+    (unwind-protect
+         (progn
+           (setf *default-conversation* legacy-conversation)
+           (setf (runtime-context-default-conversation default-context) context-conversation)
+           (setf (runtime-context-filesystem-access-approval-function default-context)
+                 context-approval-function)
+           (fiveam:is (eq context-approval-function
+                         (current-filesystem-access-approval-function default-context)))
+           (setf (current-filesystem-access-approval-function default-context)
+                 (lambda (&rest ignored)
+                   (declare (ignore ignored))
+                   :updated-context-approval))
+           (fiveam:is (eq context-conversation
+                         (runtime-context-default-conversation default-context)))
+           (fiveam:is (eq legacy-conversation *default-conversation*)))
+      (setf *default-conversation* original-legacy-conversation)
+      (setf (runtime-context-default-conversation default-context) original-default-conversation)
+      (setf *filesystem-access-approval-function* original-approval-function))))
+
 (fiveam:test test-explicit-runtime-context-controls-http-timeouts
   (let* ((context (make-runtime-context :http-connect-timeout 7
                                        :http-read-timeout 33))
