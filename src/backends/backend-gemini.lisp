@@ -29,9 +29,11 @@
 
 (defun gemini-request-state (input conversation file-attachments effective-model effective-generation-config
                                   &key messages persona-memory persona-diary-entries
-                                    original-interaction-id current-interaction-id)
+                                    original-interaction-id current-interaction-id live-user-input)
   "Builds the provider-runner state for a Gemini Interactions turn."
   (list :input input
+        :live-user-input (or live-user-input
+                             (and (stringp input) input))
         :file-attachments file-attachments
         :effective-model effective-model
         :effective-generation-config effective-generation-config
@@ -354,20 +356,28 @@
                                               :persona-memory (getf state :persona-memory)
                                               :persona-diary-entries (getf state :persona-diary-entries)
                                               :original-interaction-id (getf state :original-interaction-id)
-                                              :current-interaction-id (getf outcome :interaction-id))
+                                              :current-interaction-id (getf outcome :interaction-id)
+                                              :live-user-input (getf state :live-user-input))
                         next-depth)))
            :finalize-turn
            (lambda (state outcome)
-             (declare (ignore state))
-             (emit-chat-response-text (provider-turn-outcome-text outcome)
-                                      :usage (provider-turn-outcome-usage outcome)
-                                      :thought-text (provider-turn-outcome-thought-text outcome))
-             (make-chat-turn-result
-              (provider-turn-outcome-text outcome)
-              :messages (conversation-messages conversation)
-              :interaction-id (getf outcome :interaction-id)
-              :usage (provider-turn-outcome-usage outcome)
-              :thought-text (provider-turn-outcome-thought-text outcome)))
+             (let* ((text (provider-turn-outcome-text outcome))
+                    (updated-history
+                      (update-conversation-stateless-history
+                       (getf state :messages)
+                       (list (cons "role" "user")
+                             (cons "content" (getf state :live-user-input)))
+                       (list (cons "role" "model")
+                             (cons "content" text)))))
+               (emit-chat-response-text text
+                                        :usage (provider-turn-outcome-usage outcome)
+                                        :thought-text (provider-turn-outcome-thought-text outcome))
+               (make-chat-turn-result
+                text
+                :messages updated-history
+                :interaction-id (getf outcome :interaction-id)
+                :usage (provider-turn-outcome-usage outcome)
+                :thought-text (provider-turn-outcome-thought-text outcome))))
            :error-handler
            (lambda (state condition current-depth)
              (declare (ignore current-depth))

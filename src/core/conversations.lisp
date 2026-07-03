@@ -496,16 +496,15 @@ Use NEW-CHAT instead when no persona should be loaded."
         max-tokens)))
 
 (defun effective-context-pruning-target-tokens ()
-  "Returns the effective estimated post-prune target token count."
+  "Returns the effective estimated post-compression target token count."
   (let* ((max-tokens (effective-context-pruning-max-tokens))
          (configured-target *context-pruning-estimated-target-tokens*))
     (min configured-target
          (max 1 (floor (* max-tokens 0.9))))))
 
-(defun select-recent-messages-for-pruning (history)
-  "Returns the newest raw messages to keep after pruning HISTORY."
+(defun select-recent-messages-for-pruning (history &key (target-tokens (effective-context-pruning-target-tokens)))
+  "Returns the newest raw messages to keep after compressing HISTORY."
   (let ((minimum-keep-count 4)
-        (target-tokens (effective-context-pruning-target-tokens))
         (kept nil)
         (kept-tokens 0))
     (dolist (message (reverse history))
@@ -526,32 +525,90 @@ Use NEW-CHAT instead when no persona should be loaded."
         (t
          kept)))))
 
-(defun prune-conversation-context-if-needed (conversation)
-  "Returns CONVERSATION's effective history after pruning oversized context when needed."
-  (let* ((bot (conversation-chatbot conversation))
-         (history (conversation-messages conversation))
-         (estimated-total-tokens (estimated-history-token-count history))
-         (max-tokens (effective-context-pruning-max-tokens)))
+(defun make-context-digest-message (digest)
+  "Returns a synthetic system message containing DIGEST."
+  (list (cons "role" "system")
+        (cons "content" (format nil "[State Digest of previous turns: ~A]" digest))))
+
+(defun build-compressed-history-from-raw-messages (history raw-messages digest)
+  "Returns HISTORY compressed with DIGEST plus RAW-MESSAGES, or HISTORY when no reduction occurs."
+  (let* ((keep-count (length raw-messages))
+         (history-len (length history)))
+    (if (<= history-len keep-count)
+        history
+        (append (list (make-context-digest-message digest))
+               raw-messages))))
+
+(defun compressed-conversation-history-if-needed (history bot)
+  "Returns HISTORY compressed when its estimated size exceeds the configured limit."
+  (let* ((estimated-total-tokens (estimated-history-token-count history))
+         (max-tokens (effective-context-pruning-max-tokens))
+         (target-tokens (effective-context-pruning-target-tokens)))
     (if (<= estimated-total-tokens max-tokens)
         history
-        (let* ((raw-messages (select-recent-messages-for-pruning history))
-               (keep-count (length raw-messages))
-               (history-len (length history)))
-          (if (<= history-len keep-count)
-              history
-              (let* ((old-messages (subseq history 0 (- history-len keep-count)))
-                     (digest (summarize-old-history old-messages bot))
-                     (digest-msg (list (cons "role" "system")
-                                      (cons "content" (format nil "[State Digest of previous turns: ~A]" digest))))
-                     (pruned-history (append (list digest-msg) raw-messages)))
-                (log-message :info "Pruned and compressed conversation history context"
-                            :context `(("estimated-total-tokens" . ,(princ-to-string estimated-total-tokens))
-                                       ("effective-max-tokens" . ,(princ-to-string max-tokens))
-                                       ("effective-target-tokens" . ,(princ-to-string (effective-context-pruning-target-tokens)))
-                                       ("old-messages-count" . ,(princ-to-string (length old-messages)))
-                                       ("kept-messages-count" . ,(princ-to-string keep-count))
-                                       ("digest-length" . ,(princ-to-string (length digest)))))
-                pruned-history))))))
+        (labels ((compress-with-raw-target (raw-target-tokens)
+                  (let* ((raw-messages (select-recent-messages-for-pruning history
+                                                                           :target-tokens raw-target-tokens))
+                         (keep-count (length raw-messages))
+                         (history-len (length history)))
+                    (if (<= history-len keep-count)
+                        (list :history history
+                              :old-messages nil
+                              :raw-messages raw-messages
+                              :digest nil)
+                        (let* ((old-messages (subseq history 0 (- history-len keep-count)))
+                               (digest (summarize-old-history old-messages bot)))
+                          (list :history (build-compressed-history-from-raw-messages history raw-messages digest)
+                                :old-messages old-messages
+                                :raw-messages raw-messages
+                                :digest digest))))))
+         (let* ((initial-pass (compress-with-raw-target target-tokens))
+                (initial-history (getf initial-pass :history))
+                (initial-digest (getf initial-pass :digest))
+                (initial-digest-message (and initial-digest
+                                             (make-context-digest-message initial-digest)))
+                (initial-estimated-tokens (estimated-history-token-count initial-history))
+                (retry-raw-target-tokens
+                  (and initial-digest-message
+                       (> initial-estimated-tokens target-tokens)
+                       (max 1
+                            (- target-tokens
+                               (estimate-message-token-count initial-digest-message)))))
+                (final-pass
+                  (if (and retry-raw-target-tokens
+                           (< retry-raw-target-tokens target-tokens))
+                      (compress-with-raw-target retry-raw-target-tokens)
+                      initial-pass))
+                (compressed-history (getf final-pass :history))
+                (old-messages (getf final-pass :old-messages))
+                (raw-messages (getf final-pass :raw-messages))
+                (digest (getf final-pass :digest)))
+           (when digest
+             (log-message :info "Compressed conversation history context after completed turn"
+                          :context `(("estimated-total-tokens" . ,(princ-to-string estimated-total-tokens))
+                                     ("effective-max-tokens" . ,(princ-to-string max-tokens))
+                                     ("effective-target-tokens" . ,(princ-to-string target-tokens))
+                                     ("compressed-history-tokens" . ,(princ-to-string (estimated-history-token-count compressed-history)))
+                                     ("old-messages-count" . ,(princ-to-string (length old-messages)))
+                                     ("kept-messages-count" . ,(princ-to-string (length raw-messages)))
+                                     ("digest-length" . ,(princ-to-string (length digest))))))
+           compressed-history)))))
+
+(defun compress-conversation-context-if-needed (conversation)
+  "Applies post-response compression to CONVERSATION when its stored history is oversized."
+  (let* ((original-history (conversation-messages conversation))
+         (compressed-history
+          (compressed-conversation-history-if-needed original-history
+                                                    (conversation-chatbot conversation))))
+    (setf (conversation-messages conversation) compressed-history)
+    (unless (eq compressed-history original-history)
+      (setf (conversation-interaction-id conversation) nil))
+    compressed-history))
+
+(defun prune-conversation-context-if-needed (conversation)
+  "Returns CONVERSATION's compressed history for compatibility with older callers."
+  (compressed-conversation-history-if-needed (conversation-messages conversation)
+                                            (conversation-chatbot conversation)))
 
 (defun load-plan-to-system-instructions (bot filename)
   "Reads the generated Markdown plan from FILENAME and appends it to BOT's transient system-instruction."

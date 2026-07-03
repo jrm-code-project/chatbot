@@ -51,11 +51,12 @@
       (setf (current-active-conversation context) previous-active-conversation))))
 
 (defun apply-and-checkpoint-chat-turn-result (result)
-  "Applies RESULT to its target conversation, checkpoints it, and returns the final text."
+  "Applies RESULT, performs post-response compression, checkpoints, and returns the final text."
   (let ((effective-conversation (chat-turn-result-conversation result)))
-    (apply-chat-turn-result result effective-conversation)
-    (checkpoint-conversation-after-chat effective-conversation)
-    (chat-turn-result-text result)))
+    (let ((text (apply-chat-turn-result result effective-conversation)))
+      (compress-conversation-context-if-needed effective-conversation)
+      (checkpoint-conversation-after-chat effective-conversation)
+      text)))
 
 (defun chat-backend-dispatch-key (bot)
   "Returns the backend dispatch key for BOT."
@@ -140,13 +141,11 @@
                             (list :temperature temperature))
                           (when explicit-top-p-specified-p
                             (list :top-p top-p)))))
-         (pruned-messages (prune-conversation-context-if-needed conversation))
-         (turn-conversation (clone-conversation conversation
-                                                :messages pruned-messages)))
+         (turn-conversation (clone-conversation conversation)))
     (multiple-value-bind (effective-input effective-model)
         (resolve-prompt-model-override bot input)
       (list :turn-conversation turn-conversation
-            :effective-input effective-input
+           :effective-input effective-input
             :effective-model effective-model
             :file-attachments file-attachments
             :effective-generation-config effective-generation-config))))

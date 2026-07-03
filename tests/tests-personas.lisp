@@ -1275,10 +1275,45 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
           (fiveam:is (string= "Mocked response."
                               (cdr (assoc "content" (car (last history)) :test #'string=)))))))))
 
+(fiveam:test test-context-pruning-runs-after-turn-completes
+  (let* ((*context-pruning-threshold-characters* nil)
+        (*context-pruning-estimated-max-tokens* 100)
+        (*context-pruning-estimated-target-tokens* 75)
+        (conv (new-chat :backend :google))
+        (near-limit-text (make-string 120 :initial-element #\A))
+        (responses
+          (list
+           "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Primary response.\"}], \"role\": \"model\"}}]}"
+           "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Digest summary.\"}], \"role\": \"model\"}}]}"))
+        (calls '()))
+    (setf (conversation-messages conv)
+         (list (list (cons "role" "user") (cons "content" near-limit-text))
+               (list (cons "role" "model") (cons "content" "response 1"))
+               (list (cons "role" "user") (cons "content" near-limit-text))
+               (list (cons "role" "model") (cons "content" "response 2"))
+               (list (cons "role" "user") (cons "content" near-limit-text))
+               (list (cons "role" "model") (cons "content" "response 3"))))
+    (let ((*gemini-api-key-function* (lambda () "mocked-api-key"))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore args))
+             (push url calls)
+             (values (pop responses) 200))))
+      (let ((response (chat "Hello latest prompt" :conversation conv)))
+       (fiveam:is (string= "Primary response." response))
+       (fiveam:is (= 2 (length calls)))
+       (let ((history (conversation-messages conv)))
+         (fiveam:is (string= "system" (cdr (assoc "role" (first history) :test #'string=))))
+         (fiveam:is (search "Digest summary."
+                            (cdr (assoc "content" (first history) :test #'string=))))
+         (fiveam:is (string= "Primary response."
+                             (cdr (assoc "content" (car (last history)) :test #'string=))))
+         (fiveam:is (<= (estimated-history-token-count history) 75)))))))
+
 (fiveam:test test-context-pruning-uses-estimated-token-window
   (let* ((*context-pruning-threshold-characters* nil)
         (*context-pruning-estimated-max-tokens* 100)
-        (*context-pruning-estimated-target-tokens* 90)
+        (*context-pruning-estimated-target-tokens* 75)
         (conv (new-chat :backend :google))
         (long-text (make-string 160 :initial-element #\A))
         (calls '()))
@@ -1303,6 +1338,7 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
          (fiveam:is (<= (length history) 8))
          (fiveam:is (string= "system" (cdr (assoc "role" (first history) :test #'string=))))
          (fiveam:is (search "State Digest" (cdr (assoc "content" (first history) :test #'string=))))
+         (fiveam:is (<= (estimated-history-token-count history) 75))
          (fiveam:is (string= "Mocked response."
                              (cdr (assoc "content" (car (last history)) :test #'string=)))))))))
 

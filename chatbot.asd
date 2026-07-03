@@ -63,7 +63,7 @@
      (:file "backend-gemini"     :pathname "backends/backend-gemini" :depends-on ("package" "vars" "data" "logging" "http-utils" "text-utils" "payloads" "gemini-payloads" "mcp" "tool-execution" "turn-runner"))
      (:file "backend-openai"     :pathname "backends/backend-openai" :depends-on ("package" "vars" "data" "http-utils" "text-utils" "payloads" "openai-payloads" "mcp" "tool-execution" "turn-runner"))
      (:file "backend-google"     :pathname "backends/backend-google" :depends-on ("package" "vars" "data" "logging" "http-utils" "payloads" "google-payloads" "mcp" "tool-execution" "turn-runner"))
-     (:file "chat"               :pathname "core/chat" :depends-on ("package" "vars" "data" "attachments" "backend-gemini" "backend-openai" "backend-google"))
+     (:file "chat"               :pathname "core/chat" :depends-on ("package" "vars" "data" "attachments" "conversations" "backend-gemini" "backend-openai" "backend-google"))
      (:file "test-runner"        :pathname "core/test-runner" :depends-on ("package"))
      (:file "round-robin"        :pathname "orchestration/round-robin" :depends-on ("package" "data" "attachments" "prompt-decoration" "text-utils" "chat"))
      (:file "sandbox-personas"   :pathname "orchestration/sandbox-personas" :depends-on ("package" "data" "conversations" "prompt-decoration" "text-utils" "chat"))

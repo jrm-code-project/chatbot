@@ -1226,7 +1226,40 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (fiveam:is-false (test-json-value-any first-payload
                                               '("previous_interaction_id" :previous-interaction-id)))
         (assert-json-field= second-payload "input" "Second turn")
-        (assert-json-field= second-payload "previous_interaction_id" "session-1")))))
+        (assert-json-field= second-payload "previous_interaction_id" "session-1"))
+      (assert-history-sequence (conversation-messages conv)
+                               '(("user" "First turn")
+                                 ("model" "Hello one")
+                                 ("user" "Second turn")
+                                 ("model" "Hello two"))))))
+
+(fiveam:test test-compression-clears-interaction-id-when-history-is-rewritten
+  (let* ((*context-pruning-threshold-characters* nil)
+        (*context-pruning-estimated-max-tokens* 100)
+        (*context-pruning-estimated-target-tokens* 75)
+        (conv (new-chat :backend :google))
+        (long-text (make-string 160 :initial-element #\A)))
+    (setf (conversation-interaction-id conv) "session-1")
+    (setf (conversation-messages conv)
+         (list (list (cons "role" "user") (cons "content" long-text))
+               (list (cons "role" "model") (cons "content" "response 1"))
+               (list (cons "role" "user") (cons "content" long-text))
+               (list (cons "role" "model") (cons "content" "response 2"))
+               (list (cons "role" "user") (cons "content" long-text))
+               (list (cons "role" "model") (cons "content" "response 3"))))
+    (let ((*gemini-api-key-function* (lambda () "mocked-api-key"))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore url args))
+             (values
+              "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Digest summary.\"}], \"role\": \"model\"}}]}"
+              200))))
+      (compress-conversation-context-if-needed conv)
+      (fiveam:is (null (conversation-interaction-id conv)))
+      (let ((history (conversation-messages conv)))
+       (fiveam:is (string= "system" (cdr (assoc "role" (first history) :test #'string=))))
+       (fiveam:is (search "Digest summary."
+                          (cdr (assoc "content" (first history) :test #'string=))))))))
 
 (fiveam:test test-gemini-chat-dollar-prefix-overrides-model-for-one-turn
   (let ((conv (new-chat :backend :gemini))
