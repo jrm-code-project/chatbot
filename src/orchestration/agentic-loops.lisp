@@ -24,6 +24,10 @@
 (defvar *agentic-loop-start-history-message-limit* 6
   "Maximum number of recent stored messages retained when cloning a conversation for an agentic loop.")
 
+(defvar *agentic-loop-start-system-instruction*
+  "You are an autonomous agent executing the current goal. Focus on the goal, use available tools when helpful, follow configured safety and approval constraints, and reply tersely without conversational filler."
+  "Compact system instruction used for agentic-loop startup clones.")
+
 (defvar *agentic-loop-supervisor-max-restarts* 2
   "Maximum watchdog-managed restarts for one agentic loop before it is left failed.")
 
@@ -190,30 +194,32 @@
     (and aligned-history
          (copy-tree aligned-history))))
 
+(defun clone-chatbot-for-agentic-loop (chatbot)
+  "Returns a loop-owned CHATBOT clone with compact startup instructions."
+  (clone-chatbot chatbot
+                 :system-instruction *agentic-loop-start-system-instruction*
+                 :system-instruction-path nil
+                 :system-instruction-storage-kind :transient))
+
 (defun clone-conversation-for-agentic-loop (conversation &key isolate-p)
   "Returns a loop-owned clone of CONVERSATION and its chatbot, optionally isolated."
   (let ((chatbot (conversation-chatbot conversation)))
     (if isolate-p
         (clone-conversation conversation
-                            :chatbot (clone-chatbot chatbot
-                                                    :system-instruction nil
-                                                    :persona-memory nil
-                                                    :persona-diary-entries nil)
+                            :chatbot (clone-chatbot-for-agentic-loop chatbot)
+                            :persona-memory nil
+                            :persona-diary-entries nil
                             :messages nil
                             :interaction-id nil)
         (let* ((source-messages (conversation-messages conversation))
                (trimmed-messages (trim-agentic-loop-start-history source-messages))
-               (preload-dropped-p (or (conversation-persona-memory conversation)
-                                      (conversation-persona-diary-entries conversation)))
-               (history-trimmed-p (not (equal source-messages trimmed-messages))))
+               (loop-chatbot (clone-chatbot-for-agentic-loop chatbot)))
           (clone-conversation conversation
-                              :chatbot (clone-chatbot chatbot)
+                              :chatbot loop-chatbot
                               :persona-memory nil
                               :persona-diary-entries nil
                               :messages trimmed-messages
-                              :interaction-id (unless (or preload-dropped-p
-                                                          history-trimmed-p)
-                                                (conversation-interaction-id conversation)))))))
+                              :interaction-id nil)))))
 
 (defun apply-agentic-loop-execution-profile (conversation &key backend model)
   "Applies backend/model overrides to CONVERSATION and returns the effective profile."
@@ -810,10 +816,6 @@ queued, and :EXHAUSTED when LOOP has no restart budget left."
                               :conversation loop-conversation
                               :runtime-context template-context
                               :chat-function (resolve-agentic-loop-chat-function))))
-    ;; Force sterile instructions only when isolate-p is requested
-    (when isolate-p
-      (setf (chatbot-system-instruction (conversation-chatbot loop-conversation))
-            "You are an autonomous agent. Focus purely on achieving the specified goal. Do not output conversational filler."))
     (setf (agentic-loop-execution-profile loop)
           (apply-agentic-loop-execution-profile loop-conversation
                                                 :backend backend

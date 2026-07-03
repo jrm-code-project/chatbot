@@ -56,6 +56,8 @@ blind polling alone under heavier full-suite load."
                       (("role" . "assistant") ("content" . "assistant 2"))
                       (("role" . "user") ("content" . "user 3"))
                       (("role" . "assistant") ("content" . "assistant 3")))))
+    (setf (chatbot-system-instruction (conversation-chatbot conversation))
+          "A very large persona system instruction that should not be copied into the loop startup context.")
     (setf (conversation-persona-memory conversation) "Stored persona memory.")
     (setf (conversation-persona-diary-entries conversation) '("Diary 1" "Diary 2"))
     (setf (conversation-interaction-id conversation) "remote-state")
@@ -64,11 +66,31 @@ blind polling alone under heavier full-suite load."
       (fiveam:is (null (conversation-persona-memory cloned)))
       (fiveam:is (null (conversation-persona-diary-entries cloned)))
       (fiveam:is (null (conversation-interaction-id cloned)))
+      (fiveam:is (string= *agentic-loop-start-system-instruction*
+                          (system-instruction-text
+                           (chatbot-system-instruction
+                            (conversation-chatbot cloned)))))
       (fiveam:is (= 6 (length (conversation-messages cloned))))
       (fiveam:is (equal '(("role" . "user") ("content" . "user 1"))
                         (first (conversation-messages cloned))))
       (fiveam:is (equal '(("role" . "assistant") ("content" . "assistant 3"))
                         (alexandria:lastcar (conversation-messages cloned)))))))
+
+(fiveam:test test-clone-conversation-for-agentic-loop-clears-remote-state-even-with-short-history
+  (let* ((conversation (new-chat :backend :gemini))
+         (messages '((("role" . "user") ("content" . "recent user"))
+                     (("role" . "assistant") ("content" . "recent assistant")))))
+    (setf (chatbot-system-instruction (conversation-chatbot conversation))
+          "Original persona instruction that should be replaced for loop startup.")
+    (setf (conversation-interaction-id conversation) "remote-state")
+    (setf (conversation-messages conversation) messages)
+    (let ((cloned (clone-conversation-for-agentic-loop conversation)))
+      (fiveam:is (null (conversation-interaction-id cloned)))
+      (fiveam:is (equal messages (conversation-messages cloned)))
+      (fiveam:is (string= *agentic-loop-start-system-instruction*
+                          (system-instruction-text
+                           (chatbot-system-instruction
+                            (conversation-chatbot cloned))))))))
 
 (fiveam:test test-start-agentic-loop-completes-and-records-result
   (let ((*agentic-loop-chat-function*
