@@ -719,7 +719,8 @@
                                               :failed
                                               :note (princ-to-string condition)))
               (agentic-loop-log :error loop "failed"
-                                :context `(("error" . ,(princ-to-string condition))))))))
+                                :context `(("error" . ,(princ-to-string condition)))))))
+        :default-conversation-compatibility-p nil)
     (progn
       (when (eq (agentic-loop-status loop) :running)
         (setf (agentic-loop-status loop) :completed))
@@ -746,7 +747,7 @@
     (error "Agentic loops require a CHATBOT conversation."))
   (let* ((source-bot (conversation-chatbot conversation))
          (template-context (or (chatbot-runtime-context source-bot)
-                               (resolve-runtime-context nil :sync-from-globals-p t)
+                               (resolve-runtime-context nil)
                                *default-runtime-context*))
          (loop-conversation (clone-conversation-for-agentic-loop conversation :isolate-p isolate-p))
          (loop (make-instance 'agentic-loop

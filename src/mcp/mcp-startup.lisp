@@ -290,17 +290,18 @@
   "Creates the shared startup chatbot and initializes MCP servers if needed."
   (multiple-value-bind (context strict-required-p)
       (parse-startup-chatbot-options args)
-    (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
+    (let ((resolved-context (resolve-runtime-context context)))
       (call-with-runtime-context
        resolved-context
        (lambda ()
-         (ensure-startup-chatbot-initialized resolved-context strict-required-p))))))
+         (ensure-startup-chatbot-initialized resolved-context strict-required-p))
+       :default-conversation-compatibility-p nil))))
 
 (defun maybe-auto-initialize-startup-chatbot (&rest args)
   "Initializes shared MCP servers only when eager startup compatibility is enabled."
   (multiple-value-bind (context strict-required-p)
       (parse-startup-chatbot-options args)
-    (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
+    (let ((resolved-context (resolve-runtime-context context)))
       (when (current-auto-initialize-startup-mcp-servers-p resolved-context)
         (initialize-startup-chatbot resolved-context :strict-required-p strict-required-p)))))
 

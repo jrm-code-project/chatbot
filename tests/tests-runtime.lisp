@@ -114,6 +114,46 @@
       (setf *default-conversation* original-legacy-conversation)
       (setf (runtime-context-default-conversation default-context) original-default-conversation))))
 
+(fiveam:test test-new-chat-does-not-sync-legacy-default-conversation-into-runtime-context
+  (let* ((default-context *default-runtime-context*)
+         (legacy-conversation (new-chat))
+         (context-conversation (new-chat))
+         (original-legacy-conversation *default-conversation*)
+         (original-default-conversation (runtime-context-default-conversation default-context)))
+    (unwind-protect
+         (progn
+           (setf *default-conversation* legacy-conversation)
+           (setf (runtime-context-default-conversation default-context) context-conversation)
+           (new-chat)
+           (fiveam:is (eq context-conversation
+                         (runtime-context-default-conversation default-context)))
+           (fiveam:is (eq legacy-conversation *default-conversation*)))
+      (setf *default-conversation* original-legacy-conversation)
+      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
+
+(fiveam:test test-initialize-startup-chatbot-does-not-sync-legacy-default-conversation-into-runtime-context
+  (let* ((default-context *default-runtime-context*)
+         (legacy-conversation (new-chat))
+         (context-conversation (new-chat))
+         (original-legacy-conversation *default-conversation*)
+         (original-default-conversation (runtime-context-default-conversation default-context))
+         (original-context-startup-chatbot (runtime-context-startup-chatbot default-context)))
+    (unwind-protect
+         (let ((*initialize-mcp-servers-for-chatbot-function*
+                (lambda (bot &key strict-required-p)
+                  (declare (ignore strict-required-p))
+                  bot)))
+           (setf *default-conversation* legacy-conversation)
+           (setf (runtime-context-default-conversation default-context) context-conversation)
+           (setf (runtime-context-startup-chatbot default-context) nil)
+           (initialize-startup-chatbot)
+           (fiveam:is (eq context-conversation
+                         (runtime-context-default-conversation default-context)))
+           (fiveam:is (eq legacy-conversation *default-conversation*)))
+      (setf *default-conversation* original-legacy-conversation)
+      (setf (runtime-context-default-conversation default-context) original-default-conversation)
+      (setf (runtime-context-startup-chatbot default-context) original-context-startup-chatbot))))
+
 (fiveam:test test-explicit-runtime-context-controls-http-timeouts
   (let* ((context (make-runtime-context :http-connect-timeout 7
                                        :http-read-timeout 33))

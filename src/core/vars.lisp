@@ -701,14 +701,18 @@ Only the canonical default runtime context still requires this compatibility she
   "Returns the transient planner parent conversation for CONTEXT."
   "Sets the transient planner parent conversation for CONTEXT.")
 
-(defun call-with-runtime-context (context thunk)
+(defun call-with-runtime-context (context thunk &key (default-conversation-compatibility-p t))
   "Calls THUNK with the resolved runtime context active.
 Only the canonical default runtime context still requires *DEFAULT-CONVERSATION*
 legacy rebinding. Function seams now resolve through the active runtime context
 directly, with default-context approval compatibility synchronized after the
 call."
-  (let* ((resolved-context (resolve-runtime-context context :sync-from-globals-p t))
-         (default-context-p (default-runtime-context-p resolved-context)))
+  (let* ((resolved-context (resolve-runtime-context
+                            context
+                            :sync-from-globals-p default-conversation-compatibility-p))
+         (default-context-p (default-runtime-context-p resolved-context))
+         (default-conversation-compatibility-active-p
+           (and default-context-p default-conversation-compatibility-p)))
     (cond
       ((null resolved-context)
        (funcall thunk))
@@ -718,7 +722,7 @@ call."
        (let ((result
                (let ((*active-runtime-context* resolved-context))
                  (unwind-protect
-                      (if default-context-p
+                      (if default-conversation-compatibility-active-p
                           (call-with-default-conversation-compatibility resolved-context thunk)
                           (funcall thunk))
                    (when default-context-p
@@ -730,7 +734,7 @@ call."
                            *filesystem-access-approval-function*)
                      (setf (runtime-context-eval-approval-function resolved-context)
                            *eval-approval-function*))))))
-         (when default-context-p
+         (when default-conversation-compatibility-active-p
            (maybe-sync-legacy-globals-from-default-runtime-context resolved-context))
          result)))))
 
