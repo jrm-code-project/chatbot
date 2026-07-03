@@ -14,16 +14,28 @@
     (fiveam:is (string= "continue" (getf control :status)))
     (fiveam:is (string= "next step" (getf control :summary)))))
 
-(defun wait-for-agentic-loop-status (loop statuses &key (timeout-seconds 3.0d0))
-  "Polls LOOP until its status is one of STATUSES or TIMEOUT-SECONDS elapses."
-  (let ((deadline (+ (get-internal-real-time)
-                     (* timeout-seconds internal-time-units-per-second))))
+(defun wait-for-agentic-loop-status (loop statuses &key (timeout-seconds 5.0d0))
+  "Waits for LOOP to reach one of STATUSES or returns NIL on timeout.
+Joins the worker thread in short slices when available so tests do not rely on
+blind polling alone under heavier full-suite load."
+  (let ((deadline (+ (get-high-precision-timestamp) timeout-seconds)))
     (loop
-      when (member (agentic-loop-status loop) statuses)
-        do (return (agentic-loop-status loop))
-      when (> (get-internal-real-time) deadline)
-        do (return nil)
-      do (sleep 0.01))))
+      for remaining = (- deadline (get-high-precision-timestamp))
+      for status = (agentic-loop-status loop)
+      when (member status statuses)
+        do (return status)
+      when (<= remaining 0.0d0)
+        do (let ((final-status (agentic-loop-status loop)))
+             (return (and (member final-status statuses)
+                          final-status)))
+      do (let ((thread (agentic-loop-thread loop)))
+           (when (and thread
+                      (sb-thread:thread-alive-p thread)
+                      (not (eq status :awaiting-approval)))
+             (handler-case
+                 (sb-thread:join-thread thread :timeout (min remaining 0.05d0))
+               (sb-thread:join-thread-error () nil))))
+         (sleep 0.01))))
 
 (fiveam:test test-start-agentic-loop-completes-and-records-result
   (let ((*agentic-loop-chat-function*

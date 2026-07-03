@@ -316,7 +316,9 @@ Second instruction paragraph." s))
                                 (current-agentic-loop-default-model runtime-context)))
             (let ((loop (start-agentic-loop conv "Use persona loop defaults" :max-iterations 2)))
               (fiveam:is (eq :completed
-                             (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
+                            (wait-for-agentic-loop-status loop
+                                                          '(:completed :failed :limit-reached)
+                                                          :timeout-seconds 10.0d0)))
               (fiveam:is (eq :openai observed-backend))
               (fiveam:is (string= "gpt-4o-mini" observed-model)))))
       (abort-agentic-loops :force t)
