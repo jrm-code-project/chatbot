@@ -58,7 +58,7 @@
      (:file "google-payloads"    :pathname "payloads/google-payloads" :depends-on ("package" "data" "mcp" "attachments" "prompt-decoration" "request-history" "payloads"))
      (:file "gemini-payloads"    :pathname "payloads/gemini-payloads" :depends-on ("package" "data" "mcp" "attachments" "prompt-decoration" "request-history" "payloads"))
      (:file "personas"           :pathname "personas/personas" :depends-on ("package" "logging"))
-     (:file "conversations"      :pathname "core/conversations" :depends-on ("package" "vars" "data" "json-utils" "personas" "mcp"))
+     (:file "conversations"      :pathname "core/conversations" :depends-on ("package" "vars" "data" "json-utils" "personas" "mcp" "request-history"))
      (:file "turn-runner"        :pathname "backends/turn-runner" :depends-on ("package" "vars" "data" "request-history" "tool-execution"))
      (:file "backend-gemini"     :pathname "backends/backend-gemini" :depends-on ("package" "vars" "data" "logging" "http-utils" "text-utils" "payloads" "gemini-payloads" "mcp" "tool-execution" "turn-runner"))
      (:file "backend-openai"     :pathname "backends/backend-openai" :depends-on ("package" "vars" "data" "http-utils" "text-utils" "payloads" "openai-payloads" "mcp" "tool-execution" "turn-runner"))
