@@ -171,6 +171,14 @@
           entry
           "Invalid MCP server definition: missing required name or command.")))))
 
+(defun initialize-mcp-startup-entries (raw-list)
+  "Initializes startup entries for RAW-LIST server definitions."
+  (mapcar #'startup-entry-from-server-definition raw-list))
+
+(defun mcp-startup-servers-from-entries (entries)
+  "Returns the successfully initialized server list from ENTRIES."
+  (remove nil (mapcar #'mcp-startup-entry-server entries)))
+
 (defun mcp-startup-status-from-entries (entries strict-required-p)
   "Builds structured startup status for ENTRIES."
   (let ((required-failed-count
@@ -217,26 +225,40 @@
                 :failed-count 0
                 :required-failed-count 0))
 
+(defun apply-empty-mcp-startup-status (bot strict-required-p)
+  "Stores and returns the empty startup status for BOT."
+  (apply-mcp-startup-status bot nil (empty-mcp-startup-status strict-required-p)))
+
+(defun signal-mcp-startup-required-failures (status strict-required-p)
+  "Signals when STATUS contains failed required entries in strict mode."
+  (when (and strict-required-p
+            (> (mcp-startup-status-required-failed-count status) 0))
+    (error 'mcp-startup-error :status status)))
+
+(defun startup-status-from-config (config strict-required-p)
+  "Returns initialized startup entry state from CONFIG in strict mode STRICT-REQUIRED-P."
+  (let* ((raw-list (mcp-config-server-definitions config))
+        (entries (initialize-mcp-startup-entries raw-list))
+        (servers (mcp-startup-servers-from-entries entries))
+        (status (mcp-startup-status-from-entries entries strict-required-p)))
+    (log-prefixed-message "MCP INFO"
+                         (format nil "Found ~A server definitions to initialize."
+                                 (length raw-list)))
+    (values servers status)))
+
 (defun default-initialize-mcp-servers-for-chatbot (bot &key strict-required-p)
   "Discovers and initializes MCP servers for the chatbot."
   (log-prefixed-message "MCP INFO" "Scanning for MCP configurations...")
   (let ((config (read-mcp-config)))
     (if config
-       (let* ((raw-list (mcp-config-server-definitions config))
-              (entries (mapcar #'startup-entry-from-server-definition raw-list))
-              (servers (remove nil (mapcar #'mcp-startup-entry-server entries)))
-              (status (mcp-startup-status-from-entries entries strict-required-p)))
-         (log-prefixed-message "MCP INFO"
-                               (format nil "Found ~A server definitions to initialize."
-                                       (length raw-list)))
+       (multiple-value-bind (servers status)
+           (startup-status-from-config config strict-required-p)
          (apply-mcp-startup-status bot servers status)
          (log-mcp-startup-summary status)
-         (when (and strict-required-p
-                    (> (mcp-startup-status-required-failed-count status) 0))
-           (error 'mcp-startup-error :status status))
+         (signal-mcp-startup-required-failures status strict-required-p)
          status)
        (progn
-         (apply-mcp-startup-status bot nil (empty-mcp-startup-status strict-required-p))
+         (apply-empty-mcp-startup-status bot strict-required-p)
          (log-prefixed-message "MCP INFO"
                                "No MCP configuration found. Falling back to zero tools.")
          (chatbot-mcp-startup-status bot)))))
@@ -251,19 +273,28 @@
   "Returns true when the shared startup chatbot has been created."
   (not (null (current-startup-chatbot context))))
 
+(defun make-startup-chatbot (context strict-required-p)
+  "Returns a newly initialized shared startup chatbot for CONTEXT."
+  (let ((bot (make-instance 'chatbot :runtime-context context)))
+    (initialize-mcp-servers-for-chatbot bot :strict-required-p strict-required-p)
+    bot))
+
+(defun ensure-startup-chatbot-initialized (context strict-required-p)
+  "Returns the existing shared startup chatbot for CONTEXT, or creates it."
+  (or (current-startup-chatbot context)
+      (let ((bot (make-startup-chatbot context strict-required-p)))
+        (setf (current-startup-chatbot context) bot)
+        bot)))
+
 (defun initialize-startup-chatbot (&rest args)
   "Creates the shared startup chatbot and initializes MCP servers if needed."
   (multiple-value-bind (context strict-required-p)
       (parse-startup-chatbot-options args)
     (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
-    (call-with-runtime-context
-     resolved-context
-     (lambda ()
-       (unless (current-startup-chatbot resolved-context)
-         (let ((bot (make-instance 'chatbot :runtime-context resolved-context)))
-           (initialize-mcp-servers-for-chatbot bot :strict-required-p strict-required-p)
-           (setf (current-startup-chatbot resolved-context) bot)))
-       (current-startup-chatbot resolved-context))))))
+      (call-with-runtime-context
+       resolved-context
+       (lambda ()
+         (ensure-startup-chatbot-initialized resolved-context strict-required-p))))))
 
 (defun maybe-auto-initialize-startup-chatbot (&rest args)
   "Initializes shared MCP servers only when eager startup compatibility is enabled."
@@ -292,21 +323,31 @@
          (eq (chatbot-mcp-servers bot)
              (chatbot-mcp-servers startup-bot)))))
 
+(defun chatbot-owned-mcp-servers (bot startup-bot)
+  "Returns the MCP servers BOT should stop itself.
+Servers shared from STARTUP-BOT remain owned by the startup chatbot."
+  (remove-if (lambda (server)
+              (and startup-bot
+                   (not (eq bot startup-bot))
+                   (member server (chatbot-mcp-servers startup-bot) :test #'eq)))
+            (chatbot-mcp-servers bot)))
+
+(defun clear-startup-chatbot-reference (bot startup-bot context)
+  "Clears the shared startup chatbot reference when BOT owns STARTUP-BOT."
+  (when (eq bot startup-bot)
+    (if context
+        (setf (current-startup-chatbot context) nil)
+        (setf (current-startup-chatbot) nil))))
+
 (defun shutdown-chatbot (bot &optional context)
   "Closes and stops all MCP servers connected to the chatbot."
   (let* ((context (or context (chatbot-runtime-context bot)))
          (startup-bot (ensure-startup-chatbot context)))
-    (dolist (server (chatbot-mcp-servers bot))
-      (unless (and startup-bot
-                  (not (eq bot startup-bot))
-                  (member server (chatbot-mcp-servers startup-bot) :test #'eq))
-        (when (typep server 'mcp-server)
-         (invalidate-mcp-tool-list-cache server))
-        (stop-mcp-server server)))
-    (when (eq bot startup-bot)
-      (if context
-         (setf (current-startup-chatbot context) nil)
-          (setf (current-startup-chatbot) nil)))
+    (dolist (server (chatbot-owned-mcp-servers bot startup-bot))
+      (when (typep server 'mcp-server)
+        (invalidate-mcp-tool-list-cache server))
+      (stop-mcp-server server))
+    (clear-startup-chatbot-reference bot startup-bot context)
     (setf (chatbot-mcp-servers bot) nil)))
 
 (eval-when (:load-toplevel :execute)

@@ -1373,9 +1373,25 @@ data: [DONE]")
       (setf *startup-chatbot* original-startup-chatbot)
       (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot))))
 
+(fiveam:test test-initialize-startup-chatbot-reuses-existing-shared-bot
+  (let* ((context (make-runtime-context))
+        (init-calls 0))
+    (let ((*initialize-mcp-servers-for-chatbot-function*
+          (lambda (bot &key strict-required-p)
+            (declare (ignore strict-required-p))
+            (incf init-calls)
+            (setf (chatbot-mcp-servers bot) '(:shared-server))
+            bot)))
+      (let ((first-bot (initialize-startup-chatbot context))
+           (second-bot (initialize-startup-chatbot context)))
+       (fiveam:is (= 1 init-calls))
+       (fiveam:is (eq first-bot second-bot))
+       (fiveam:is (eq first-bot (current-startup-chatbot context))))
+      (setf (runtime-context-startup-chatbot context) nil))))
+
 (fiveam:test test-explicit-runtime-context-isolates-startup-mcp-servers
   (let* ((context-a (make-runtime-context))
-         (context-b (make-runtime-context)))
+        (context-b (make-runtime-context)))
     (let ((*initialize-mcp-servers-for-chatbot-function*
             (lambda (bot &key strict-required-p)
               (declare (ignore strict-required-p))
