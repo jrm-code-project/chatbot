@@ -1603,6 +1603,23 @@ After fence.")
     (fiveam:is (null (search "skip me" output)))
     (fiveam:is (search "keep me" output))))
 
+(fiveam:test test-call-with-logging-settings-scopes-log-level
+  (let ((context (make-runtime-context :logging-enabled-p t
+                                       :log-level :info)))
+    (call-with-runtime-context
+     context
+     (lambda ()
+       (fiveam:is (eq :info (current-log-level)))
+       (fiveam:is-true (log-level-enabled-p :info))
+       (call-with-logging-settings
+        (lambda ()
+          (fiveam:is (eq :warn (current-log-level)))
+          (fiveam:is-false (log-level-enabled-p :info))
+          (fiveam:is-true (log-level-enabled-p :warn)))
+        :log-level :warn)
+       (fiveam:is (eq :info (current-log-level)))
+       (fiveam:is-true (log-level-enabled-p :info))))))
+
 (fiveam:test test-log-backend-response-stats
   (let ((output (with-output-to-string (s)
                   (let ((context (make-runtime-context :logging-enabled-p t

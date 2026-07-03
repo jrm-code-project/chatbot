@@ -175,12 +175,6 @@
   (sb-thread:with-mutex (*agentic-loop-id-lock*)
     (incf *agentic-loop-id-counter*)))
 
-(defun clone-runtime-context (context &rest initarg-overrides)
-  "Returns a shallow clone of CONTEXT with INITARG-OVERRIDES applied."
-  (apply #'make-instance 'runtime-context
-         (merge-initarg-overrides (copy-initargs-for-instance context)
-                                  initarg-overrides)))
-
 (defun trim-agentic-loop-start-history (messages)
   "Returns an aggressively trimmed recent suffix of MESSAGES for loop startup."
   (let* ((history-length (length messages))
@@ -472,19 +466,22 @@
 
 (defun make-agentic-loop-runtime-context (loop template-context conversation)
   "Returns a loop-specific runtime context derived from TEMPLATE-CONTEXT."
-  (clone-runtime-context
-   template-context
-   :default-conversation conversation
-   :filesystem-access-approval-function
-   (agentic-loop-approval-wrapper loop
-                                  :filesystem
-                                  (lambda (directory)
-                                    (uiop:ensure-directory-pathname (truename directory))))
-   :eval-approval-function
-   (agentic-loop-approval-wrapper loop
-                                  :eval
-                                  (lambda (expression)
-                                    expression))))
+  (let ((loop-context
+          (runtime-context-with-logging-settings template-context
+                                                 :log-level :warn)))
+    (clone-runtime-context
+     loop-context
+     :default-conversation conversation
+     :filesystem-access-approval-function
+     (agentic-loop-approval-wrapper loop
+                                    :filesystem
+                                    (lambda (directory)
+                                      (uiop:ensure-directory-pathname (truename directory))))
+     :eval-approval-function
+     (agentic-loop-approval-wrapper loop
+                                    :eval
+                                    (lambda (expression)
+                                      expression)))))
 
 (defun make-agentic-loop-step-record (iteration status &key prompt response note)
   "Returns one structured autonomous step record."

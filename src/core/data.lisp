@@ -431,6 +431,12 @@
                                                                               task-journal-lock))
                                   initarg-overrides)))
 
+(defun clone-runtime-context (context &rest initarg-overrides)
+  "Returns a shallow clone of CONTEXT with INITARG-OVERRIDES applied."
+  (apply #'make-instance 'runtime-context
+         (merge-initarg-overrides (copy-initargs-for-instance context)
+                                  initarg-overrides)))
+
 (defun clone-conversation (conversation &rest initarg-overrides)
   "Returns a shallow clone of CONVERSATION with INITARG-OVERRIDES applied."
   (apply #'make-instance 'conversation

@@ -245,9 +245,46 @@ blind polling alone under heavier full-suite load."
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))
 
+(fiveam:test test-agentic-loop-worker-suppresses-info-logs-without-muting-main-thread
+  (let* ((stream (make-string-output-stream))
+        (context (make-runtime-context :logging-enabled-p t
+                                       :log-level :info
+                                       :log-stream stream))
+        (observed-loop-log-level nil)
+        (*agentic-loop-chat-function*
+         (lambda (prompt &key conversation callback file files temperature top-p)
+           (declare (ignore prompt callback file files temperature top-p))
+           (setf observed-loop-log-level (current-log-level))
+           (log-message :info "loop info suppressed")
+           (log-message :warn "loop warn visible")
+           (test-agentic-loop-response "final" "loop finished"))))
+    (let ((conversation (new-chat :backend :openai :runtime-context context)))
+      (unwind-protect
+          (progn
+            (call-with-runtime-context
+             context
+             (lambda ()
+               (log-message :info "main info visible before loop")))
+            (let ((loop (start-agentic-loop conversation "Check loop logging" :max-iterations 2)))
+              (fiveam:is (eq :completed
+                             (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
+              (call-with-runtime-context
+               context
+               (lambda ()
+                 (log-message :info "main info visible after loop")))
+              (let ((output (get-output-stream-string stream)))
+                (fiveam:is (eq :warn observed-loop-log-level))
+                (fiveam:is (eq :info (runtime-context-log-level context)))
+                (fiveam:is (search "main info visible before loop" output))
+                (fiveam:is (search "main info visible after loop" output))
+                (fiveam:is (search "loop warn visible" output))
+                (fiveam:is-false (search "loop info suppressed" output)))))
+       (abort-agentic-loops :force t)
+       (clear-agentic-loops)))))
+
 (fiveam:test test-start-agentic-loop-explicit-overrides-win-over-defaults
   (let* ((observed-backend nil)
-         (observed-model nil)
+        (observed-model nil)
          (*agentic-loop-chat-function*
           (lambda (prompt &key conversation callback file files temperature top-p)
             (declare (ignore prompt callback file files temperature top-p))

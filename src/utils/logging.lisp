@@ -18,6 +18,45 @@
        (>= (log-level-value level)
            (log-level-value (current-log-level)))))
 
+(defun runtime-context-with-logging-settings (context
+                                             &key
+                                               (logging-enabled-p nil logging-enabled-p-p)
+                                               (log-level nil log-level-p)
+                                               (log-stream nil log-stream-p))
+  "Returns CONTEXT cloned with scoped logging overrides applied."
+  (let* ((base-context (or (resolve-runtime-context context)
+                           *default-runtime-context*
+                           (make-runtime-context)))
+         (overrides (append (when logging-enabled-p-p
+                              (list :logging-enabled-p logging-enabled-p))
+                            (when log-level-p
+                              (list :log-level log-level))
+                            (when log-stream-p
+                              (list :log-stream log-stream)))))
+    (if overrides
+        (apply #'clone-runtime-context base-context overrides)
+        base-context)))
+
+(defun call-with-logging-settings (thunk
+                                   &key
+                                     context
+                                     (logging-enabled-p nil logging-enabled-p-p)
+                                     (log-level nil log-level-p)
+                                     (log-stream nil log-stream-p))
+  "Calls THUNK inside a derived runtime context with scoped logging overrides."
+  (let ((derived-context
+          (apply #'runtime-context-with-logging-settings
+                 context
+                 (append (when logging-enabled-p-p
+                           (list :logging-enabled-p logging-enabled-p))
+                         (when log-level-p
+                           (list :log-level log-level))
+                         (when log-stream-p
+                           (list :log-stream log-stream))))))
+    (call-with-runtime-context derived-context thunk
+                               :default-conversation-compatibility-p nil
+                               :legacy-function-seam-compatibility-p nil)))
+
 (defun current-log-timestamp ()
   "Returns the current local timestamp in a compact ISO-like format."
   (multiple-value-bind (second minute hour day month year)
