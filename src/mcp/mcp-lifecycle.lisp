@@ -136,21 +136,23 @@
                                 :name name
                                 :process process-info
                                 :input-stream input
-                                :output-stream output)))
+                                :output-stream output
+                                :error-stream err-output)))
     (log-prefixed-message "MCP INFO" (format nil "Launching server ~A" name))
     (log-prefixed-message "MCP DEBUG" (format nil "Command: ~A ~A" log-command args))
     ;; Spawn an error monitoring thread
-    (sb-thread:make-thread
-     (lambda ()
-       (handler-case
-           (loop for line = (read-line err-output nil :eof)
-                 until (eq line :eof)
-                 do (log-prefixed-message (format nil "MCP ~A STDERR" name) line))
-         (error (e)
-           (log-prefixed-message "MCP DEBUG"
-                                 (format nil "~A STDERR thread terminated: ~A" name e)))))
-     :name (concatenate 'string "mcp-err-" name))
-    
+    (setf (mcp-server-stderr-thread server)
+          (sb-thread:make-thread
+           (lambda ()
+             (handler-case
+                 (loop for line = (read-line err-output nil :eof)
+                       until (eq line :eof)
+                       do (log-prefixed-message (format nil "MCP ~A STDERR" name) line))
+               (error (e)
+                 (log-prefixed-message "MCP DEBUG"
+                                       (format nil "~A STDERR thread terminated: ~A" name e)))))
+           :name (concatenate 'string "mcp-err-" name)))
+     
     (setf (mcp-server-reader-thread server)
           (sb-thread:make-thread (lambda () (mcp-reader-loop server))
                                  :name (concatenate 'string "mcp-reader-" name)))
@@ -172,24 +174,71 @@
   (when (and stream (open-stream-p stream))
     (close stream)))
 
+(defun wait-for-mcp-server-thread-shutdown (thread)
+  "Waits briefly for THREAD to exit after stream/process shutdown."
+  (when (and thread (sb-thread:thread-alive-p thread))
+    (handler-case
+        (sb-thread:join-thread thread :timeout 1.0)
+      (sb-thread:join-thread-error ()
+        nil)))
+  (and thread
+       (sb-thread:thread-alive-p thread)))
+
+(defun stop-mcp-server-thread (thread name role)
+  "Stops one MCP THREAD for server NAME with ROLE metadata."
+  (when thread
+    (when (wait-for-mcp-server-thread-shutdown thread)
+      (log-prefixed-message "MCP WARN"
+                           (format nil "Force-terminating ~A thread for server ~A."
+                                   role
+                                   name))
+      (sb-thread:terminate-thread thread))
+    nil))
+
+(defun stop-mcp-server-process (process name)
+  "Stops PROCESS for server NAME, attempting graceful termination before escalation."
+  (when process
+    (handler-case
+        (progn
+          (when (uiop:process-alive-p process)
+           (uiop:terminate-process process :urgent nil)
+           (sleep 0.1)
+           (when (uiop:process-alive-p process)
+             (log-prefixed-message "MCP WARN"
+                                   (format nil "Force-terminating MCP server process for ~A."
+                                           name))
+             (uiop:terminate-process process :urgent t)))
+          (uiop:wait-process process))
+      (error (e)
+        (log-prefixed-message "MCP WARN"
+                             (format nil "Failed to stop MCP server process for ~A cleanly: ~A"
+                                     name
+                                     e))))
+    nil))
+
 (defun default-stop-mcp-server (server)
   "Stops the MCP server process and reader thread cleanly."
   (log-prefixed-message "MCP INFO"
-                        (format nil "Stopping server ~A" (mcp-server-name server)))
-  (let ((thread (mcp-server-reader-thread server))
+                       (format nil "Stopping server ~A" (mcp-server-name server)))
+  (let ((name (mcp-server-name server))
+        (reader-thread (mcp-server-reader-thread server))
+        (stderr-thread (mcp-server-stderr-thread server))
         (proc (mcp-server-process server))
         (input-stream (mcp-server-input-stream server))
-        (output-stream (mcp-server-output-stream server)))
-    (when (and thread (sb-thread:thread-alive-p thread))
-      (sb-thread:terminate-thread thread))
+        (output-stream (mcp-server-output-stream server))
+        (error-stream (mcp-server-error-stream server)))
     (close-mcp-server-stream input-stream)
     (close-mcp-server-stream output-stream)
-    (when proc
-      (uiop:terminate-process proc :urgent t))
+    (close-mcp-server-stream error-stream)
+    (stop-mcp-server-thread reader-thread name "reader")
+    (stop-mcp-server-thread stderr-thread name "stderr")
+    (stop-mcp-server-process proc name)
     (setf (mcp-server-reader-thread server) nil
+          (mcp-server-stderr-thread server) nil
           (mcp-server-process server) nil
           (mcp-server-input-stream server) nil
-          (mcp-server-output-stream server) nil)))
+          (mcp-server-output-stream server) nil
+          (mcp-server-error-stream server) nil)))
 
 (defun stop-mcp-server (server)
   "Stops an MCP server, honoring the configured test seam when present."

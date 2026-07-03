@@ -35,11 +35,21 @@
     :accessor mcp-server-output-stream
     :initform nil
     :documentation "Stream to read from the subprocess.")
+   (error-stream
+    :initarg :error-stream
+    :accessor mcp-server-error-stream
+    :initform nil
+    :documentation "Stream to read stderr from the subprocess.")
    (reader-thread
     :initarg :reader-thread
     :accessor mcp-server-reader-thread
     :initform nil
     :documentation "Thread running the JSON-RPC response parser.")
+   (stderr-thread
+    :initarg :stderr-thread
+    :accessor mcp-server-stderr-thread
+    :initform nil
+    :documentation "Thread draining and logging subprocess stderr.")
    (pending-requests
     :initarg :pending-requests
     :accessor mcp-server-pending-requests

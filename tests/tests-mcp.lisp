@@ -1177,7 +1177,8 @@
   (let* ((temp-dir (uiop:default-temporary-directory))
          (root (merge-pathnames "mcp-stop-streams/" temp-dir))
          (input-path (merge-pathnames "input.txt" root))
-         (output-path (merge-pathnames "output.txt" root)))
+        (output-path (merge-pathnames "output.txt" root))
+        (error-path (merge-pathnames "error.txt" root)))
     (when (probe-file root)
       (uiop:delete-directory-tree root :validate t))
     (ensure-directories-exist root)
@@ -1185,23 +1186,53 @@
       (write-string "" stream))
     (with-open-file (stream output-path :direction :output :if-exists :supersede)
       (write-string "" stream))
+    (with-open-file (stream error-path :direction :output :if-exists :supersede)
+      (write-string "" stream))
     (let ((input-stream (open input-path :direction :io :if-exists :overwrite))
-          (output-stream (open output-path :direction :input)))
+         (output-stream (open output-path :direction :input))
+         (error-stream (open error-path :direction :input)))
       (unwind-protect
-           (let ((server (make-instance 'mcp-server
+          (let ((server (make-instance 'mcp-server
                                        :name "test-server"
                                        :input-stream input-stream
-                                       :output-stream output-stream)))
+                                       :output-stream output-stream
+                                       :error-stream error-stream)))
              (default-stop-mcp-server server)
              (fiveam:is-false (open-stream-p input-stream))
              (fiveam:is-false (open-stream-p output-stream))
+             (fiveam:is-false (open-stream-p error-stream))
              (fiveam:is-false (mcp-server-input-stream server))
-             (fiveam:is-false (mcp-server-output-stream server)))
+             (fiveam:is-false (mcp-server-output-stream server))
+             (fiveam:is-false (mcp-server-error-stream server)))
         (when (open-stream-p input-stream)
           (close input-stream))
         (when (open-stream-p output-stream)
           (close output-stream))
+        (when (open-stream-p error-stream)
+          (close error-stream))
         (uiop:delete-directory-tree root :validate t)))))
+
+(fiveam:test test-default-stop-mcp-server-clears-and-stops-tracked-threads
+  (let* ((reader-thread (sb-thread:make-thread (lambda () (sleep 60))
+                                              :name "test-mcp-reader"))
+        (stderr-thread (sb-thread:make-thread (lambda () (sleep 60))
+                                              :name "test-mcp-stderr"))
+        (server (make-instance 'mcp-server
+                               :name "test-server"
+                               :reader-thread reader-thread
+                               :stderr-thread stderr-thread)))
+    (unwind-protect
+        (progn
+          (default-stop-mcp-server server)
+          (sleep 0.1)
+          (fiveam:is-false (sb-thread:thread-alive-p reader-thread))
+          (fiveam:is-false (sb-thread:thread-alive-p stderr-thread))
+          (fiveam:is-false (mcp-server-reader-thread server))
+          (fiveam:is-false (mcp-server-stderr-thread server)))
+      (when (sb-thread:thread-alive-p reader-thread)
+        (sb-thread:terminate-thread reader-thread))
+      (when (sb-thread:thread-alive-p stderr-thread)
+        (sb-thread:terminate-thread stderr-thread)))))
 
 (fiveam:test test-execute-chatbot-tool-dynamic-minions
   (let* ((temp-dir (uiop:default-temporary-directory))
