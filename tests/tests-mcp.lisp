@@ -1260,9 +1260,86 @@
       (when (sb-thread:thread-alive-p worker)
         (sb-thread:terminate-thread worker)))))
 
+(fiveam:test test-stop-mcp-server-process-skips-force-when-graceful-stop-succeeds
+  (let ((original-alive-function (symbol-function 'mcp-server-process-alive-p))
+        (original-request-stop-function (symbol-function 'request-mcp-server-process-stop))
+        (original-wait-before-force-function
+          (symbol-function 'wait-before-force-stopping-mcp-server-process))
+        (original-wait-exit-function (symbol-function 'wait-for-mcp-server-process-exit))
+        (alive-p t)
+        (calls nil))
+    (unwind-protect
+         (progn
+          (setf (symbol-function 'mcp-server-process-alive-p)
+                (lambda (process)
+                  (declare (ignore process))
+                  alive-p))
+          (setf (symbol-function 'request-mcp-server-process-stop)
+                (lambda (process &key urgent-p)
+                  (declare (ignore process))
+                  (push (if urgent-p :force :graceful) calls)
+                  (unless urgent-p
+                    (setf alive-p nil))))
+          (setf (symbol-function 'wait-before-force-stopping-mcp-server-process)
+                (lambda ()
+                  (push :wait calls)))
+          (setf (symbol-function 'wait-for-mcp-server-process-exit)
+                (lambda (process)
+                  (declare (ignore process))
+                  (push :join calls)))
+          (stop-mcp-server-process :fake-process "test-server")
+          (fiveam:is (equal '(:graceful :wait :join)
+                            (reverse calls))))
+      (setf (symbol-function 'mcp-server-process-alive-p) original-alive-function)
+      (setf (symbol-function 'request-mcp-server-process-stop) original-request-stop-function)
+      (setf (symbol-function 'wait-before-force-stopping-mcp-server-process)
+           original-wait-before-force-function)
+      (setf (symbol-function 'wait-for-mcp-server-process-exit) original-wait-exit-function))))
+
+(fiveam:test test-stop-mcp-server-process-escalates-to-force-when-still-alive
+  (let ((original-alive-function (symbol-function 'mcp-server-process-alive-p))
+        (original-request-stop-function (symbol-function 'request-mcp-server-process-stop))
+        (original-wait-before-force-function
+          (symbol-function 'wait-before-force-stopping-mcp-server-process))
+        (original-force-stop-function (symbol-function 'force-stop-mcp-server-process))
+        (original-wait-exit-function (symbol-function 'wait-for-mcp-server-process-exit))
+        (alive-p t)
+        (calls nil))
+    (unwind-protect
+         (progn
+          (setf (symbol-function 'mcp-server-process-alive-p)
+                (lambda (process)
+                  (declare (ignore process))
+                  alive-p))
+          (setf (symbol-function 'request-mcp-server-process-stop)
+                (lambda (process &key urgent-p)
+                  (declare (ignore process urgent-p))
+                  (push :graceful calls)))
+          (setf (symbol-function 'wait-before-force-stopping-mcp-server-process)
+                (lambda ()
+                  (push :wait calls)))
+          (setf (symbol-function 'force-stop-mcp-server-process)
+                (lambda (process name)
+                  (declare (ignore process name))
+                  (push :force calls)
+                  (setf alive-p nil)))
+          (setf (symbol-function 'wait-for-mcp-server-process-exit)
+                (lambda (process)
+                  (declare (ignore process))
+                  (push :join calls)))
+          (stop-mcp-server-process :fake-process "test-server")
+          (fiveam:is (equal '(:graceful :wait :force :join)
+                            (reverse calls))))
+      (setf (symbol-function 'mcp-server-process-alive-p) original-alive-function)
+      (setf (symbol-function 'request-mcp-server-process-stop) original-request-stop-function)
+      (setf (symbol-function 'wait-before-force-stopping-mcp-server-process)
+           original-wait-before-force-function)
+      (setf (symbol-function 'force-stop-mcp-server-process) original-force-stop-function)
+      (setf (symbol-function 'wait-for-mcp-server-process-exit) original-wait-exit-function))))
+
 (fiveam:test test-mcp-reader-loop-aborts-pending-requests-on-eof
   (let* ((server (make-instance 'mcp-server
-                                :name "test-server"
+                               :name "test-server"
                                 :output-stream (make-string-input-stream "")))
          (mailbox (sb-concurrency:make-mailbox)))
     (mcp-register-request server 7 mailbox)

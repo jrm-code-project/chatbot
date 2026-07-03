@@ -230,31 +230,55 @@
   (and thread
        (sb-thread:thread-alive-p thread)))
 
+(defun force-stop-mcp-server-thread (thread name role)
+  "Forcefully terminates MCP THREAD for server NAME and ROLE."
+  (log-prefixed-message "MCP WARN"
+                       (format nil "Force-terminating ~A thread for server ~A."
+                               role
+                               name))
+  (sb-thread:terminate-thread thread))
+
 (defun stop-mcp-server-thread (thread name role)
   "Stops one MCP THREAD for server NAME with ROLE metadata."
   (when thread
     (when (wait-for-mcp-server-thread-shutdown thread)
-      (log-prefixed-message "MCP WARN"
-                           (format nil "Force-terminating ~A thread for server ~A."
-                                   role
-                                   name))
-      (sb-thread:terminate-thread thread))
+      (force-stop-mcp-server-thread thread name role))
     nil))
+
+(defun mcp-server-process-alive-p (process)
+  "Returns true when PROCESS is still alive."
+  (uiop:process-alive-p process))
+
+(defun request-mcp-server-process-stop (process &key urgent-p)
+  "Requests PROCESS termination, using URGENT-P for escalation."
+  (uiop:terminate-process process :urgent urgent-p))
+
+(defun wait-before-force-stopping-mcp-server-process ()
+  "Waits briefly for a graceful MCP process shutdown before escalation."
+  (sleep 0.1))
+
+(defun force-stop-mcp-server-process (process name)
+  "Forcefully terminates PROCESS for server NAME."
+  (log-prefixed-message "MCP WARN"
+                       (format nil "Force-terminating MCP server process for ~A."
+                               name))
+  (request-mcp-server-process-stop process :urgent-p t))
+
+(defun wait-for-mcp-server-process-exit (process)
+  "Waits for PROCESS to exit."
+  (uiop:wait-process process))
 
 (defun stop-mcp-server-process (process name)
   "Stops PROCESS for server NAME, attempting graceful termination before escalation."
   (when process
     (handler-case
         (progn
-          (when (uiop:process-alive-p process)
-           (uiop:terminate-process process :urgent nil)
-           (sleep 0.1)
-           (when (uiop:process-alive-p process)
-             (log-prefixed-message "MCP WARN"
-                                   (format nil "Force-terminating MCP server process for ~A."
-                                           name))
-             (uiop:terminate-process process :urgent t)))
-          (uiop:wait-process process))
+          (when (mcp-server-process-alive-p process)
+           (request-mcp-server-process-stop process :urgent-p nil)
+           (wait-before-force-stopping-mcp-server-process)
+           (when (mcp-server-process-alive-p process)
+             (force-stop-mcp-server-process process name)))
+          (wait-for-mcp-server-process-exit process))
       (error (e)
         (log-prefixed-message "MCP WARN"
                              (format nil "Failed to stop MCP server process for ~A cleanly: ~A"
@@ -262,30 +286,40 @@
                                      e))))
     nil))
 
+(defun stop-mcp-server-streams (server)
+  "Closes all tracked streams for SERVER."
+  (close-mcp-server-stream (mcp-server-input-stream server))
+  (close-mcp-server-stream (mcp-server-output-stream server))
+  (close-mcp-server-stream (mcp-server-error-stream server))
+  server)
+
+(defun stop-mcp-server-supervision (server)
+  "Stops tracked supervision threads for SERVER."
+  (let ((name (mcp-server-name server)))
+    (stop-mcp-server-thread (mcp-server-reader-thread server) name "reader")
+    (stop-mcp-server-thread (mcp-server-stderr-thread server) name "stderr"))
+  server)
+
+(defun clear-stopped-mcp-server-state (server)
+  "Clears process, stream, and thread state on stopped SERVER."
+  (setf (mcp-server-reader-thread server) nil
+        (mcp-server-stderr-thread server) nil
+        (mcp-server-process server) nil
+        (mcp-server-input-stream server) nil
+        (mcp-server-output-stream server) nil
+        (mcp-server-error-stream server) nil)
+  server)
+
 (defun default-stop-mcp-server (server)
   "Stops the MCP server process and reader thread cleanly."
   (log-prefixed-message "MCP INFO"
                        (format nil "Stopping server ~A" (mcp-server-name server)))
-  (let ((name (mcp-server-name server))
-        (reader-thread (mcp-server-reader-thread server))
-        (stderr-thread (mcp-server-stderr-thread server))
-        (proc (mcp-server-process server))
-        (input-stream (mcp-server-input-stream server))
-        (output-stream (mcp-server-output-stream server))
-        (error-stream (mcp-server-error-stream server)))
+  (let ((name (mcp-server-name server)))
     (abort-mcp-server-pending-requests server name)
-    (close-mcp-server-stream input-stream)
-    (close-mcp-server-stream output-stream)
-    (close-mcp-server-stream error-stream)
-    (stop-mcp-server-thread reader-thread name "reader")
-    (stop-mcp-server-thread stderr-thread name "stderr")
-    (stop-mcp-server-process proc name)
-    (setf (mcp-server-reader-thread server) nil
-          (mcp-server-stderr-thread server) nil
-          (mcp-server-process server) nil
-          (mcp-server-input-stream server) nil
-          (mcp-server-output-stream server) nil
-          (mcp-server-error-stream server) nil)))
+    (stop-mcp-server-streams server)
+    (stop-mcp-server-supervision server)
+    (stop-mcp-server-process (mcp-server-process server) name)
+    (clear-stopped-mcp-server-state server)))
 
 (defun stop-mcp-server (server)
   "Stops an MCP server, honoring the configured test seam when present."
