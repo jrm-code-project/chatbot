@@ -10,9 +10,61 @@
 (defparameter *persona-filesystem-allowlist-filename* "filesystem-allowlist.lisp"
   "Filename used to persist persona-approved filesystem directories.")
 
+(define-condition persona-directory-not-found (error)
+  ((requested :initarg :requested
+             :reader persona-directory-not-found-requested)
+   (display-name :initarg :display-name
+                :reader persona-directory-not-found-display-name)
+   (default-path :initarg :default-path
+                :reader persona-directory-not-found-default-path))
+  (:report (lambda (condition stream)
+            (format stream "Persona directory not found: ~A"
+                    (persona-directory-not-found-display-name condition)))))
+
 (defun persona-filesystem-allowlist-path (persona-dir)
   "Returns the persona filesystem allowlist pathname."
   (merge-pathnames *persona-filesystem-allowlist-filename* persona-dir))
+
+(defun default-persona-directory-path (persona-name-or-directory)
+  "Returns the default ~/.Personas directory pathname for PERSONA-NAME-OR-DIRECTORY."
+  (let* ((homedir (get-user-homedir-pathname))
+         (name-str (string persona-name-or-directory)))
+    (uiop:ensure-directory-pathname
+     (merge-pathnames (make-pathname :directory (list :relative ".Personas" name-str))
+                     homedir))))
+
+(defun missing-persona-display-name (persona-name-or-directory)
+  "Returns the display name used when PERSONA-NAME-OR-DIRECTORY cannot be resolved."
+  (if (pathnamep persona-name-or-directory)
+      persona-name-or-directory
+      (format nil "~~/.Personas/~A" (string persona-name-or-directory))))
+
+(defun signal-persona-directory-not-found (persona-name-or-directory)
+  "Signals a restartable missing-persona error for PERSONA-NAME-OR-DIRECTORY."
+  (let ((default-path (default-persona-directory-path persona-name-or-directory)))
+    (restart-case
+        (error 'persona-directory-not-found
+              :requested persona-name-or-directory
+              :display-name (missing-persona-display-name persona-name-or-directory)
+              :default-path default-path)
+      (create-persona-directory ()
+        :report (lambda (stream)
+                 (format stream "Create persona directory ~A and continue."
+                         (namestring default-path)))
+        (ensure-directories-exist default-path)
+        default-path)
+      (use-value (directory)
+        :report "Use a different persona directory and continue."
+        :interactive (lambda ()
+                      (format *query-io* "Directory to use instead: ")
+                      (finish-output *query-io*)
+                      (list (uiop:ensure-directory-pathname
+                             (pathname (read-line *query-io*)))))
+        (ensure-directories-exist directory)
+        (uiop:ensure-directory-pathname directory))
+      (skip-persona-restore ()
+        :report "Skip restoring this missing persona."
+        nil))))
 
 (defun resolve-persona-directory (persona-name-or-directory)
   "Returns the existing persona directory for PERSONA-NAME-OR-DIRECTORY."
@@ -20,19 +72,13 @@
            (uiop:directory-exists-p persona-name-or-directory))
       (and (stringp persona-name-or-directory)
            (uiop:directory-exists-p (pathname persona-name-or-directory)))
-      (let* ((homedir (get-user-homedir-pathname))
-             (name-str (string persona-name-or-directory)))
-        (or (uiop:directory-exists-p
-             (merge-pathnames (make-pathname :directory (list :relative ".Personas" name-str))
-                              homedir))
+      (let ((default-path (default-persona-directory-path persona-name-or-directory)))
+        (or (uiop:directory-exists-p default-path)
             (uiop:directory-exists-p
-             (merge-pathnames (make-pathname :directory (list :relative ".Personas"
-                                                              (string-downcase name-str)))
-                              homedir))
-            (error "Persona directory not found: ~A"
-                   (if (pathnamep persona-name-or-directory)
-                       persona-name-or-directory
-                       (format nil "~~/.Personas/~A" name-str)))))))
+            (merge-pathnames (make-pathname :directory (list :relative ".Personas"
+                                                             (string-downcase (string persona-name-or-directory))))
+                             (get-user-homedir-pathname)))
+            (signal-persona-directory-not-found persona-name-or-directory)))))
 
 (defun persona-compressed-memory-path (persona-dir)
   "Returns the compressed-memory.txt pathname for PERSONA-DIR."

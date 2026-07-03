@@ -27,6 +27,99 @@
            (fiveam:is (eq :gemini (chatbot-backend (conversation-chatbot conv))))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
+(fiveam:test test-resolve-persona-directory-can-create-missing-persona-via-restart
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-create-missing-persona/" temp-dir))
+        (expected-dir (merge-pathnames ".Personas/Splat/" mock-home)))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let ((resolved
+                  (handler-bind ((persona-directory-not-found
+                                   (lambda (condition)
+                                     (declare (ignore condition))
+                                     (invoke-restart 'create-persona-directory))))
+                    (resolve-persona-directory "Splat"))))
+            (fiveam:is (equal expected-dir resolved))
+            (fiveam:is (not (null (uiop:directory-exists-p expected-dir))))))
+      (when (uiop:directory-exists-p mock-home)
+       (uiop:delete-directory-tree mock-home :validate t)))))
+
+(fiveam:test test-resolve-persona-directory-can-use-alternate-directory-via-restart
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-alternate-persona/" temp-dir))
+        (alternate-dir (merge-pathnames "alternate-persona/" temp-dir)))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let ((resolved
+                  (handler-bind ((persona-directory-not-found
+                                   (lambda (condition)
+                                     (declare (ignore condition))
+                                     (invoke-restart 'use-value alternate-dir))))
+                    (resolve-persona-directory "Splat"))))
+            (fiveam:is (equal (uiop:ensure-directory-pathname alternate-dir) resolved))
+            (fiveam:is (not (null (uiop:directory-exists-p alternate-dir))))))
+      (when (uiop:directory-exists-p mock-home)
+       (uiop:delete-directory-tree mock-home :validate t))
+      (when (uiop:directory-exists-p alternate-dir)
+       (uiop:delete-directory-tree alternate-dir :validate t)))))
+
+(fiveam:test test-resolve-persona-directory-can-skip-restoring-missing-persona
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-skip-missing-persona/" temp-dir))
+        (expected-dir (merge-pathnames ".Personas/Splat/" mock-home)))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let ((resolved
+                  (handler-bind ((persona-directory-not-found
+                                   (lambda (condition)
+                                     (declare (ignore condition))
+                                     (invoke-restart 'skip-persona-restore))))
+                    (resolve-persona-directory "Splat"))))
+            (fiveam:is-false resolved)
+            (fiveam:is-false (uiop:directory-exists-p expected-dir))))
+      (when (uiop:directory-exists-p mock-home)
+       (uiop:delete-directory-tree mock-home :validate t)))))
+
+(fiveam:test test-new-chat-persona-can-recover-by-creating-missing-directory
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-create-persona-chat/" temp-dir))
+        (expected-dir (merge-pathnames ".Personas/Splat/" mock-home)))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let ((conversation
+                  (handler-bind ((persona-directory-not-found
+                                   (lambda (condition)
+                                     (declare (ignore condition))
+                                     (invoke-restart 'create-persona-directory))))
+                    (new-chat-persona "Splat"))))
+            (fiveam:is (equal expected-dir
+                              (resolve-persona-directory "Splat")))
+            (fiveam:is (null (conversation-messages conversation)))
+            (fiveam:is (eq :gemini
+                           (chatbot-backend (conversation-chatbot conversation))))))
+      (when (uiop:directory-exists-p mock-home)
+       (uiop:delete-directory-tree mock-home :validate t)))))
+
+(fiveam:test test-new-chat-persona-can-skip-restoring-missing-persona
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-skip-persona-chat/" temp-dir))
+        (expected-dir (merge-pathnames ".Personas/Splat/" mock-home)))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (let ((conversation
+                  (handler-bind ((persona-directory-not-found
+                                   (lambda (condition)
+                                     (declare (ignore condition))
+                                     (invoke-restart 'skip-persona-restore))))
+                    (new-chat-persona "Splat"))))
+            (fiveam:is-false (uiop:directory-exists-p expected-dir))
+            (fiveam:is (null (conversation-messages conversation)))
+            (fiveam:is-false (chatbot-persona-name (conversation-chatbot conversation)))
+            (fiveam:is (eq :gemini
+                           (chatbot-backend (conversation-chatbot conversation))))))
+      (when (uiop:directory-exists-p mock-home)
+       (uiop:delete-directory-tree mock-home :validate t)))))
+
 (fiveam:test test-persona-config-reader-supports-top-level-plist-forms
   (let* ((temp-dir (uiop:default-temporary-directory))
         (mock-home (merge-pathnames "mock-home-top-level-plist/" temp-dir))

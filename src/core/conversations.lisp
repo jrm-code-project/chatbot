@@ -136,65 +136,77 @@ configuration, instructions, or preloaded memory."
 The persona's configuration is read from ~/.Personas/<persona-name>/config.lisp
 and the system instructions are loaded from the persona's system-instruction file set.
 Use NEW-CHAT instead when no persona should be loaded."
-  (let* ((persona-dir (resolve-persona-directory persona-name))
-        (config-path (probe-file (merge-pathnames "config.lisp" persona-dir)))
-        (inst-path (persona-system-instruction-path persona-dir)))
-    (let* ((config (when config-path
-                     (read-persona-config config-path)))
-           (system-instruction (when inst-path
-                                 (read-persona-system-instruction inst-path)))
-           (model (safe-getf config :model))
-           (temperature (safe-getf config :temperature))
-           (top-p (safe-getf config :top-p))
-           (googleapi (safe-getf config :googleapi))
-           (google-search-p (safe-getf config :google-search-p))
-           (gemini-fallback-to-google-p (safe-getf config :gemini-fallback-to-google-p))
-           (config-web-tools-p (safe-getf config :enable-web-tools))
-           (code-execution-p (safe-getf config :code-execution-p))
-           (include-timestamp-p (safe-getf config :include-timestamp))
-           (include-model-p (safe-getf config :include-model))
-           (enable-eval-p (safe-getf config :enable-eval))
-           (config-enable-git-tools-p (safe-getf config :enable-git-tools)) (config-filesystem-tools-p (safe-getf config :enable-filesystem-tools))
-           (backend (persona-config-backend config))
-           (persona-runtime-context (persona-config-runtime-context config runtime-context)))
-      (declare (ignore googleapi))
-      (let ((conversation
-              (preload-persona-conversation-diary
-               (preload-persona-conversation-memory
-                (new-chat :backend backend
-                          :model model
-                          :system-instruction system-instruction
-                          :system-instruction-path inst-path
-                          :system-instruction-storage-kind (persona-system-instruction-storage-kind inst-path)
-                          :temperature temperature
-                          :top-p top-p
-                          :google-search-p google-search-p
-                          :gemini-fallback-to-google-p gemini-fallback-to-google-p
-                          :web-tools-p (if web-tools-supplied-p web-tools-p config-web-tools-p)
-                          :code-execution-p code-execution-p
-                          :include-timestamp-p include-timestamp-p
-                          :include-model-p include-model-p
-                          :enable-eval-p enable-eval-p :enable-git-tools-p enable-git-tools-p
-                          :enable-git-tools-p (if enable-git-tools-supplied-p enable-git-tools-p config-enable-git-tools-p) :filesystem-tools-p (if filesystem-tools-supplied-p filesystem-tools-p config-filesystem-tools-p)
-                          :filesystem-root-directory (or scoped-directory persona-dir)
-                          :filesystem-allowed-directories (persona-filesystem-allowlist-directories persona-dir)
-                          :filesystem-allowlist-path (persona-filesystem-allowlist-path persona-dir)
-                          :runtime-context persona-runtime-context
-                          :subordinates (loop for sub-persona in (safe-getf config :subordinates)
-                                              collect (new-chat-persona sub-persona :runtime-context runtime-context))
-                          :persona-name persona-name
-                          :parent-name parent-name
-                          :depth depth
-                          :token-budget token-budget
-                          :spent-tokens spent-tokens
-                          :scoped-directory (or scoped-directory persona-dir)
-                          :filesystem-read-only-p (if filesystem-read-only-supplied-p filesystem-read-only-p nil)
-                          :planner-p (if planner-supplied-p planner-p nil))
-                persona-dir)
-               persona-dir)))
-        (setf conversation (attach-persona-memory-mcp-server conversation persona-dir))
-        (start-persona-memory-compression-thread conversation persona-dir)
-        conversation))))
+  (let ((persona-dir (resolve-persona-directory persona-name)))
+    (if (null persona-dir)
+        (progn
+         (log-message :warn "Skipping restore for missing persona"
+                      :context `(("persona" . ,(princ-to-string persona-name))))
+         (new-chat :runtime-context runtime-context
+                   :parent-name parent-name
+                   :depth depth
+                   :token-budget token-budget
+                   :spent-tokens spent-tokens
+                   :scoped-directory scoped-directory
+                   :filesystem-read-only-p (if filesystem-read-only-supplied-p filesystem-read-only-p nil)
+                   :planner-p (if planner-supplied-p planner-p nil)))
+        (let* ((config-path (probe-file (merge-pathnames "config.lisp" persona-dir)))
+              (inst-path (persona-system-instruction-path persona-dir)))
+         (let* ((config (when config-path
+                          (read-persona-config config-path)))
+                (system-instruction (when inst-path
+                                      (read-persona-system-instruction inst-path)))
+                (model (safe-getf config :model))
+                (temperature (safe-getf config :temperature))
+                (top-p (safe-getf config :top-p))
+                (googleapi (safe-getf config :googleapi))
+                (google-search-p (safe-getf config :google-search-p))
+                (gemini-fallback-to-google-p (safe-getf config :gemini-fallback-to-google-p))
+                (config-web-tools-p (safe-getf config :enable-web-tools))
+                (code-execution-p (safe-getf config :code-execution-p))
+                (include-timestamp-p (safe-getf config :include-timestamp))
+                (include-model-p (safe-getf config :include-model))
+                (enable-eval-p (safe-getf config :enable-eval))
+                (config-enable-git-tools-p (safe-getf config :enable-git-tools)) (config-filesystem-tools-p (safe-getf config :enable-filesystem-tools))
+                (backend (persona-config-backend config))
+                (persona-runtime-context (persona-config-runtime-context config runtime-context)))
+           (declare (ignore googleapi))
+           (let ((conversation
+                   (preload-persona-conversation-diary
+                    (preload-persona-conversation-memory
+                     (new-chat :backend backend
+                               :model model
+                               :system-instruction system-instruction
+                               :system-instruction-path inst-path
+                               :system-instruction-storage-kind (persona-system-instruction-storage-kind inst-path)
+                               :temperature temperature
+                               :top-p top-p
+                               :google-search-p google-search-p
+                               :gemini-fallback-to-google-p gemini-fallback-to-google-p
+                               :web-tools-p (if web-tools-supplied-p web-tools-p config-web-tools-p)
+                               :code-execution-p code-execution-p
+                               :include-timestamp-p include-timestamp-p
+                               :include-model-p include-model-p
+                               :enable-eval-p enable-eval-p :enable-git-tools-p enable-git-tools-p
+                               :enable-git-tools-p (if enable-git-tools-supplied-p enable-git-tools-p config-enable-git-tools-p) :filesystem-tools-p (if filesystem-tools-supplied-p filesystem-tools-p config-filesystem-tools-p)
+                               :filesystem-root-directory (or scoped-directory persona-dir)
+                               :filesystem-allowed-directories (persona-filesystem-allowlist-directories persona-dir)
+                               :filesystem-allowlist-path (persona-filesystem-allowlist-path persona-dir)
+                               :runtime-context persona-runtime-context
+                               :subordinates (loop for sub-persona in (safe-getf config :subordinates)
+                                                   collect (new-chat-persona sub-persona :runtime-context runtime-context))
+                               :persona-name persona-name
+                               :parent-name parent-name
+                               :depth depth
+                               :token-budget token-budget
+                               :spent-tokens spent-tokens
+                               :scoped-directory (or scoped-directory persona-dir)
+                               :filesystem-read-only-p (if filesystem-read-only-supplied-p filesystem-read-only-p nil)
+                               :planner-p (if planner-supplied-p planner-p nil))
+                     persona-dir)
+                    persona-dir)))
+             (setf conversation (attach-persona-memory-mcp-server conversation persona-dir))
+             (start-persona-memory-compression-thread conversation persona-dir)
+             conversation))))))
 
 (defvar *minions-data-directory* nil
   "Seam to override the dynamic minions storage directory in unit tests.")
