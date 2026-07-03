@@ -497,17 +497,25 @@ Use NEW-CHAT instead when no persona should be loaded."
   (let* ((bot (conversation-chatbot conversation))
          (system-instruction-tokens
            (estimate-optional-text-token-count
-            (system-instruction-text (chatbot-system-instruction bot))))
-         (persona-preload-tokens
-           (estimated-history-token-count
-            (append (or (persona-memory-messages (conversation-persona-memory conversation)) nil)
-                    (or (persona-diary-messages (conversation-persona-diary-entries conversation)) nil)))))
-    (+ system-instruction-tokens persona-preload-tokens)))
+            (system-instruction-text (chatbot-system-instruction bot)))))
+    system-instruction-tokens))
 
 (defun estimated-conversation-context-token-count (conversation &optional (history (conversation-messages conversation)))
   "Returns the estimated total prompt tokens for CONVERSATION using HISTORY."
   (+ (estimated-fixed-conversation-context-token-count conversation)
      (estimated-history-token-count history)))
+
+(defun effective-history-compression-max-tokens (conversation)
+  "Returns the estimated history-token budget available before compression should trigger."
+  (max 0
+       (- (effective-context-pruning-max-tokens)
+          (estimated-fixed-conversation-context-token-count conversation))))
+
+(defun effective-history-compression-target-tokens (conversation)
+  "Returns the estimated history-token budget to aim for after compression."
+  (max 0
+       (- (effective-context-pruning-target-tokens)
+          (estimated-fixed-conversation-context-token-count conversation))))
 
 (defun effective-context-pruning-max-tokens ()
   "Returns the effective estimated max-token ceiling, including the compatibility character cap."
@@ -566,11 +574,15 @@ Use NEW-CHAT instead when no persona should be loaded."
   "Returns CONVERSATION history compressed when its estimated prompt context exceeds the configured limit."
   (let* ((bot (conversation-chatbot conversation))
          (fixed-context-tokens (estimated-fixed-conversation-context-token-count conversation))
+         (history-tokens (estimated-history-token-count history))
          (estimated-total-tokens (estimated-conversation-context-token-count conversation history))
          (max-tokens (effective-context-pruning-max-tokens))
          (target-tokens (effective-context-pruning-target-tokens))
-         (history-target-tokens (max 0 (- target-tokens fixed-context-tokens))))
-    (if (<= estimated-total-tokens max-tokens)
+         (history-max-tokens (effective-history-compression-max-tokens conversation))
+         (history-target-tokens (effective-history-compression-target-tokens conversation)))
+    (if (or (<= estimated-total-tokens max-tokens)
+            (<= history-tokens history-max-tokens)
+            (<= history-max-tokens 0))
         history
         (labels ((compress-with-raw-target (raw-target-tokens)
                   (let* ((raw-messages (select-recent-messages-for-pruning history
@@ -612,7 +624,9 @@ Use NEW-CHAT instead when no persona should be loaded."
            (when digest
              (log-message :info "Compressed conversation history context after completed turn"
                           :context `(("estimated-total-tokens" . ,(princ-to-string estimated-total-tokens))
+                                     ("history-tokens" . ,(princ-to-string history-tokens))
                                      ("fixed-context-tokens" . ,(princ-to-string fixed-context-tokens))
+                                     ("history-max-tokens" . ,(princ-to-string history-max-tokens))
                                      ("history-target-tokens" . ,(princ-to-string history-target-tokens))
                                      ("effective-max-tokens" . ,(princ-to-string max-tokens))
                                      ("effective-target-tokens" . ,(princ-to-string target-tokens))
