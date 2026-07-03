@@ -139,13 +139,44 @@
                   (cl-ppcre:split "\\r?\\n" raw-text))
           :test #'string=))
 
+(defun persona-memory-empty-record-p (record)
+  "Returns true when RECORD is empty and can be ignored."
+  (or (null record)
+      (and (listp record)
+           (null record))
+      (and (hash-table-p record)
+           (zerop (hash-table-count record)))))
+
+(defun persona-memory-record-type-name (record)
+  "Returns RECORD's explicit or inferred type name."
+  (let ((raw-type (or (mcp-val :type record)
+                      (mcp-val "type" record))))
+    (cond
+      ((and raw-type
+            (string/= (princ-to-string raw-type) ""))
+       (string-downcase (princ-to-string raw-type)))
+      ((or (mcp-assoc :name record)
+           (mcp-assoc "name" record)
+           (mcp-assoc :entity-type record)
+           (mcp-assoc "entityType" record)
+           (mcp-assoc :observations record)
+           (mcp-assoc "observations" record))
+       "entity")
+      ((or (mcp-assoc :from record)
+           (mcp-assoc "from" record)
+           (mcp-assoc :to record)
+           (mcp-assoc "to" record)
+           (mcp-assoc :relation-type record)
+           (mcp-assoc "relationType" record))
+       "relation")
+      (t nil))))
+
 (defun normalize-persona-memory-jsonl-record (record memory-json-path)
   "Returns RECORD normalized to a typed persona memory entry."
-  (let ((type (string-downcase
-               (or (mcp-val :type record)
-                   (mcp-val "type" record)
-                   ""))))
+  (let ((type (persona-memory-record-type-name record)))
     (cond
+      ((persona-memory-empty-record-p record)
+       nil)
       ((string= type "entity")
        (cons :entity
              `((:name . ,(mcp-val :name record))
@@ -166,11 +197,23 @@
 
 (defun parse-persona-memory-jsonl-records (raw-text memory-json-path)
   "Returns RAW-TEXT parsed into typed persona memory JSONL records."
-  (mapcar (lambda (line)
-            (normalize-persona-memory-jsonl-record
-             (parse-json-or-error line :context "persona memory JSONL")
-             memory-json-path))
-          (persona-memory-jsonl-lines raw-text)))
+  (mapcan (lambda (line)
+           (let ((record (parse-json-or-error line :context "persona memory JSONL")))
+             (cond
+               ((persona-memory-graph-json-p record)
+                (append
+                 (mapcar (lambda (entity)
+                           (normalize-persona-memory-jsonl-record entity memory-json-path))
+                         (json-array-elements (mcp-val :entities record)))
+                 (mapcar (lambda (relation)
+                           (normalize-persona-memory-jsonl-record relation memory-json-path))
+                         (json-array-elements (mcp-val :relations record)))))
+               (t
+                (let ((normalized (normalize-persona-memory-jsonl-record record memory-json-path)))
+                  (if normalized
+                      (list normalized)
+                      nil))))))
+         (persona-memory-jsonl-lines raw-text)))
 
 (defun persona-memory-json-records (memory-json-path)
   "Returns MEMORY-JSON-PATH as normalized entity/relation records."

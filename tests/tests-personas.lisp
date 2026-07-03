@@ -1008,6 +1008,26 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                              (uiop:read-file-string compressed-path))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
+(fiveam:test test-save-compressed-persona-memory-from-jsonl-with-inferred-and-empty-records
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-compressed-memory-jsonl-inferred/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "persona-compressed-memory-jsonl-inferred/" personas-dir))
+         (memory-path (merge-pathnames "memory.json" test-persona-dir))
+         (compressed-path (merge-pathnames "compressed-memory.txt" test-persona-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s memory-path :direction :output :if-exists :supersede)
+      (write-line "{}" s)
+      (write-line "{\"name\":\"Joe\",\"entityType\":\"person\",\"observations\":[\"likes Lisp\"]}" s)
+      (write-line "{\"from\":\"Joe\",\"to\":\"Common Lisp\",\"relationType\":\"studies\"}" s))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+           (fiveam:is (equal compressed-path
+                             (save-compressed-persona-memory "persona-compressed-memory-jsonl-inferred")))
+           (fiveam:is (string= (format nil "Entities:~%- Joe (person): likes Lisp~%~%Relations:~%- Joe -studies-> Common Lisp")
+                               (uiop:read-file-string compressed-path))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
 (fiveam:test test-new-chat-persona-starts-background-memory-compression
   (let* ((temp-dir (uiop:default-temporary-directory))
          (mock-home (merge-pathnames "mock-home-persona-memory-compression-thread/" temp-dir))
