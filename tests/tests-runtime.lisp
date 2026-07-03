@@ -421,6 +421,41 @@
       (setf *openai-api-key* original-openai-api-key)
       (setf *getenv-function* original-getenv-function))))
 
+(fiveam:test test-no-arg-function-seam-helpers-prefer-active-runtime-context
+  (let* ((context-function (lambda (name)
+                            (if (string= name "OPENAI_API_KEY")
+                                "context-env-key"
+                                nil)))
+        (context (make-runtime-context :getenv-function context-function))
+        (legacy-function (lambda (name)
+                           (if (string= name "OPENAI_API_KEY")
+                               "legacy-env-key"
+                               nil)))
+        (original-openai-api-key *openai-api-key*)
+        (original-getenv-function *getenv-function*)
+        (legacy-result nil))
+    (unwind-protect
+       (let ((*openai-api-key* nil)
+             (*getenv-function* legacy-function))
+         (call-with-runtime-context
+          context
+          (lambda ()
+            (fiveam:is (eq context-function (current-getenv-function)))
+            (setf legacy-result (funcall *getenv-function* "OPENAI_API_KEY"))
+            (fiveam:is (string= "context-env-key" (openai-api-key)))
+            (setf (current-getenv-function)
+                  (lambda (name)
+                    (if (string= name "OPENAI_API_KEY")
+                        "updated-context-env-key"
+                        nil)))
+            (fiveam:is (string= "updated-context-env-key" (openai-api-key))))))
+      (setf *openai-api-key* original-openai-api-key)
+      (setf *getenv-function* original-getenv-function))
+    (fiveam:is (string= "updated-context-env-key"
+                       (funcall (runtime-context-getenv-function context)
+                                "OPENAI_API_KEY")))
+    (fiveam:is (string= "legacy-env-key" legacy-result))))
+
 (fiveam:test test-explicit-runtime-context-filesystem-approval-does-not-rely-on-legacy-mirroring
   (let* ((context (make-runtime-context :filesystem-access-approval-function
                                        (lambda (&rest ignored)
@@ -434,6 +469,35 @@
            (fiveam:is (eq :context-approval
                          (funcall (current-filesystem-access-approval-function context)))))
       (setf *filesystem-access-approval-function* original-approval-function))))
+
+(fiveam:test test-no-arg-approval-helper-prefers-active-runtime-context
+  (let* ((context (make-runtime-context :filesystem-access-approval-function
+                                       (lambda (&rest ignored)
+                                         (declare (ignore ignored))
+                                         :context-approval)))
+        (legacy-approval-function (lambda (&rest ignored)
+                                    (declare (ignore ignored))
+                                    :legacy-approval))
+        (original-approval-function *filesystem-access-approval-function*)
+        (legacy-result nil))
+    (unwind-protect
+       (let ((*filesystem-access-approval-function* legacy-approval-function))
+         (call-with-runtime-context
+          context
+          (lambda ()
+            (setf legacy-result (funcall *filesystem-access-approval-function*))
+            (fiveam:is (eq :context-approval
+                           (funcall (current-filesystem-access-approval-function))))
+            (setf (current-filesystem-access-approval-function)
+                  (lambda (&rest ignored)
+                    (declare (ignore ignored))
+                    :updated-context-approval))
+            (fiveam:is (eq :updated-context-approval
+                           (funcall (current-filesystem-access-approval-function)))))))
+      (setf *filesystem-access-approval-function* original-approval-function))
+    (fiveam:is (eq :updated-context-approval
+                  (funcall (runtime-context-filesystem-access-approval-function context))))
+    (fiveam:is (eq :legacy-approval legacy-result))))
 
 (fiveam:test test-default-runtime-context-filesystem-approval-keeps-active-legacy-override
   (let* ((default-context *default-runtime-context*)
@@ -460,6 +524,34 @@
       (setf *filesystem-access-approval-function* original-approval-function)
       (setf (runtime-context-filesystem-access-approval-function default-context)
            original-default-approval))))
+
+(fiveam:test test-default-runtime-context-no-arg-function-seam-keeps-legacy-override
+  (let* ((default-context *default-runtime-context*)
+         (original-getenv-function *getenv-function*)
+         (original-default-getenv (runtime-context-getenv-function default-context)))
+    (unwind-protect
+        (progn
+          (setf (runtime-context-getenv-function default-context)
+               (lambda (name)
+                 (if (string= name "OPENAI_API_KEY")
+                     "context-env-key"
+                     nil)))
+          (fiveam:is (string= "context-env-key"
+                             (funcall (current-getenv-function default-context)
+                                      "OPENAI_API_KEY")))
+          (let ((*getenv-function* (lambda (name)
+                                    (if (string= name "OPENAI_API_KEY")
+                                        "legacy-env-key"
+                                        nil))))
+           (call-with-runtime-context
+            default-context
+            (lambda ()
+              (fiveam:is (string= "legacy-env-key"
+                                  (funcall (current-getenv-function)
+                                           "OPENAI_API_KEY")))))))
+      (setf *getenv-function* original-getenv-function)
+      (setf (runtime-context-getenv-function default-context)
+           original-default-getenv))))
 
 (fiveam:test test-explicit-runtime-context-startup-chatbot-does-not-rely-on-legacy-mirroring
   (let* ((default-context *default-runtime-context*)

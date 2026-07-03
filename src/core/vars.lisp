@@ -493,20 +493,33 @@ compatibility-only ambient special variables."
 
 (defun runtime-context-function-seam-value (context accessor legacy-symbol)
   "Returns the function seam value for ACCESSOR and LEGACY-SYMBOL."
-  (if context
-      (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
-        (if resolved-context
-            (runtime-context-accessor-value resolved-context accessor)
-            (legacy-global-value legacy-symbol)))
-      (legacy-global-value legacy-symbol)))
+  (let ((resolved-context (and context
+                              (resolve-runtime-context context :sync-from-globals-p t))))
+    (cond
+      ((and (null context)
+            *active-runtime-context*
+            (not (default-runtime-context-p *active-runtime-context*)))
+       (runtime-context-accessor-value *active-runtime-context* accessor))
+      (resolved-context
+       (runtime-context-accessor-value resolved-context accessor))
+      (t
+       (legacy-global-value legacy-symbol)))))
 
 (defun set-runtime-context-function-seam-value (value context accessor legacy-symbol)
   "Stores VALUE through the function seam bridge for ACCESSOR and LEGACY-SYMBOL."
   (let ((resolved-context (and context
                               (resolve-runtime-context context :sync-from-globals-p t))))
-    (if resolved-context
-        (set-runtime-context-accessor-value resolved-context accessor value)
-        (setf (symbol-value legacy-symbol) value)))
+    (cond
+      ((and (null context)
+            *active-runtime-context*
+            (not (default-runtime-context-p *active-runtime-context*)))
+       (set-runtime-context-accessor-value *active-runtime-context* accessor value))
+      (resolved-context
+       (set-runtime-context-accessor-value resolved-context accessor value))
+      (t
+       (setf (symbol-value legacy-symbol) value)
+       (when (default-runtime-context-p *default-runtime-context*)
+         (set-runtime-context-accessor-value *default-runtime-context* accessor value)))))
   value)
 
 (defmacro define-runtime-context-function-seam-helper (name accessor legacy-symbol getter-doc setter-doc)
@@ -525,15 +538,20 @@ compatibility-only ambient special variables."
 
 (defun runtime-context-approval-function-value (context accessor legacy-symbol)
   "Returns the approval function seam value for ACCESSOR and LEGACY-SYMBOL."
-  (if context
-      (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
-        (if resolved-context
-            (if (and (active-runtime-context-p resolved-context)
-                     (default-runtime-context-p resolved-context))
-                (legacy-global-value legacy-symbol)
-                (runtime-context-accessor-value resolved-context accessor))
-            (legacy-global-value legacy-symbol)))
-      (legacy-global-value legacy-symbol)))
+  (let ((resolved-context (and context
+                              (resolve-runtime-context context :sync-from-globals-p t))))
+    (cond
+      ((and (null context)
+            *active-runtime-context*
+            (not (default-runtime-context-p *active-runtime-context*)))
+       (runtime-context-accessor-value *active-runtime-context* accessor))
+      (resolved-context
+       (if (and (active-runtime-context-p resolved-context)
+                (default-runtime-context-p resolved-context))
+           (legacy-global-value legacy-symbol)
+           (runtime-context-accessor-value resolved-context accessor)))
+      (t
+       (legacy-global-value legacy-symbol)))))
 
 (defun set-runtime-context-approval-function-value (value context accessor legacy-symbol)
   "Stores approval VALUE through the runtime-context bridge.
@@ -541,13 +559,21 @@ Default-context active execution still mirrors the legacy special binding for
 compatibility with approval overrides."
   (let ((resolved-context (and context
                               (resolve-runtime-context context :sync-from-globals-p t))))
-    (if resolved-context
-        (progn
-          (set-runtime-context-accessor-value resolved-context accessor value)
-          (when (and (active-runtime-context-p resolved-context)
-                     (default-runtime-context-p resolved-context))
-            (setf (symbol-value legacy-symbol) value)))
-        (setf (symbol-value legacy-symbol) value)))
+    (cond
+      ((and (null context)
+            *active-runtime-context*
+            (not (default-runtime-context-p *active-runtime-context*)))
+       (set-runtime-context-accessor-value *active-runtime-context* accessor value))
+      (resolved-context
+       (progn
+         (set-runtime-context-accessor-value resolved-context accessor value)
+         (when (and (active-runtime-context-p resolved-context)
+                    (default-runtime-context-p resolved-context))
+           (setf (symbol-value legacy-symbol) value))))
+      (t
+       (setf (symbol-value legacy-symbol) value)
+       (when (default-runtime-context-p *default-runtime-context*)
+         (set-runtime-context-accessor-value *default-runtime-context* accessor value)))))
   value)
 
 (defmacro define-runtime-context-approval-function-helper (name accessor legacy-symbol getter-doc setter-doc)
@@ -775,52 +801,37 @@ as a compatibility alias."
 
 (defun call-with-runtime-context (context thunk)
   "Calls THUNK with the resolved runtime context active.
-Only *DEFAULT-CONVERSATION* still requires legacy special rebinding; all other
-runtime settings are read from the runtime context directly."
+Only *DEFAULT-CONVERSATION* still requires legacy special rebinding. Function
+seams now resolve through the active runtime context directly, with default-
+context approval compatibility synchronized after the call."
   (let* ((resolved-context (resolve-runtime-context context :sync-from-globals-p t))
          (default-context-p (default-runtime-context-p resolved-context)))
-    (if (null resolved-context)
-        (funcall thunk)
-        (if (active-runtime-context-p resolved-context)
-            (funcall thunk)
-            (let (result)
-              (setf result
-                    (let ((*active-runtime-context* resolved-context))
-                     (let ((*getenv-function* (if default-context-p
-                                                  *getenv-function*
-                                                  (runtime-context-getenv-function resolved-context)))
-                           (*http-post-function* (if default-context-p
-                                                     *http-post-function*
-                                                     (runtime-context-http-post-function resolved-context)))
-                           (*http-get-function* (if default-context-p
-                                                    *http-get-function*
-                                                    (runtime-context-http-get-function resolved-context)))
-                           (*gemini-api-key-function* (if default-context-p
-                                                          *gemini-api-key-function*
-                                                          (runtime-context-gemini-api-key-function resolved-context)))
-                           (*filesystem-access-approval-function* (if default-context-p
-                                                                      *filesystem-access-approval-function*
-                                                                      (runtime-context-filesystem-access-approval-function resolved-context)))
-                           (*eval-approval-function* (if default-context-p
-                                                         *eval-approval-function*
-                                                         (runtime-context-eval-approval-function resolved-context))))
-                       (let ((*default-conversation*
-                               (runtime-context-default-conversation resolved-context)))
-                         (unwind-protect
-                              (funcall thunk)
-                           (setf (runtime-context-default-conversation resolved-context)
-                                 *default-conversation*)
-                           (setf (runtime-context-getenv-function resolved-context) *getenv-function*)
-                           (setf (runtime-context-http-post-function resolved-context) *http-post-function*)
-                           (setf (runtime-context-http-get-function resolved-context) *http-get-function*)
-                           (setf (runtime-context-gemini-api-key-function resolved-context) *gemini-api-key-function*)
-                           (setf (runtime-context-filesystem-access-approval-function resolved-context)
-                                 *filesystem-access-approval-function*)
-                           (setf (runtime-context-eval-approval-function resolved-context)
-                                 *eval-approval-function*))))))
-              (when default-context-p
-                (maybe-sync-legacy-globals-from-default-runtime-context resolved-context))
-              result)))))
+    (cond
+      ((null resolved-context)
+       (funcall thunk))
+      ((active-runtime-context-p resolved-context)
+       (funcall thunk))
+      (t
+       (let ((result
+               (let ((*active-runtime-context* resolved-context)
+                     (*default-conversation*
+                      (runtime-context-default-conversation resolved-context)))
+                 (unwind-protect
+                      (funcall thunk)
+                   (setf (runtime-context-default-conversation resolved-context)
+                         *default-conversation*)
+                   (when default-context-p
+                     (setf (runtime-context-getenv-function resolved-context) *getenv-function*)
+                     (setf (runtime-context-http-post-function resolved-context) *http-post-function*)
+                     (setf (runtime-context-http-get-function resolved-context) *http-get-function*)
+                     (setf (runtime-context-gemini-api-key-function resolved-context) *gemini-api-key-function*)
+                     (setf (runtime-context-filesystem-access-approval-function resolved-context)
+                           *filesystem-access-approval-function*)
+                     (setf (runtime-context-eval-approval-function resolved-context)
+                           *eval-approval-function*))))))
+         (when default-context-p
+           (maybe-sync-legacy-globals-from-default-runtime-context resolved-context))
+         result)))))
 
 (setf *default-runtime-context* (make-runtime-context))
 
