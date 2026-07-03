@@ -253,6 +253,8 @@ Use NEW-CHAT instead when no persona should be loaded."
                                             ((stringp inst) inst)
                                             ((vectorp inst) (coerce inst 'list))
                                             (t "")))
+                    :adaptive-context-pruning-max-tokens
+                    (conversation-adaptive-context-pruning-max-tokens conversation)
                     :interaction-id (or (conversation-interaction-id conversation) "")
                     :messages (conversation-messages conversation))))
         (ensure-directories-exist file-path)
@@ -353,6 +355,8 @@ Use NEW-CHAT instead when no persona should be loaded."
          :system-instruction
          (normalize-restored-system-instruction
           (get-string-plist-value state "systemInstruction"))
+         :adaptive-context-pruning-max-tokens
+         (get-string-plist-value state "adaptiveContextPruningMaxTokens")
          :interaction-id (get-string-plist-value state "interactionId")
          :history (restored-minion-history (get-string-plist-value state "messages"))
          :runtime-context (chatbot-runtime-context root-bot))))
@@ -376,6 +380,8 @@ Use NEW-CHAT instead when no persona should be loaded."
       (setf (chatbot-persona-name sub-bot) name))
     (when (and interaction-id (string/= interaction-id ""))
       (setf (conversation-interaction-id sub-conv) interaction-id))
+    (setf (conversation-adaptive-context-pruning-max-tokens sub-conv)
+          (getf restoration :adaptive-context-pruning-max-tokens))
     (setf (conversation-messages sub-conv) (getf restoration :history))
     sub-conv))
 
@@ -505,20 +511,8 @@ Use NEW-CHAT instead when no persona should be loaded."
   (+ (estimated-fixed-conversation-context-token-count conversation)
      (estimated-history-token-count history)))
 
-(defun effective-history-compression-max-tokens (conversation)
-  "Returns the estimated history-token budget available before compression should trigger."
-  (max 0
-       (- (effective-context-pruning-max-tokens)
-          (estimated-fixed-conversation-context-token-count conversation))))
-
-(defun effective-history-compression-target-tokens (conversation)
-  "Returns the estimated history-token budget to aim for after compression."
-  (max 0
-       (- (effective-context-pruning-target-tokens)
-          (estimated-fixed-conversation-context-token-count conversation))))
-
-(defun effective-context-pruning-max-tokens ()
-  "Returns the effective estimated max-token ceiling, including the compatibility character cap."
+(defun configured-context-pruning-max-tokens ()
+  "Returns the configured estimated max-token ceiling before per-conversation adaptation."
   (let ((max-tokens *context-pruning-estimated-max-tokens*)
         (char-threshold *context-pruning-threshold-characters*))
     (if (and char-threshold (> char-threshold 0))
@@ -526,9 +520,33 @@ Use NEW-CHAT instead when no persona should be loaded."
              (estimate-text-token-count (make-string char-threshold :initial-element #\X)))
         max-tokens)))
 
-(defun effective-context-pruning-target-tokens ()
+(defun update-adaptive-context-pruning-max-tokens (conversation history)
+  "Updates CONVERSATION to trigger the next compression near twice HISTORY's current total estimated size."
+  (let ((compressed-total-tokens (estimated-conversation-context-token-count conversation history)))
+    (setf (conversation-adaptive-context-pruning-max-tokens conversation)
+          (max 1 (* 2 compressed-total-tokens)))))
+
+(defun effective-history-compression-max-tokens (conversation)
+  "Returns the estimated history-token budget available before compression should trigger."
+  (max 0
+       (- (effective-context-pruning-max-tokens conversation)
+          (estimated-fixed-conversation-context-token-count conversation))))
+
+(defun effective-history-compression-target-tokens (conversation)
+  "Returns the estimated history-token budget to aim for after compression."
+  (max 0
+       (- (effective-context-pruning-target-tokens conversation)
+          (estimated-fixed-conversation-context-token-count conversation))))
+
+(defun effective-context-pruning-max-tokens (&optional conversation)
+  "Returns the effective estimated max-token ceiling, including per-conversation adaptation."
+  (or (and conversation
+           (conversation-adaptive-context-pruning-max-tokens conversation))
+      (configured-context-pruning-max-tokens)))
+
+(defun effective-context-pruning-target-tokens (&optional conversation)
   "Returns the effective estimated post-compression target token count."
-  (let* ((max-tokens (effective-context-pruning-max-tokens))
+  (let* ((max-tokens (effective-context-pruning-max-tokens conversation))
          (configured-target *context-pruning-estimated-target-tokens*))
     (min configured-target
          (max 1 (floor (* max-tokens 0.9))))))
@@ -576,8 +594,8 @@ Use NEW-CHAT instead when no persona should be loaded."
          (fixed-context-tokens (estimated-fixed-conversation-context-token-count conversation))
          (history-tokens (estimated-history-token-count history))
          (estimated-total-tokens (estimated-conversation-context-token-count conversation history))
-         (max-tokens (effective-context-pruning-max-tokens))
-         (target-tokens (effective-context-pruning-target-tokens))
+         (max-tokens (effective-context-pruning-max-tokens conversation))
+         (target-tokens (effective-context-pruning-target-tokens conversation))
          (history-max-tokens (effective-history-compression-max-tokens conversation))
          (history-target-tokens (effective-history-compression-target-tokens conversation)))
     (if (or (<= estimated-total-tokens max-tokens)
@@ -630,6 +648,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                                      ("history-target-tokens" . ,(princ-to-string history-target-tokens))
                                      ("effective-max-tokens" . ,(princ-to-string max-tokens))
                                      ("effective-target-tokens" . ,(princ-to-string target-tokens))
+                                     ("next-effective-max-tokens" . ,(princ-to-string (* 2 (estimated-conversation-context-token-count conversation compressed-history))))
                                      ("compressed-total-tokens" . ,(princ-to-string (estimated-conversation-context-token-count conversation compressed-history)))
                                      ("compressed-history-tokens" . ,(princ-to-string (estimated-history-token-count compressed-history)))
                                      ("old-messages-count" . ,(princ-to-string (length old-messages)))
@@ -644,6 +663,7 @@ Use NEW-CHAT instead when no persona should be loaded."
           (compressed-conversation-history-if-needed conversation original-history)))
     (setf (conversation-messages conversation) compressed-history)
     (unless (eq compressed-history original-history)
+      (update-adaptive-context-pruning-max-tokens conversation compressed-history)
       (setf (conversation-interaction-id conversation) nil))
     compressed-history))
 
@@ -689,12 +709,16 @@ Use NEW-CHAT instead when no persona should be loaded."
                                  ((stringp system-instruction-raw) system-instruction-raw)
                                  ((listp system-instruction-raw) (coerce system-instruction-raw 'vector))
                                  (t nil)))
-           (interaction-id (get-string-plist-value state "interactionId"))
-           (messages (get-string-plist-value state "messages")))
+          (adaptive-context-pruning-max-tokens
+            (get-string-plist-value state "adaptiveContextPruningMaxTokens"))
+          (interaction-id (get-string-plist-value state "interactionId"))
+          (messages (get-string-plist-value state "messages")))
       (let ((conv (new-chat :backend backend-kw
                             :model (and (string/= model "") model)
                             :system-instruction system-instruction
                             :runtime-context runtime-context)))
+        (setf (conversation-adaptive-context-pruning-max-tokens conv)
+              adaptive-context-pruning-max-tokens)
         (setf (conversation-interaction-id conv) (and (string/= interaction-id "") interaction-id))
         (when (and messages (listp messages))
           (setf (conversation-messages conv)

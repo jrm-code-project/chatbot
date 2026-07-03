@@ -304,6 +304,11 @@
     :accessor conversation-interaction-id
     :initform nil
     :documentation "Stateful Gemini Interaction ID for multi-turn conversations.")
+   (adaptive-context-pruning-max-tokens
+    :initarg :adaptive-context-pruning-max-tokens
+    :accessor conversation-adaptive-context-pruning-max-tokens
+    :initform nil
+    :documentation "Optional per-conversation estimated total-token ceiling updated after history compression.")
    (messages
     :initarg :messages
     :accessor conversation-messages

@@ -1310,6 +1310,54 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                              (cdr (assoc "content" (car (last history)) :test #'string=))))
          (fiveam:is (<= (estimated-history-token-count history) 75)))))))
 
+(fiveam:test test-context-pruning-adapts-threshold-after-compression
+  (let* ((*context-pruning-threshold-characters* nil)
+        (*context-pruning-estimated-max-tokens* 100)
+        (*context-pruning-estimated-target-tokens* 20)
+        (conv (new-chat :backend :google))
+        (responses
+          (list
+           "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Digest summary.\"}], \"role\": \"model\"}}]}"
+           "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Retry digest.\"}], \"role\": \"model\"}}]}"
+           "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Follow-up digest.\"}], \"role\": \"model\"}}]}")))
+    (setf (conversation-messages conv)
+         (loop for index from 1 to 30
+               append (list (list (cons "role" "user")
+                                  (cons "content" (format nil "user-~2,'0D" index)))
+                            (list (cons "role" "model")
+                                  (cons "content" (format nil "model-~2,'0D" index))))))
+    (let ((*gemini-api-key-function* (lambda () "mocked-api-key"))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore url args))
+             (values (or (pop responses)
+                         "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Fallback digest.\"}], \"role\": \"model\"}}]}")
+                     200))))
+      (compress-conversation-context-if-needed conv)
+      (let* ((compressed-history (conversation-messages conv))
+            (compressed-total-tokens
+              (estimated-conversation-context-token-count conv compressed-history))
+            (adaptive-threshold
+              (conversation-adaptive-context-pruning-max-tokens conv))
+            (needed-extra-tokens (1+ (- adaptive-threshold compressed-total-tokens)))
+            (extra-message-tokens (ceiling needed-extra-tokens 2))
+            (extra-text (make-string (* 4 extra-message-tokens) :initial-element #\B))
+            (expanded-history
+              (append compressed-history
+                      (list (list (cons "role" "user") (cons "content" extra-text))
+                            (list (cons "role" "model") (cons "content" extra-text)))))
+            (expanded-total-tokens
+              (estimated-conversation-context-token-count conv expanded-history))
+            (recompressed-history
+              (compressed-conversation-history-if-needed conv expanded-history)))
+        (fiveam:is (= (* 2 compressed-total-tokens) adaptive-threshold))
+        (fiveam:is (> expanded-total-tokens adaptive-threshold))
+        (fiveam:is (< expanded-total-tokens *context-pruning-estimated-max-tokens*))
+        (fiveam:is (not (equal expanded-history recompressed-history)))
+        (fiveam:is (string= "system" (cdr (assoc "role" (first recompressed-history) :test #'string=))))
+        (fiveam:is (search "State Digest"
+                          (cdr (assoc "content" (first recompressed-history) :test #'string=))))))))
+
 (fiveam:test test-context-pruning-counts-system-instruction-tokens
   (let* ((*context-pruning-threshold-characters* nil)
         (*context-pruning-estimated-max-tokens* 100)
