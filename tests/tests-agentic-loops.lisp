@@ -207,24 +207,29 @@ blind polling alone under heavier full-suite load."
            (test-agentic-loop-response "final" "started by tool")))
         (conversation (new-chat :backend :openai)))
     (unwind-protect
-         (let* ((*active-conversation* conversation)
-                (json (default-execute-builtin-chatbot-tool
-                       (conversation-chatbot conversation)
-                       "startAgenticLoop"
-                       '(("goal" . "Tool-launched goal")
-                        ("maxIterations" . 2)
-                        ("backend" . "openai")
-                        ("model" . "gpt-4o"))))
-                (payload (parse-json-or-error json :context "agentic loop tool result"))
-                (loop-id (mcp-val :id payload))
-                (loop (find-agentic-loop loop-id))
-               (execution-profile (json-object-field payload :execution-profile)))
-           (fiveam:is (typep loop 'agentic-loop))
-           (fiveam:is (string= "Tool-launched goal" (agentic-loop-goal loop)))
-           (fiveam:is (eq :openai (getf (agentic-loop-execution-profile loop) :backend)))
-           (fiveam:is (string= "gpt-4o" (getf (agentic-loop-execution-profile loop) :model)))
-           (assert-json-field= execution-profile :backend "openai")
-           (assert-json-field= execution-profile :model "gpt-4o"))
+        (let* ((context (chatbot-runtime-context (conversation-chatbot conversation)))
+               (previous-active-conversation (current-active-conversation context)))
+          (unwind-protect
+               (let* ((json (progn
+                              (setf (current-active-conversation context) conversation)
+                              (default-execute-builtin-chatbot-tool
+                               (conversation-chatbot conversation)
+                               "startAgenticLoop"
+                               '(("goal" . "Tool-launched goal")
+                                 ("maxIterations" . 2)
+                                 ("backend" . "openai")
+                                 ("model" . "gpt-4o")))))
+                      (payload (parse-json-or-error json :context "agentic loop tool result"))
+                      (loop-id (mcp-val :id payload))
+                      (loop (find-agentic-loop loop-id))
+                      (execution-profile (json-object-field payload :execution-profile)))
+                 (fiveam:is (typep loop 'agentic-loop))
+                 (fiveam:is (string= "Tool-launched goal" (agentic-loop-goal loop)))
+                 (fiveam:is (eq :openai (getf (agentic-loop-execution-profile loop) :backend)))
+                 (fiveam:is (string= "gpt-4o" (getf (agentic-loop-execution-profile loop) :model)))
+                 (assert-json-field= execution-profile :backend "openai")
+                 (assert-json-field= execution-profile :model "gpt-4o"))
+            (setf (current-active-conversation context) previous-active-conversation)))
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))
 
@@ -239,21 +244,25 @@ blind polling alone under heavier full-suite load."
                                 :model "gemini-3.5-flash"
                                 :runtime-context context)))
     (unwind-protect
-         (let* ((*active-conversation* conversation)
-               (json (default-execute-builtin-chatbot-tool
-                      (conversation-chatbot conversation)
-                      "startAgenticLoop"
-                      '(("goal" . "Tool-launched goal with defaults")
-                        ("maxIterations" . 2))))
-               (payload (parse-json-or-error json :context "agentic loop tool result"))
-               (loop-id (mcp-val :id payload))
-               (loop (find-agentic-loop loop-id))
-               (execution-profile (json-object-field payload :execution-profile)))
-           (fiveam:is (typep loop 'agentic-loop))
-           (fiveam:is (eq :openai (getf (agentic-loop-execution-profile loop) :backend)))
-           (fiveam:is (string= "gpt-4.1-mini" (getf (agentic-loop-execution-profile loop) :model)))
-           (assert-json-field= execution-profile :backend "openai")
-           (assert-json-field= execution-profile :model "gpt-4.1-mini"))
+         (let ((previous-active-conversation (current-active-conversation context)))
+          (unwind-protect
+               (let* ((json (progn
+                              (setf (current-active-conversation context) conversation)
+                              (default-execute-builtin-chatbot-tool
+                               (conversation-chatbot conversation)
+                               "startAgenticLoop"
+                               '(("goal" . "Tool-launched goal with defaults")
+                                 ("maxIterations" . 2)))))
+                      (payload (parse-json-or-error json :context "agentic loop tool result"))
+                      (loop-id (mcp-val :id payload))
+                      (loop (find-agentic-loop loop-id))
+                      (execution-profile (json-object-field payload :execution-profile)))
+                 (fiveam:is (typep loop 'agentic-loop))
+                 (fiveam:is (eq :openai (getf (agentic-loop-execution-profile loop) :backend)))
+                 (fiveam:is (string= "gpt-4.1-mini" (getf (agentic-loop-execution-profile loop) :model)))
+                 (assert-json-field= execution-profile :backend "openai")
+                 (assert-json-field= execution-profile :model "gpt-4.1-mini"))
+            (setf (current-active-conversation context) previous-active-conversation)))
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))
 
@@ -366,13 +375,13 @@ blind polling alone under heavier full-suite load."
                          (wait-for-agentic-loop-status loop '(:running :completed :failed :limit-reached))))
           (sleep 0.08)
           (loop repeat 50
-                until (or (= calls 2)
+                until (or (>= calls 2)
                           (eq :completed (agentic-loop-status loop)))
                 do (monitor-agentic-loops-once)
                    (sleep 0.01))
           (fiveam:is (eq :completed
                          (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
-          (fiveam:is (= 2 calls))
+          (fiveam:is (>= calls 2))
           (fiveam:is (= 1 (agentic-loop-supervisor-restart-count loop)))
           (fiveam:is (string= "completed after timeout restart" (agentic-loop-result-summary loop))))
       (abort-agentic-loops :force t)

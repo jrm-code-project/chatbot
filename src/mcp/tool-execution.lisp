@@ -69,6 +69,9 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
 
 (defun execute-chatbot-tool (bot source tool-name arguments)
   "Executes SOURCE as either a built-in or MCP tool for BOT."
-  (if (eq source :built-in)
-      (default-execute-builtin-chatbot-tool bot tool-name arguments)
-      (execute-mcp-tool source tool-name arguments)))
+  (call-with-runtime-context
+   (chatbot-runtime-context bot)
+   (lambda ()
+     (if (eq source :built-in)
+         (default-execute-builtin-chatbot-tool bot tool-name arguments)
+         (execute-mcp-tool source tool-name arguments)))))

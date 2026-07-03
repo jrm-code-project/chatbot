@@ -514,16 +514,18 @@ as a compatibility alias."
        (set-runtime-context-owned-value value context ',accessor ',legacy-symbol))))
 
 (defun transient-runtime-context-value (context accessor legacy-symbol)
-  "Returns transient runtime state from CONTEXT when present, otherwise the legacy global."
+  "Returns transient runtime state from CONTEXT, falling back to legacy globals only
+for default-context compatibility."
   (let ((resolved-context (resolve-runtime-context context)))
-    (if resolved-context
-        (or (runtime-context-accessor-value resolved-context accessor)
-            (let ((legacy-value (legacy-global-value legacy-symbol)))
-              (and (typep legacy-value 'conversation)
-                   (eq (chatbot-runtime-context (conversation-chatbot legacy-value))
-                       resolved-context)
-                   legacy-value)))
-        (legacy-global-value legacy-symbol))))
+    (cond
+      ((and resolved-context
+            (not (default-runtime-context-p resolved-context)))
+       (runtime-context-accessor-value resolved-context accessor))
+      (resolved-context
+       (or (runtime-context-accessor-value resolved-context accessor)
+           (legacy-global-value legacy-symbol)))
+      (t
+       (legacy-global-value legacy-symbol)))))
 
 (defun set-transient-runtime-context-value (value context accessor legacy-symbol)
   "Stores transient runtime state in CONTEXT, mirroring to legacy globals only for

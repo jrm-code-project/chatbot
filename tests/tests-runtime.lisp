@@ -502,6 +502,64 @@
       (setf *active-planner* original-legacy-active-planner)
       (setf *active-planner-parent-conversation* original-legacy-active-planner-parent))))
 
+(fiveam:test test-explicit-runtime-context-transient-getters-do-not-fall-back-to-legacy-globals
+  (let* ((context (make-runtime-context))
+        (legacy-conversation (new-chat :runtime-context context))
+        (legacy-planner (new-chat :runtime-context context))
+        (legacy-parent (new-chat :runtime-context context))
+        (original-legacy-active-conversation *active-conversation*)
+        (original-legacy-active-planner *active-planner*)
+        (original-legacy-active-planner-parent *active-planner-parent-conversation*))
+    (unwind-protect
+        (progn
+          (setf *active-conversation* legacy-conversation)
+          (setf *active-planner* legacy-planner)
+          (setf *active-planner-parent-conversation* legacy-parent)
+          (call-with-runtime-context
+           context
+           (lambda ()
+             (fiveam:is-false (current-active-conversation))
+             (fiveam:is-false (current-active-planner))
+             (fiveam:is-false (current-active-planner-parent-conversation)))))
+      (setf *active-conversation* original-legacy-active-conversation)
+      (setf *active-planner* original-legacy-active-planner)
+      (setf *active-planner-parent-conversation* original-legacy-active-planner-parent))))
+
+(fiveam:test test-default-runtime-context-transient-getters-still-fall-back-to-legacy-globals
+  (let* ((default-context *default-runtime-context*)
+        (legacy-conversation (new-chat))
+        (legacy-planner (new-chat))
+        (legacy-parent (new-chat))
+        (original-default-active-conversation (runtime-context-active-conversation default-context))
+        (original-default-active-planner (runtime-context-active-planner default-context))
+        (original-default-active-planner-parent
+          (runtime-context-active-planner-parent-conversation default-context))
+        (original-legacy-active-conversation *active-conversation*)
+        (original-legacy-active-planner *active-planner*)
+        (original-legacy-active-planner-parent *active-planner-parent-conversation*))
+    (unwind-protect
+        (progn
+          (setf (runtime-context-active-conversation default-context) nil)
+          (setf (runtime-context-active-planner default-context) nil)
+          (setf (runtime-context-active-planner-parent-conversation default-context) nil)
+          (setf *active-conversation* legacy-conversation)
+          (setf *active-planner* legacy-planner)
+          (setf *active-planner-parent-conversation* legacy-parent)
+          (call-with-runtime-context
+           default-context
+           (lambda ()
+             (fiveam:is (eq legacy-conversation (current-active-conversation)))
+             (fiveam:is (eq legacy-planner (current-active-planner)))
+             (fiveam:is (eq legacy-parent
+                           (current-active-planner-parent-conversation))))))
+      (setf (runtime-context-active-conversation default-context) original-default-active-conversation)
+      (setf (runtime-context-active-planner default-context) original-default-active-planner)
+      (setf (runtime-context-active-planner-parent-conversation default-context)
+           original-default-active-planner-parent)
+      (setf *active-conversation* original-legacy-active-conversation)
+      (setf *active-planner* original-legacy-active-planner)
+      (setf *active-planner-parent-conversation* original-legacy-active-planner-parent))))
+
 (fiveam:test test-make-runtime-context-inherits-from-canonical-context-not-legacy-globals
   (let* ((default-context *default-runtime-context*)
         (original-default-log-level (runtime-context-log-level default-context))
