@@ -102,64 +102,101 @@
            (namestring resolved)
            command))))
 
+(defun resolve-mcp-launch-args (args)
+  "Returns launch ARGS with repository-local test fixtures normalized."
+  (mapcar (lambda (arg)
+           (if (and (stringp arg) (search "mock-mcp-server.lisp" arg))
+               (namestring (merge-pathnames "mock-mcp-server.lisp"
+                                            (asdf:system-source-directory :chatbot)))
+               arg))
+         args))
+
+(defun mcp-launch-environment (environment)
+  "Returns the normalized subprocess environment for ENVIRONMENT."
+  (normalize-mcp-server-environment
+   (if environment
+      (merge-mcp-server-environments (current-process-environment)
+                                     environment)
+      nil)))
+
+(defun mcp-launch-options (environment)
+  "Returns UIOP launch options for one MCP subprocess."
+  (let ((base-options (list :input :stream
+                           :output :stream
+                           :error-output :stream)))
+    (if environment
+       (append base-options
+               (list :environment environment))
+       base-options)))
+
+(defun launch-mcp-server-process (command args environment)
+  "Launches one MCP subprocess with COMMAND, ARGS, and ENVIRONMENT."
+  (apply #'uiop:launch-program
+        (cons (cons command args)
+              (mcp-launch-options environment))))
+
+(defun make-mcp-server-from-process (name process-info)
+  "Returns an MCP server wrapper around PROCESS-INFO for NAME."
+  (make-instance 'mcp-server
+                :name name
+                :process process-info
+                :input-stream (uiop:process-info-input process-info)
+                :output-stream (uiop:process-info-output process-info)
+                :error-stream (uiop:process-info-error-output process-info)))
+
+(defun spawn-mcp-server-thread (thunk name)
+  "Starts one MCP supervision thread named NAME running THUNK."
+  (sb-thread:make-thread thunk :name name))
+
+(defun start-mcp-server-supervision (server)
+  "Starts stderr and reader supervision threads for SERVER."
+  (let ((name (mcp-server-name server))
+       (err-output (mcp-server-error-stream server)))
+    (setf (mcp-server-stderr-thread server)
+         (spawn-mcp-server-thread
+          (lambda ()
+            (handler-case
+                (loop for line = (read-line err-output nil :eof)
+                      until (eq line :eof)
+                      do (log-prefixed-message (format nil "MCP ~A STDERR" name) line))
+              (error (e)
+                (log-prefixed-message "MCP DEBUG"
+                                      (format nil "~A STDERR thread terminated: ~A" name e)))))
+          (concatenate 'string "mcp-err-" name)))
+    (setf (mcp-server-reader-thread server)
+         (spawn-mcp-server-thread
+          (lambda () (mcp-reader-loop server))
+          (concatenate 'string "mcp-reader-" name)))
+    server))
+
 (defun default-start-mcp-server (name command args &optional environment)
   "Launches an MCP server subprocess and starts its reader thread."
-  (let* ((resolved-args (mapcar (lambda (arg)
-                                  (if (and (stringp arg) (search "mock-mcp-server.lisp" arg))
-                                      (namestring (merge-pathnames "mock-mcp-server.lisp"
-                                                                   (asdf:system-source-directory :chatbot)))
-                                      arg))
-                                args))
-         (resolved-command (resolve-mcp-launch-command command))
-         (launch-options (list :input :stream
-                              :output :stream
-                              :error-output :stream))
-         (normalized-environment
-           (normalize-mcp-server-environment
-            (if environment
-                (merge-mcp-server-environments (current-process-environment)
-                                               environment)
-                nil)))
-         (log-command (if (string= resolved-command command)
+  (let* ((resolved-args (resolve-mcp-launch-args args))
+        (resolved-command (resolve-mcp-launch-command command))
+        (normalized-environment (mcp-launch-environment environment))
+        (log-command (if (string= resolved-command command)
                          command
-                         (format nil "~A (resolved from ~A)" resolved-command command)))
-         (process-info (apply #'uiop:launch-program
-                             (cons (cons resolved-command resolved-args)
-                                   (if normalized-environment
-                                       (append launch-options
-                                               (list :environment normalized-environment))
-                                       launch-options))))
-         (input (uiop:process-info-input process-info))
-         (output (uiop:process-info-output process-info))
-         (err-output (uiop:process-info-error-output process-info))
-         (server (make-instance 'mcp-server
-                                :name name
-                                :process process-info
-                                :input-stream input
-                                :output-stream output
-                                :error-stream err-output)))
+                         (format nil "~A (resolved from ~A)" resolved-command command))))
     (log-prefixed-message "MCP INFO" (format nil "Launching server ~A" name))
     (log-prefixed-message "MCP DEBUG" (format nil "Command: ~A ~A" log-command args))
-    ;; Spawn an error monitoring thread
-    (setf (mcp-server-stderr-thread server)
-          (sb-thread:make-thread
-           (lambda ()
-             (handler-case
-                 (loop for line = (read-line err-output nil :eof)
-                       until (eq line :eof)
-                       do (log-prefixed-message (format nil "MCP ~A STDERR" name) line))
-               (error (e)
-                 (log-prefixed-message "MCP DEBUG"
-                                       (format nil "~A STDERR thread terminated: ~A" name e)))))
-           :name (concatenate 'string "mcp-err-" name)))
-     
-    (setf (mcp-server-reader-thread server)
-          (sb-thread:make-thread (lambda () (mcp-reader-loop server))
-                                 :name (concatenate 'string "mcp-reader-" name)))
-    (log-prefixed-message "MCP INFO"
-                          (format nil "Server ~A process and threads started successfully."
-                                  name))
-    server))
+    (let ((server nil))
+      (handler-case
+         (progn
+           (setf server
+                 (make-mcp-server-from-process
+                  name
+                  (launch-mcp-server-process resolved-command
+                                             resolved-args
+                                             normalized-environment)))
+           (start-mcp-server-supervision server)
+           (log-prefixed-message "MCP INFO"
+                                 (format nil "Server ~A process and threads started successfully."
+                                         name))
+           server)
+       (error (e)
+         (when server
+           (ignore-errors (default-stop-mcp-server server)))
+         (error e))))))
 
 (defun start-mcp-server (name command args &optional environment)
   "Launches an MCP server, honoring the configured test seam when present."

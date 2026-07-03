@@ -1234,6 +1234,38 @@
       (when (sb-thread:thread-alive-p stderr-thread)
         (sb-thread:terminate-thread stderr-thread)))))
 
+(fiveam:test test-default-start-mcp-server-cleans-up-after-supervision-failure
+  (let* ((mock-server-path (merge-pathnames "mock-mcp-server.lisp"
+                                            (asdf:system-source-directory :chatbot)))
+         (original-supervision-function (symbol-function 'start-mcp-server-supervision))
+         (captured-server nil)
+         (captured-process nil))
+    (unwind-protect
+        (progn
+          (setf (symbol-function 'start-mcp-server-supervision)
+                (lambda (server)
+                  (setf captured-server server)
+                  (setf captured-process (mcp-server-process server))
+                  (error "supervision setup failed")))
+          (fiveam:signals error
+            (default-start-mcp-server "test-server"
+                                      "sbcl"
+                                      (list "--script" (namestring mock-server-path))))
+          (fiveam:is (typep captured-server 'mcp-server))
+          (fiveam:is-true captured-process)
+          (fiveam:is-false (uiop:process-alive-p captured-process))
+          (fiveam:is-false (mcp-server-process captured-server))
+          (fiveam:is-false (mcp-server-input-stream captured-server))
+          (fiveam:is-false (mcp-server-output-stream captured-server))
+          (fiveam:is-false (mcp-server-error-stream captured-server))
+          (fiveam:is-false (mcp-server-reader-thread captured-server))
+          (fiveam:is-false (mcp-server-stderr-thread captured-server)))
+      (setf (symbol-function 'start-mcp-server-supervision) original-supervision-function)
+      (when (and captured-process
+                 (uiop:process-alive-p captured-process))
+        (uiop:terminate-process captured-process :urgent t)
+        (uiop:wait-process captured-process)))))
+
 (fiveam:test test-execute-chatbot-tool-dynamic-minions
   (let* ((temp-dir (uiop:default-temporary-directory))
          (mock-home (merge-pathnames "mock-home-dynamic-minions/" temp-dir))
