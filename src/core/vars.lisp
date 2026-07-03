@@ -559,39 +559,22 @@ the canonical default runtime context."
   "Returns the ambient default conversation for CONTEXT."
   (let ((resolved-context (resolve-runtime-context context)))
     (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
+      ((null resolved-context)
+       *default-conversation*)
+      ((default-runtime-context-p resolved-context)
+       (sync-default-conversation-from-legacy-global resolved-context)
        (runtime-context-default-conversation resolved-context))
-      (context
-       (when (default-runtime-context-p resolved-context)
-         (sync-default-conversation-from-legacy-global resolved-context))
-       (and resolved-context
-            (runtime-context-default-conversation resolved-context)))
       (t
-       (when (default-runtime-context-p resolved-context)
-         (sync-default-conversation-from-legacy-global resolved-context))
-       *default-conversation*))))
+       (runtime-context-default-conversation resolved-context)))))
 
 (defun (setf current-default-conversation) (value &optional context)
   "Sets the ambient default conversation for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (setf (runtime-context-default-conversation resolved-context) value))
-      (context
-       (when resolved-context
-         (setf (runtime-context-default-conversation resolved-context) value)
-         (when (default-runtime-context-p resolved-context)
-           (setf *default-conversation* value))))
-      (t
-       (setf *default-conversation* value)
-       (when (default-runtime-context-p resolved-context)
-         (setf (runtime-context-default-conversation resolved-context) value)))))
+  (let ((resolved-context (or (resolve-runtime-context context)
+                              *default-runtime-context*)))
+    (when resolved-context
+      (setf (runtime-context-default-conversation resolved-context) value)
+      (when (default-runtime-context-p resolved-context)
+        (setf *default-conversation* value))))
   value)
 
 (defun call-with-default-conversation-compatibility (context thunk)

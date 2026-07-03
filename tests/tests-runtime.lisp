@@ -84,6 +84,36 @@
       (setf *default-conversation* original-legacy-conversation)
       (setf (runtime-context-default-conversation default-context) original-default-conversation))))
 
+(fiveam:test test-no-arg-current-default-conversation-syncs-through-default-runtime-context
+  (let* ((default-context *default-runtime-context*)
+         (legacy-conversation (new-chat))
+         (context-conversation (new-chat))
+         (original-legacy-conversation *default-conversation*)
+         (original-default-conversation (runtime-context-default-conversation default-context)))
+    (unwind-protect
+         (progn
+           (setf *default-conversation* legacy-conversation)
+           (setf (runtime-context-default-conversation default-context) context-conversation)
+           (fiveam:is (eq legacy-conversation (current-default-conversation)))
+           (fiveam:is (eq legacy-conversation
+                         (runtime-context-default-conversation default-context))))
+      (setf *default-conversation* original-legacy-conversation)
+      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
+
+(fiveam:test test-no-arg-set-current-default-conversation-updates-default-runtime-context
+  (let* ((default-context *default-runtime-context*)
+         (conversation (new-chat))
+         (original-legacy-conversation *default-conversation*)
+         (original-default-conversation (runtime-context-default-conversation default-context)))
+    (unwind-protect
+         (progn
+           (setf (current-default-conversation) conversation)
+           (fiveam:is (eq conversation *default-conversation*))
+           (fiveam:is (eq conversation
+                         (runtime-context-default-conversation default-context))))
+      (setf *default-conversation* original-legacy-conversation)
+      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
+
 (fiveam:test test-explicit-runtime-context-controls-http-timeouts
   (let* ((context (make-runtime-context :http-connect-timeout 7
                                        :http-read-timeout 33))
