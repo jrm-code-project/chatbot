@@ -299,24 +299,6 @@ Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
 (defvar *active-conversation* nil
   "Conversation currently being processed by CHAT, when any.")
 
-(defparameter *runtime-context-legacy-global-specs*
-  '((:symbol *default-conversation*
-     :accessor runtime-context-default-conversation
-     :warn-p t))
-  "Authoritative compatibility-global mirror specification for runtime contexts.")
-
-(defun runtime-context-legacy-global-symbol (spec)
-  "Returns the compatibility global symbol from SPEC."
-  (getf spec :symbol))
-
-(defun runtime-context-legacy-global-accessor (spec)
-  "Returns the runtime-context accessor symbol from SPEC."
-  (getf spec :accessor))
-
-(defun runtime-context-legacy-global-warn-p (spec)
-  "Returns whether SPEC should emit compatibility warnings."
-  (getf spec :warn-p))
-
 (defun runtime-context-accessor-value (context accessor)
   "Reads ACCESSOR from CONTEXT."
   (funcall accessor context))
@@ -324,18 +306,6 @@ Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
 (defun set-runtime-context-accessor-value (context accessor value)
   "Stores VALUE on CONTEXT through ACCESSOR."
   (funcall (fdefinition (list 'setf accessor)) value context))
-
-(defun runtime-context-legacy-global-symbols ()
-  "Returns the ordered compatibility-global symbol list mirrored by runtime contexts."
-  (mapcar #'runtime-context-legacy-global-symbol
-          *runtime-context-legacy-global-specs*))
-
-(defun runtime-context-legacy-global-values (context)
-  "Returns the ordered runtime-context values corresponding to the mirrored globals."
-  (mapcar (lambda (spec)
-            (runtime-context-accessor-value context
-                                            (runtime-context-legacy-global-accessor spec)))
-          *runtime-context-legacy-global-specs*))
 
 (defmethod initialize-instance :after ((bot chatbot) &key)
   "Applies backend-sensitive defaults for chatbot instances created without an explicit model."
@@ -431,9 +401,10 @@ compatibility-only ambient special variables."
                                                       eval-approval-function
                                                       #'runtime-context-eval-approval-function
                                                       *eval-approval-function*)
-                     :default-conversation (if default-conversation-p
-                                               default-conversation
-                                               *default-conversation*)
+                     :default-conversation (inherit default-conversation-p
+                                                   default-conversation
+                                                   #'runtime-context-default-conversation
+                                                   nil)
                      :agentic-loop-default-backend
                      (inherit agentic-loop-default-backend-p
                               agentic-loop-default-backend
@@ -455,40 +426,39 @@ compatibility-only ambient special variables."
                          active-planner-parent-conversation
                          nil)))))
 
-(defun sync-runtime-context-from-legacy-globals (context &key (warn-p t))
-  "Copies legacy global runtime values into CONTEXT."
-  (labels ((same-runtime-state-p (left right)
-             (or (eq left right)
-                 (equal left right)))
-           (maybe-warn-legacy-runtime-global-usage (spec current-value context-value)
-             (let ((symbol (runtime-context-legacy-global-symbol spec)))
-               (when (and warn-p
-                          (runtime-context-legacy-global-warn-p spec)
-                          *warn-on-legacy-runtime-globals-p*
-                          (not (same-runtime-state-p current-value context-value))
-                          (not (member symbol *legacy-runtime-global-warnings-issued* :test #'eq)))
-                 (push symbol *legacy-runtime-global-warnings-issued*)
-                 (format *error-output*
-                         "[CHATBOT WARN] ~A is a compatibility-only ambient runtime global; prefer ~A.~%"
-                         symbol
-                         (or (cdr (assoc symbol *legacy-runtime-global-replacements* :test #'eq))
-                             "MAKE-RUNTIME-CONTEXT and explicit :RUNTIME-CONTEXT usage"))))))
-    (dolist (spec *runtime-context-legacy-global-specs*)
-      (let* ((symbol (runtime-context-legacy-global-symbol spec))
-             (accessor (runtime-context-legacy-global-accessor spec))
-             (current-value (symbol-value symbol))
-             (context-value (runtime-context-accessor-value context accessor)))
-        (maybe-warn-legacy-runtime-global-usage spec current-value context-value)
-        (set-runtime-context-accessor-value context accessor current-value))))
+(defun same-runtime-state-p (left right)
+  "Returns true when LEFT and RIGHT represent the same runtime state."
+  (or (eq left right)
+      (equal left right)))
+
+(defun maybe-warn-legacy-default-conversation-usage (current-value context-value warn-p)
+  "Warns once when *DEFAULT-CONVERSATION* diverges from CONTEXT-VALUE."
+  (when (and warn-p
+             *warn-on-legacy-runtime-globals-p*
+             (not (same-runtime-state-p current-value context-value))
+             (not (member '*default-conversation*
+                          *legacy-runtime-global-warnings-issued*
+                          :test #'eq)))
+    (push '*default-conversation* *legacy-runtime-global-warnings-issued*)
+    (format *error-output*
+            "[CHATBOT WARN] ~A is a compatibility-only ambient runtime global; prefer ~A.~%"
+            '*default-conversation*
+            (or (cdr (assoc '*default-conversation*
+                            *legacy-runtime-global-replacements*
+                            :test #'eq))
+                "MAKE-RUNTIME-CONTEXT and explicit :RUNTIME-CONTEXT usage"))))
+
+(defun sync-default-conversation-from-legacy-global (context &key (warn-p t))
+  "Copies the ambient *DEFAULT-CONVERSATION* compatibility value into CONTEXT."
+  (let ((current-value *default-conversation*)
+        (context-value (runtime-context-default-conversation context)))
+    (maybe-warn-legacy-default-conversation-usage current-value context-value warn-p)
+    (setf (runtime-context-default-conversation context) current-value))
   context)
 
-(defun sync-legacy-globals-from-runtime-context (context)
-  "Copies runtime values from CONTEXT back into the legacy globals."
-  (dolist (spec *runtime-context-legacy-global-specs*)
-    (let ((symbol (runtime-context-legacy-global-symbol spec))
-          (accessor (runtime-context-legacy-global-accessor spec)))
-      (setf (symbol-value symbol)
-            (runtime-context-accessor-value context accessor))))
+(defun sync-legacy-default-conversation-from-runtime-context (context)
+  "Copies CONTEXT's default conversation back into the legacy compatibility global."
+  (setf *default-conversation* (runtime-context-default-conversation context))
   context)
 
 (defun default-runtime-context-p (context)
@@ -499,7 +469,7 @@ compatibility-only ambient special variables."
 (defun maybe-sync-legacy-globals-from-default-runtime-context (context)
   "Copies CONTEXT back to legacy globals when it is the default runtime context."
   (when (default-runtime-context-p context)
-    (sync-legacy-globals-from-runtime-context context))
+    (sync-legacy-default-conversation-from-runtime-context context))
   context)
 
 (defun active-runtime-context-p (context)
@@ -518,49 +488,8 @@ compatibility-only ambient special variables."
                      *default-runtime-context*)))
     (when (and sync-from-globals-p
                (default-runtime-context-p resolved))
-      (sync-runtime-context-from-legacy-globals resolved))
+      (sync-default-conversation-from-legacy-global resolved))
     resolved))
-
-(defun mirrored-runtime-context-value (context accessor legacy-symbol)
-  "Returns the mirrored legacy/runtime-context value for ACCESSOR and LEGACY-SYMBOL."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (runtime-context-accessor-value resolved-context accessor))
-      (context
-       (when (default-runtime-context-p resolved-context)
-         (set-runtime-context-accessor-value resolved-context accessor
-                                           (legacy-global-value legacy-symbol)))
-       (and resolved-context
-            (runtime-context-accessor-value resolved-context accessor)))
-      (t
-       (when (default-runtime-context-p resolved-context)
-         (set-runtime-context-accessor-value resolved-context accessor
-                                           (legacy-global-value legacy-symbol)))
-       (legacy-global-value legacy-symbol)))))
-
-(defun set-mirrored-runtime-context-value (value context accessor legacy-symbol)
-  "Stores VALUE through the mirrored legacy/runtime-context bridge."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            resolved-context
-            (active-runtime-context-p resolved-context)
-            (not (default-runtime-context-p resolved-context)))
-       (set-runtime-context-accessor-value resolved-context accessor value))
-      (context
-       (when resolved-context
-         (set-runtime-context-accessor-value resolved-context accessor value)
-         (when (default-runtime-context-p resolved-context)
-           (setf (symbol-value legacy-symbol) value))))
-      (t
-       (setf (symbol-value legacy-symbol) value)
-       (when (default-runtime-context-p resolved-context)
-         (set-runtime-context-accessor-value resolved-context accessor value)))))
-  value)
 
 (defun runtime-context-function-value (context accessor legacy-symbol &key default-uses-legacy-p)
   "Returns the function seam value for ACCESSOR and LEGACY-SYMBOL."
@@ -588,15 +517,6 @@ compatibility-only ambient special variables."
             (setf (symbol-value legacy-symbol) value)))
         (setf (symbol-value legacy-symbol) value)))
   value)
-
-(defmacro define-mirrored-runtime-context-helper (name accessor legacy-symbol getter-doc setter-doc)
-  `(progn
-     (defun ,name (&optional context)
-       ,getter-doc
-       (mirrored-runtime-context-value context ',accessor ',legacy-symbol))
-     (defun (setf ,name) (value &optional context)
-       ,setter-doc
-       (set-mirrored-runtime-context-value value context ',accessor ',legacy-symbol))))
 
 (defmacro define-runtime-context-function-helper (name accessor legacy-symbol getter-doc setter-doc
                                                  &key default-uses-legacy-p)
@@ -671,11 +591,44 @@ as a compatibility alias."
        ,setter-doc
        (set-transient-runtime-context-value value context ',accessor ',legacy-symbol))))
 
-(define-mirrored-runtime-context-helper current-default-conversation
-  runtime-context-default-conversation
-  *default-conversation*
+(defun current-default-conversation (&optional context)
   "Returns the ambient default conversation for CONTEXT."
-  "Sets the ambient default conversation for CONTEXT.")
+  (let ((resolved-context (resolve-runtime-context context)))
+    (cond
+      ((and (null context)
+            resolved-context
+            (active-runtime-context-p resolved-context)
+            (not (default-runtime-context-p resolved-context)))
+       (runtime-context-default-conversation resolved-context))
+      (context
+       (when (default-runtime-context-p resolved-context)
+         (sync-default-conversation-from-legacy-global resolved-context))
+       (and resolved-context
+            (runtime-context-default-conversation resolved-context)))
+      (t
+       (when (default-runtime-context-p resolved-context)
+         (sync-default-conversation-from-legacy-global resolved-context))
+       *default-conversation*))))
+
+(defun (setf current-default-conversation) (value &optional context)
+  "Sets the ambient default conversation for CONTEXT."
+  (let ((resolved-context (resolve-runtime-context context)))
+    (cond
+      ((and (null context)
+            resolved-context
+            (active-runtime-context-p resolved-context)
+            (not (default-runtime-context-p resolved-context)))
+       (setf (runtime-context-default-conversation resolved-context) value))
+      (context
+       (when resolved-context
+         (setf (runtime-context-default-conversation resolved-context) value)
+         (when (default-runtime-context-p resolved-context)
+           (setf *default-conversation* value))))
+      (t
+       (setf *default-conversation* value)
+       (when (default-runtime-context-p resolved-context)
+         (setf (runtime-context-default-conversation resolved-context) value)))))
+  value)
 
 (define-context-owned-runtime-context-helper current-mcp-config-path
   runtime-context-mcp-config-path
@@ -824,11 +777,12 @@ runtime settings are read from the runtime context directly."
                            (*eval-approval-function* (if default-context-p
                                                          *eval-approval-function*
                                                          (runtime-context-eval-approval-function resolved-context))))
-                       (progv (runtime-context-legacy-global-symbols)
-                              (runtime-context-legacy-global-values resolved-context)
+                       (let ((*default-conversation*
+                               (runtime-context-default-conversation resolved-context)))
                          (unwind-protect
                               (funcall thunk)
-                           (sync-runtime-context-from-legacy-globals resolved-context :warn-p nil)
+                           (setf (runtime-context-default-conversation resolved-context)
+                                 *default-conversation*)
                            (setf (runtime-context-getenv-function resolved-context) *getenv-function*)
                            (setf (runtime-context-http-post-function resolved-context) *http-post-function*)
                            (setf (runtime-context-http-get-function resolved-context) *http-get-function*)

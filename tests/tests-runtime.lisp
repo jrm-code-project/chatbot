@@ -27,9 +27,25 @@
         (setf *default-conversation* original-default-conversation)
         (setf (runtime-context-default-conversation *default-runtime-context*) original-context-default)))))
 
+(fiveam:test test-make-runtime-context-inherits-default-conversation-from-canonical-context-not-legacy-global
+  (let* ((default-context *default-runtime-context*)
+        (legacy-conversation (new-chat))
+        (context-conversation (new-chat))
+        (original-legacy-conversation *default-conversation*)
+        (original-default-conversation (runtime-context-default-conversation default-context)))
+    (unwind-protect
+        (progn
+          (setf *default-conversation* legacy-conversation)
+          (setf (runtime-context-default-conversation default-context) context-conversation)
+          (let ((context (make-runtime-context)))
+            (fiveam:is (eq context-conversation
+                           (runtime-context-default-conversation context)))))
+      (setf *default-conversation* original-legacy-conversation)
+      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
+
 (fiveam:test test-explicit-runtime-context-controls-http-timeouts
   (let* ((context (make-runtime-context :http-connect-timeout 7
-                                        :http-read-timeout 33))
+                                       :http-read-timeout 33))
          (conv (new-chat :backend :google :runtime-context context))
          (captured-connect-timeout nil)
          (captured-read-timeout nil)
