@@ -2017,6 +2017,26 @@ data: [DONE]")
              (fiveam:is (null (runtime-context-startup-chatbot context))))
         (setf (runtime-context-startup-chatbot context) nil)))))
 
+(fiveam:test test-startup-chatbot-shared-servers-p-detects-shared-and-owned-server-sets
+  (let* ((context (make-runtime-context))
+         (shared-servers (list :shared-server))
+         (startup-bot (make-instance 'chatbot
+                                    :mcp-servers shared-servers
+                                    :runtime-context context))
+         (shared-bot (make-instance 'chatbot
+                                   :mcp-servers shared-servers
+                                   :runtime-context context))
+         (owned-bot (make-instance 'chatbot
+                                  :mcp-servers (list :owned-server)
+                                  :runtime-context context)))
+    (setf (runtime-context-startup-chatbot context) startup-bot)
+    (unwind-protect
+         (progn
+           (fiveam:is-true (startup-chatbot-shared-servers-p shared-bot context))
+           (fiveam:is-false (startup-chatbot-shared-servers-p owned-bot context))
+           (fiveam:is-false (startup-chatbot-shared-servers-p startup-bot context)))
+      (setf (runtime-context-startup-chatbot context) nil))))
+
 (fiveam:test test-shutdown-chatbot-stops-only-persona-specific-mcp-servers
   (let* ((context (make-runtime-context))
          (shared-time (make-instance 'mcp-server :name "mcp-server-time"))

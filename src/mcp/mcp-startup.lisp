@@ -316,22 +316,37 @@
   "Returns the shared startup chatbot without implicitly initializing MCP servers."
   (current-startup-chatbot context))
 
+(defun resolve-startup-chatbot-context (bot context)
+  "Returns the effective startup policy context for BOT and CONTEXT."
+  (or context (chatbot-runtime-context bot)))
+
+(defun resolve-startup-chatbot-reference (bot &optional context)
+  "Returns the effective startup policy context and shared startup chatbot for BOT."
+  (let ((resolved-context (resolve-startup-chatbot-context bot context)))
+    (values resolved-context
+            (ensure-startup-chatbot resolved-context))))
+
 (defun startup-chatbot-shared-servers-p (bot &optional context)
   "Returns true when BOT is using the shared startup MCP server set."
-  (let* ((context (or context (chatbot-runtime-context bot)))
-         (startup-bot (ensure-startup-chatbot context)))
+  (multiple-value-bind (resolved-context startup-bot)
+      (resolve-startup-chatbot-reference bot context)
+    (declare (ignore resolved-context))
     (and startup-bot
          (not (eq bot startup-bot))
          (eq (chatbot-mcp-servers bot)
              (chatbot-mcp-servers startup-bot)))))
 
+(defun shared-startup-mcp-server-p (server bot startup-bot)
+  "Returns true when SERVER is shared from STARTUP-BOT rather than owned by BOT."
+  (and startup-bot
+       (not (eq bot startup-bot))
+       (member server (chatbot-mcp-servers startup-bot) :test #'eq)))
+
 (defun chatbot-owned-mcp-servers (bot startup-bot)
   "Returns the MCP servers BOT should stop itself.
 Servers shared from STARTUP-BOT remain owned by the startup chatbot."
   (remove-if (lambda (server)
-              (and startup-bot
-                   (not (eq bot startup-bot))
-                   (member server (chatbot-mcp-servers startup-bot) :test #'eq)))
+              (shared-startup-mcp-server-p server bot startup-bot))
             (chatbot-mcp-servers bot)))
 
 (defun clear-startup-chatbot-reference (bot startup-bot context)
@@ -341,16 +356,35 @@ Servers shared from STARTUP-BOT remain owned by the startup chatbot."
         (setf (current-startup-chatbot context) nil)
         (setf (current-startup-chatbot) nil))))
 
+(defun invalidate-chatbot-owned-mcp-server-cache (server)
+  "Invalidates cached tool metadata for owned MCP SERVERs before shutdown."
+  (when (typep server 'mcp-server)
+    (invalidate-mcp-tool-list-cache server))
+  server)
+
+(defun shutdown-chatbot-owned-mcp-server (server)
+  "Stops one owned MCP SERVER after invalidating cache state when needed."
+  (invalidate-chatbot-owned-mcp-server-cache server)
+  (stop-mcp-server server))
+
+(defun shutdown-chatbot-owned-mcp-servers (bot startup-bot)
+  "Stops MCP servers owned by BOT and returns BOT."
+  (dolist (server (chatbot-owned-mcp-servers bot startup-bot))
+    (shutdown-chatbot-owned-mcp-server server))
+  bot)
+
+(defun finalize-chatbot-shutdown (bot startup-bot context)
+  "Clears startup references and local MCP server state after BOT shutdown."
+  (clear-startup-chatbot-reference bot startup-bot context)
+  (setf (chatbot-mcp-servers bot) nil)
+  bot)
+
 (defun shutdown-chatbot (bot &optional context)
   "Closes and stops all MCP servers connected to the chatbot."
-  (let* ((context (or context (chatbot-runtime-context bot)))
-         (startup-bot (ensure-startup-chatbot context)))
-    (dolist (server (chatbot-owned-mcp-servers bot startup-bot))
-      (when (typep server 'mcp-server)
-        (invalidate-mcp-tool-list-cache server))
-      (stop-mcp-server server))
-    (clear-startup-chatbot-reference bot startup-bot context)
-    (setf (chatbot-mcp-servers bot) nil)))
+  (multiple-value-bind (resolved-context startup-bot)
+      (resolve-startup-chatbot-reference bot context)
+    (shutdown-chatbot-owned-mcp-servers bot startup-bot)
+    (finalize-chatbot-shutdown bot startup-bot resolved-context)))
 
 (eval-when (:load-toplevel :execute)
   (maybe-auto-initialize-startup-chatbot))
