@@ -31,6 +31,17 @@
         (route-chat-turn-conversation effective-conversation input context)
         effective-conversation)))
 
+(defun chat-conversation-runtime-context (conversation fallback-context)
+  "Returns CONVERSATION's runtime context, or FALLBACK-CONTEXT when absent."
+  (or (and conversation
+           (chatbot-runtime-context (conversation-chatbot conversation)))
+      fallback-context))
+
+(defun resolve-chat-entry-context (conversation)
+  "Returns the initial runtime context for a public chat entry."
+  (or (chat-conversation-runtime-context conversation nil)
+      (resolve-runtime-context nil :sync-from-globals-p t)))
+
 (defun call-with-active-chat-conversation (conversation context thunk)
   "Calls THUNK with CONVERSATION recorded as the current active conversation for CONTEXT."
   (let ((previous-active-conversation (current-active-conversation context)))
@@ -172,23 +183,26 @@
   (call-with-runtime-context
    context
    (lambda ()
-     (let ((active-conversation (resolve-chat-conversation conversation context)))
-       (call-with-active-chat-conversation
-        active-conversation
-        context
+     (let* ((active-conversation (resolve-chat-conversation conversation context))
+            (active-context (chat-conversation-runtime-context active-conversation context)))
+       (call-with-runtime-context
+        active-context
         (lambda ()
-          (funcall thunk active-conversation)))))))
+          (call-with-active-chat-conversation
+           active-conversation
+           active-context
+           (lambda ()
+             (funcall thunk active-conversation active-context)))))))))
 
 (defun chat (input &key conversation callback file files (temperature nil temperaturep) (top-p nil top-pp))
   "Sends user input to the active conversation using the appropriate backend API.
 If a callback is provided, each text token is passed to it in real-time.
 Returns the complete response text."
-  (let ((context (and conversation
-                     (chatbot-runtime-context (conversation-chatbot conversation)))))
+  (let ((context (resolve-chat-entry-context conversation)))
     (execute-chat-entry-shell
      conversation
      context
-     (lambda (active-conversation)
+     (lambda (active-conversation active-context)
        (apply-and-checkpoint-chat-turn-result
         (chat-turn input
                    :conversation active-conversation
@@ -199,4 +213,4 @@ Returns the complete response text."
                    :temperature-specified-p temperaturep
                    :top-p top-p
                    :top-p-specified-p top-pp
-                   :context context))))))
+                   :context active-context))))))

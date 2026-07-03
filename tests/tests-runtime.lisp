@@ -27,6 +27,47 @@
         (setf *default-conversation* original-default-conversation)
         (setf (runtime-context-default-conversation *default-runtime-context*) original-context-default)))))
 
+(fiveam:test test-chat-with-ambient-default-conversation-uses-conversation-runtime-context
+  (let* ((custom-context (make-runtime-context))
+        (conv (new-chat :backend :google :runtime-context custom-context))
+        (legacy-http-called-p nil)
+        (context-http-called-p nil)
+        (original-default-conversation *default-conversation*)
+        (original-context-default (runtime-context-default-conversation *default-runtime-context*))
+        (original-gemini-api-key-function *gemini-api-key-function*)
+        (original-http-post-function *http-post-function*)
+        (checkpoint-file (merge-pathnames "DefaultConversation.json" (minions-data-directory))))
+    (when (probe-file checkpoint-file)
+      (delete-file checkpoint-file))
+    (setf (runtime-context-gemini-api-key-function custom-context)
+         (lambda ()
+           "context-google-api-key"))
+    (setf (runtime-context-http-post-function custom-context)
+         (lambda (url &rest args)
+           (declare (ignore url args))
+           (setf context-http-called-p t)
+           (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from ambient context\"}], \"role\": \"model\"}}]}" 200)))
+    (unwind-protect
+        (progn
+          (setf *default-conversation* conv)
+          (setf *gemini-api-key-function*
+                (lambda ()
+                  (error "ambient legacy gemini key function should not be used")))
+          (setf *http-post-function*
+                (lambda (url &rest args)
+                  (declare (ignore url args))
+                  (setf legacy-http-called-p t)
+                  (error "ambient legacy http function should not be used")))
+          (fiveam:is (string= "Hello from ambient context" (chat "Hello ambient runtime context")))
+          (fiveam:is-true context-http-called-p)
+          (fiveam:is-false legacy-http-called-p))
+      (setf *default-conversation* original-default-conversation)
+      (setf (runtime-context-default-conversation *default-runtime-context*) original-context-default)
+      (setf *gemini-api-key-function* original-gemini-api-key-function)
+      (setf *http-post-function* original-http-post-function)
+      (when (probe-file checkpoint-file)
+        (delete-file checkpoint-file)))))
+
 (fiveam:test test-make-runtime-context-inherits-default-conversation-from-canonical-context-not-legacy-global
   (let* ((default-context *default-runtime-context*)
         (legacy-conversation (new-chat))

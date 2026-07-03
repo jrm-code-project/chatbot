@@ -616,7 +616,10 @@
   "Forcefully terminates LOOP's worker thread when it is still alive."
   (let ((thread (agentic-loop-thread loop)))
     (when (and thread (sb-thread:thread-alive-p thread))
-      (sb-thread:terminate-thread thread)))
+      (handler-case
+          (sb-thread:terminate-thread thread)
+        (sb-thread:interrupt-thread-error ()
+          nil))))
   (setf (agentic-loop-thread loop) nil)
   loop)
 
