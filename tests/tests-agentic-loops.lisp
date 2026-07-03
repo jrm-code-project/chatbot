@@ -46,6 +46,30 @@ blind polling alone under heavier full-suite load."
                               :runtime-context (chatbot-runtime-context (conversation-chatbot conversation)))))
       (fiveam:is (= 180.0d0 (agentic-loop-supervisor-timeout-seconds loop))))))
 
+(fiveam:test test-clone-conversation-for-agentic-loop-aggressively-trims-start-context
+  (let* ((conversation (new-chat :backend :gemini))
+         (messages '((("role" . "system") ("content" . "old system echo"))
+                      (("role" . "assistant") ("content" . "old assistant"))
+                      (("role" . "user") ("content" . "user 1"))
+                      (("role" . "assistant") ("content" . "assistant 1"))
+                      (("role" . "user") ("content" . "user 2"))
+                      (("role" . "assistant") ("content" . "assistant 2"))
+                      (("role" . "user") ("content" . "user 3"))
+                      (("role" . "assistant") ("content" . "assistant 3")))))
+    (setf (conversation-persona-memory conversation) "Stored persona memory.")
+    (setf (conversation-persona-diary-entries conversation) '("Diary 1" "Diary 2"))
+    (setf (conversation-interaction-id conversation) "remote-state")
+    (setf (conversation-messages conversation) messages)
+    (let ((cloned (clone-conversation-for-agentic-loop conversation)))
+      (fiveam:is (null (conversation-persona-memory cloned)))
+      (fiveam:is (null (conversation-persona-diary-entries cloned)))
+      (fiveam:is (null (conversation-interaction-id cloned)))
+      (fiveam:is (= 6 (length (conversation-messages cloned))))
+      (fiveam:is (equal '(("role" . "user") ("content" . "user 1"))
+                        (first (conversation-messages cloned))))
+      (fiveam:is (equal '(("role" . "assistant") ("content" . "assistant 3"))
+                        (alexandria:lastcar (conversation-messages cloned)))))))
+
 (fiveam:test test-start-agentic-loop-completes-and-records-result
   (let ((*agentic-loop-chat-function*
          (lambda (prompt &key conversation callback file files temperature top-p)
