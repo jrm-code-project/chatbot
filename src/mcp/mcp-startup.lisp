@@ -128,6 +128,14 @@
                 :args args
                 :required-p required-p))
 
+(defun valid-mcp-startup-entry-definition-p (name command)
+  "Returns true when NAME and COMMAND form a valid startup entry definition."
+  (and name command))
+
+(defun invalid-mcp-startup-entry-message ()
+  "Returns the canonical invalid startup entry error message."
+  "Invalid MCP server definition: missing required name or command.")
+
 (defun mark-mcp-startup-entry-failed (entry message)
   "Marks ENTRY as failed with MESSAGE and logs the failure."
   (setf (mcp-startup-entry-error-message entry) message)
@@ -137,39 +145,57 @@
                                message))
   entry)
 
+(defun cleanup-failed-mcp-startup-entry-server (server)
+  "Stops partially initialized startup ENTRY SERVERs after failure."
+  (when server
+    (stop-mcp-server server)))
+
+(defun launch-mcp-startup-entry-server (entry environment)
+  "Launches the MCP server for startup ENTRY using ENVIRONMENT when present."
+  (if environment
+     (start-mcp-server (mcp-startup-entry-name entry)
+                       (mcp-startup-entry-command entry)
+                       (mcp-startup-entry-args entry)
+                       environment)
+     (start-mcp-server (mcp-startup-entry-name entry)
+                       (mcp-startup-entry-command entry)
+                       (mcp-startup-entry-args entry))))
+
+(defun mark-mcp-startup-entry-succeeded (entry server)
+  "Marks startup ENTRY as successful with initialized SERVER."
+  (setf (mcp-startup-entry-success-p entry) t)
+  (setf (mcp-startup-entry-server entry) server)
+  entry)
+
 (defun initialize-mcp-startup-entry (entry environment)
   "Starts and initializes ENTRY, mutating it with the resulting status."
   (let ((server nil))
     (handler-case
        (progn
-         (setf server (if environment
-                          (start-mcp-server (mcp-startup-entry-name entry)
-                                            (mcp-startup-entry-command entry)
-                                            (mcp-startup-entry-args entry)
-                                            environment)
-                          (start-mcp-server (mcp-startup-entry-name entry)
-                                            (mcp-startup-entry-command entry)
-                                            (mcp-startup-entry-args entry))))
+         (setf server (launch-mcp-startup-entry-server entry environment))
          (mcp-initialize server)
-         (setf (mcp-startup-entry-success-p entry) t)
-         (setf (mcp-startup-entry-server entry) server)
-         entry)
+         (mark-mcp-startup-entry-succeeded entry server))
      (error (e)
-       (when server
-         (stop-mcp-server server))
+       (cleanup-failed-mcp-startup-entry-server server)
        (mark-mcp-startup-entry-failed entry (princ-to-string e))))))
 
-(defun startup-entry-from-server-definition (cfg)
-  "Returns one startup entry initialized from raw server definition CFG."
+(defun startup-entry-init-args-from-server-definition (cfg)
+  "Returns normalized startup-entry initialization data parsed from CFG."
   (multiple-value-bind (name command args required-p environment system-instruction)
      (parse-mcp-server-def cfg)
     (declare (ignore system-instruction))
+    (values name command args required-p environment)))
+
+(defun startup-entry-from-server-definition (cfg)
+  "Returns one startup entry initialized from raw server definition CFG."
+  (multiple-value-bind (name command args required-p environment)
+     (startup-entry-init-args-from-server-definition cfg)
     (let ((entry (make-mcp-startup-entry name command args required-p)))
-     (if (and name command)
+     (if (valid-mcp-startup-entry-definition-p name command)
          (initialize-mcp-startup-entry entry environment)
          (mark-mcp-startup-entry-failed
           entry
-          "Invalid MCP server definition: missing required name or command.")))))
+          (invalid-mcp-startup-entry-message))))))
 
 (defun initialize-mcp-startup-entries (raw-list)
   "Initializes startup entries for RAW-LIST server definitions."

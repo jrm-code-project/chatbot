@@ -156,9 +156,39 @@
     (fiveam:is (equal '(("MEMORY_FILE_PATH" . "persona-memory.json")) environment))
     (fiveam:is (string= "memory tools" system-instruction))))
 
+(fiveam:test test-startup-entry-from-server-definition-marks-invalid-definitions-failed
+  (let ((entry (startup-entry-from-server-definition '(:name "broken-server"))))
+    (fiveam:is (typep entry 'mcp-startup-entry))
+    (fiveam:is-false (mcp-startup-entry-success-p entry))
+    (fiveam:is (string= "broken-server" (mcp-startup-entry-name entry)))
+    (fiveam:is (string= "Invalid MCP server definition: missing required name or command."
+                       (mcp-startup-entry-error-message entry)))))
+
+(fiveam:test test-initialize-mcp-startup-entry-stops-server-after-initialize-failure
+  (let* ((entry (make-mcp-startup-entry "test-server" "sbcl" '("--script" "broken.lisp") nil))
+        (server (make-instance 'mcp-server :name "test-server"))
+        (stopped nil))
+    (let ((*start-mcp-server-function*
+           (lambda (&rest ignored)
+             (declare (ignore ignored))
+             server))
+         (*mcp-initialize-function*
+           (lambda (srv)
+             (declare (ignore srv))
+             (error "initialize failed")))
+         (*stop-mcp-server-function*
+           (lambda (srv)
+             (setf stopped srv))))
+     (let ((result (initialize-mcp-startup-entry entry nil)))
+       (fiveam:is (eq entry result))
+       (fiveam:is-false (mcp-startup-entry-success-p entry))
+       (fiveam:is (eq server stopped))
+       (fiveam:is (string= "initialize failed"
+                           (mcp-startup-entry-error-message entry)))))))
+
 (fiveam:test test-initialize-configured-mcp-server-falls-back-to-built-in-memory-definition
   (let ((captured-name nil)
-        (captured-command nil)
+       (captured-command nil)
         (captured-args nil)
         (captured-environment nil))
     (let ((*read-mcp-config-function* (lambda () nil))
