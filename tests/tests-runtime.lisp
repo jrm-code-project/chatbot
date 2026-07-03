@@ -953,6 +953,88 @@
       (setf *default-conversation* original-legacy-conversation)
       (setf (runtime-context-default-conversation default-context) original-default-conversation))))
 
+(fiveam:test test-call-with-runtime-context-opt-out-does-not-sync-legacy-function-or-approval-seams
+  (let* ((default-context *default-runtime-context*)
+         (context-getenv-function (lambda (name)
+                                   (declare (ignore name))
+                                   "context-env-key"))
+         (legacy-getenv-function (lambda (name)
+                                  (declare (ignore name))
+                                  "legacy-env-key"))
+         (context-approval-function (lambda (&rest ignored)
+                                     (declare (ignore ignored))
+                                     :context-approval))
+         (legacy-approval-function (lambda (&rest ignored)
+                                    (declare (ignore ignored))
+                                    :legacy-approval))
+         (original-default-getenv (runtime-context-getenv-function default-context))
+         (original-default-approval
+           (runtime-context-filesystem-access-approval-function default-context))
+         (original-legacy-getenv *getenv-function*)
+         (original-legacy-approval *filesystem-access-approval-function*))
+    (unwind-protect
+         (progn
+           (setf (runtime-context-getenv-function default-context) context-getenv-function)
+           (setf (runtime-context-filesystem-access-approval-function default-context)
+                context-approval-function)
+           (let ((*getenv-function* legacy-getenv-function)
+                (*filesystem-access-approval-function* legacy-approval-function))
+            (call-with-runtime-context
+             default-context
+             (lambda ())
+             :default-conversation-compatibility-p nil
+             :legacy-function-seam-compatibility-p nil))
+           (fiveam:is (eq context-getenv-function
+                        (runtime-context-getenv-function default-context)))
+           (fiveam:is (eq context-approval-function
+                        (runtime-context-filesystem-access-approval-function
+                         default-context))))
+      (setf (runtime-context-getenv-function default-context) original-default-getenv)
+      (setf (runtime-context-filesystem-access-approval-function default-context)
+           original-default-approval)
+      (setf *getenv-function* original-legacy-getenv)
+      (setf *filesystem-access-approval-function* original-legacy-approval))))
+
+(fiveam:test test-call-with-runtime-context-default-compatibility-still-syncs-legacy-function-and-approval-seams
+  (let* ((default-context *default-runtime-context*)
+         (context-getenv-function (lambda (name)
+                                   (declare (ignore name))
+                                   "context-env-key"))
+         (legacy-getenv-function (lambda (name)
+                                  (declare (ignore name))
+                                  "legacy-env-key"))
+         (context-approval-function (lambda (&rest ignored)
+                                     (declare (ignore ignored))
+                                     :context-approval))
+         (legacy-approval-function (lambda (&rest ignored)
+                                    (declare (ignore ignored))
+                                    :legacy-approval))
+         (original-default-getenv (runtime-context-getenv-function default-context))
+         (original-default-approval
+           (runtime-context-filesystem-access-approval-function default-context))
+         (original-legacy-getenv *getenv-function*)
+         (original-legacy-approval *filesystem-access-approval-function*))
+    (unwind-protect
+         (progn
+           (setf (runtime-context-getenv-function default-context) context-getenv-function)
+           (setf (runtime-context-filesystem-access-approval-function default-context)
+                context-approval-function)
+           (let ((*getenv-function* legacy-getenv-function)
+                (*filesystem-access-approval-function* legacy-approval-function))
+            (call-with-runtime-context
+             default-context
+             (lambda ())))
+           (fiveam:is (eq legacy-getenv-function
+                        (runtime-context-getenv-function default-context)))
+           (fiveam:is (eq legacy-approval-function
+                        (runtime-context-filesystem-access-approval-function
+                         default-context))))
+      (setf (runtime-context-getenv-function default-context) original-default-getenv)
+      (setf (runtime-context-filesystem-access-approval-function default-context)
+           original-default-approval)
+      (setf *getenv-function* original-legacy-getenv)
+      (setf *filesystem-access-approval-function* original-legacy-approval))))
+
 (fiveam:test test-explicit-runtime-context-mcp-config-path-does-not-rely-on-legacy-mirroring
   (let* ((default-context *default-runtime-context*)
          (legacy-path "legacy-config.lisp")

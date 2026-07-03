@@ -81,7 +81,8 @@
         (lambda ()
           (make-runtime-context :agentic-loop-default-backend loop-default-backend
                                 :agentic-loop-default-model loop-default-model))
-        :default-conversation-compatibility-p nil)
+        :default-conversation-compatibility-p nil
+        :legacy-function-seam-compatibility-p nil)
        base-context)))
 
 (defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p)
@@ -131,7 +132,8 @@ configuration, instructions, or preloaded memory."
           (setf (chatbot-mcp-startup-status bot)
                 (startup-chatbot-mcp-status resolved-context)))
         (make-instance 'conversation :chatbot bot)))
-     :default-conversation-compatibility-p nil)))
+     :default-conversation-compatibility-p nil
+     :legacy-function-seam-compatibility-p nil)))
 
 (defun new-chat-persona (persona-name &key runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory (web-tools-p nil web-tools-supplied-p) (enable-git-tools-p nil enable-git-tools-supplied-p) (filesystem-tools-p nil filesystem-tools-supplied-p) (filesystem-read-only-p nil filesystem-read-only-supplied-p) (planner-p nil planner-supplied-p))
   "Creates a new chat session for a given chatbot persona.

@@ -75,4 +75,5 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
      (if (eq source :built-in)
          (default-execute-builtin-chatbot-tool bot tool-name arguments)
          (execute-mcp-tool source tool-name arguments)))
-   :default-conversation-compatibility-p nil))
+   :default-conversation-compatibility-p nil
+   :legacy-function-seam-compatibility-p nil))

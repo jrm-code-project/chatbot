@@ -295,7 +295,8 @@
        resolved-context
        (lambda ()
          (ensure-startup-chatbot-initialized resolved-context strict-required-p))
-       :default-conversation-compatibility-p nil))))
+       :default-conversation-compatibility-p nil
+       :legacy-function-seam-compatibility-p nil))))
 
 (defun maybe-auto-initialize-startup-chatbot (&rest args)
   "Initializes shared MCP servers only when eager startup compatibility is enabled."

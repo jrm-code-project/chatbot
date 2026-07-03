@@ -701,18 +701,23 @@ Only the canonical default runtime context still requires this compatibility she
   "Returns the transient planner parent conversation for CONTEXT."
   "Sets the transient planner parent conversation for CONTEXT.")
 
-(defun call-with-runtime-context (context thunk &key (default-conversation-compatibility-p t))
+(defun call-with-runtime-context (context thunk
+                                 &key
+                                   (default-conversation-compatibility-p t)
+                                   (legacy-function-seam-compatibility-p t))
   "Calls THUNK with the resolved runtime context active.
 Only the canonical default runtime context still requires *DEFAULT-CONVERSATION*
 legacy rebinding. Function seams now resolve through the active runtime context
-directly, with default-context approval compatibility synchronized after the
-call."
+directly, and legacy function/approval seam synchronization only runs when that
+default-context compatibility is still desired."
   (let* ((resolved-context (resolve-runtime-context
-                            context
-                            :sync-from-globals-p default-conversation-compatibility-p))
+                           context
+                           :sync-from-globals-p default-conversation-compatibility-p))
          (default-context-p (default-runtime-context-p resolved-context))
          (default-conversation-compatibility-active-p
-           (and default-context-p default-conversation-compatibility-p)))
+           (and default-context-p default-conversation-compatibility-p))
+         (legacy-function-seam-compatibility-active-p
+          (and default-context-p legacy-function-seam-compatibility-p)))
     (cond
       ((null resolved-context)
        (funcall thunk))
@@ -725,7 +730,7 @@ call."
                       (if default-conversation-compatibility-active-p
                           (call-with-default-conversation-compatibility resolved-context thunk)
                           (funcall thunk))
-                   (when default-context-p
+                   (when legacy-function-seam-compatibility-active-p
                      (setf (runtime-context-getenv-function resolved-context) *getenv-function*)
                      (setf (runtime-context-http-post-function resolved-context) *http-post-function*)
                      (setf (runtime-context-http-get-function resolved-context) *http-get-function*)
