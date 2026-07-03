@@ -112,6 +112,30 @@
       (remhash id (mcp-server-pending-requests server))
       mailbox)))
 
+(defun mcp-drain-pending-requests (server)
+  "Removes and returns all pending request mailboxes for SERVER."
+  (sb-thread:with-mutex ((mcp-server-request-id-lock server))
+    (let ((pending '()))
+      (maphash (lambda (id mailbox)
+                 (push (cons id mailbox) pending))
+               (mcp-server-pending-requests server))
+      (clrhash (mcp-server-pending-requests server))
+      pending)))
+
+(defun make-mcp-request-aborted-message (reason)
+  "Returns the mailbox payload used when an MCP request is aborted for REASON."
+  (list :mcp-request-aborted reason))
+
+(defun mcp-request-aborted-message-p (payload)
+  "Returns true when PAYLOAD is an MCP request-aborted mailbox message."
+  (and (consp payload)
+       (eq (car payload) :mcp-request-aborted)
+       (consp (cdr payload))))
+
+(defun mcp-request-aborted-reason (payload)
+  "Returns the abort reason stored in PAYLOAD."
+  (second payload))
+
 (defun mcp-debug-request-target (method params)
   "Returns a short debug suffix describing the request target when useful."
   (let ((tool-name (and (string= method "tools/call")
@@ -206,6 +230,10 @@
           (force-output (mcp-server-input-stream server))
           (let ((response (trivial-timeout:with-timeout (timeout)
                             (sb-concurrency:receive-message mailbox))))
+            (when (mcp-request-aborted-message-p response)
+              (error "MCP request ~A aborted: ~A"
+                     method
+                     (mcp-request-aborted-reason response)))
              (log-prefixed-message "MCP DEBUG"
                                   (format nil "(~A) <- Response ID ~A received~A"
                                           (mcp-server-name server) id debug-target))

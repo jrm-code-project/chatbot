@@ -1234,6 +1234,32 @@
       (when (sb-thread:thread-alive-p stderr-thread)
         (sb-thread:terminate-thread stderr-thread)))))
 
+(fiveam:test test-default-stop-mcp-server-aborts-pending-requests
+  (let* ((server (make-instance 'mcp-server
+                                :name "test-server"
+                                :input-stream (make-string-output-stream)))
+         (result nil)
+         (worker (sb-thread:make-thread
+                  (lambda ()
+                    (handler-case
+                        (default-mcp-send-request server "tools/list" nil :timeout 10)
+                      (error (e)
+                        (setf result (princ-to-string e))))))))
+    (unwind-protect
+        (progn
+          (loop repeat 100
+                until (> (hash-table-count (mcp-server-pending-requests server)) 0)
+                do (sleep 0.01))
+          (fiveam:is (> (hash-table-count (mcp-server-pending-requests server)) 0))
+          (default-stop-mcp-server server)
+          (sleep 0.1)
+          (fiveam:is-false (sb-thread:thread-alive-p worker))
+          (fiveam:is (stringp result))
+          (fiveam:is (search "aborted" result))
+          (fiveam:is (= 0 (hash-table-count (mcp-server-pending-requests server)))))
+      (when (sb-thread:thread-alive-p worker)
+        (sb-thread:terminate-thread worker)))))
+
 (fiveam:test test-default-start-mcp-server-cleans-up-after-supervision-failure
   (let* ((mock-server-path (merge-pathnames "mock-mcp-server.lisp"
                                             (asdf:system-source-directory :chatbot)))

@@ -211,6 +211,16 @@
   (when (and stream (open-stream-p stream))
     (close stream)))
 
+(defun abort-mcp-server-pending-requests (server name)
+  "Fails all pending request mailboxes for SERVER because NAME is stopping."
+  (dolist (entry (mcp-drain-pending-requests server))
+    (sb-concurrency:send-message
+     (cdr entry)
+     (make-mcp-request-aborted-message
+      (format nil "server ~A stopped before responding to request ~A"
+              name
+              (car entry))))))
+
 (defun wait-for-mcp-server-thread-shutdown (thread)
   "Waits briefly for THREAD to exit after stream/process shutdown."
   (when (and thread (sb-thread:thread-alive-p thread))
@@ -264,6 +274,7 @@
         (input-stream (mcp-server-input-stream server))
         (output-stream (mcp-server-output-stream server))
         (error-stream (mcp-server-error-stream server)))
+    (abort-mcp-server-pending-requests server name)
     (close-mcp-server-stream input-stream)
     (close-mcp-server-stream output-stream)
     (close-mcp-server-stream error-stream)
