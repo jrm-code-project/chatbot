@@ -18,7 +18,7 @@
 (defvar *agentic-loop-chat-function* nil
   "Optional test seam overriding the chat function used by agentic loops.")
 
-(defvar *agentic-loop-supervisor-timeout-seconds* 30.0d0
+(defvar *agentic-loop-supervisor-timeout-seconds* 180.0d0
   "Maximum seconds an in-flight loop step may run before the watchdog restarts it.")
 
 (defvar *agentic-loop-supervisor-max-restarts* 2

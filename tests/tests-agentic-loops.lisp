@@ -37,6 +37,15 @@ blind polling alone under heavier full-suite load."
                (sb-thread:join-thread-error () nil))))
          (sleep 0.01))))
 
+(fiveam:test test-agentic-loop-default-watchdog-timeout-is-three-minutes
+  (let ((conversation (new-chat :backend :openai)))
+    (let ((loop (make-instance 'agentic-loop
+                              :id 1
+                              :goal "Dummy goal"
+                              :conversation conversation
+                              :runtime-context (chatbot-runtime-context (conversation-chatbot conversation)))))
+      (fiveam:is (= 180.0d0 (agentic-loop-supervisor-timeout-seconds loop))))))
+
 (fiveam:test test-start-agentic-loop-completes-and-records-result
   (let ((*agentic-loop-chat-function*
          (lambda (prompt &key conversation callback file files temperature top-p)
