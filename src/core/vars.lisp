@@ -491,49 +491,78 @@ compatibility-only ambient special variables."
       (sync-default-conversation-from-legacy-global resolved))
     resolved))
 
-(defun runtime-context-function-value (context accessor legacy-symbol &key default-uses-legacy-p)
+(defun runtime-context-function-seam-value (context accessor legacy-symbol)
   "Returns the function seam value for ACCESSOR and LEGACY-SYMBOL."
   (if context
       (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
         (if resolved-context
-            (if (or (active-runtime-context-p resolved-context)
-                   (and default-uses-legacy-p
-                        (default-runtime-context-p resolved-context)))
-               (legacy-global-value legacy-symbol)
-               (runtime-context-accessor-value resolved-context accessor))
+            (runtime-context-accessor-value resolved-context accessor)
             (legacy-global-value legacy-symbol)))
       (legacy-global-value legacy-symbol)))
 
-(defun set-runtime-context-function-value (value context accessor legacy-symbol &key default-uses-legacy-p)
+(defun set-runtime-context-function-seam-value (value context accessor legacy-symbol)
   "Stores VALUE through the function seam bridge for ACCESSOR and LEGACY-SYMBOL."
+  (let ((resolved-context (and context
+                              (resolve-runtime-context context :sync-from-globals-p t))))
+    (if resolved-context
+        (set-runtime-context-accessor-value resolved-context accessor value)
+        (setf (symbol-value legacy-symbol) value)))
+  value)
+
+(defmacro define-runtime-context-function-seam-helper (name accessor legacy-symbol getter-doc setter-doc)
+  `(progn
+     (defun ,name (&optional context)
+       ,getter-doc
+       (runtime-context-function-seam-value context
+                                          ',accessor
+                                          ',legacy-symbol))
+     (defun (setf ,name) (value &optional context)
+       ,setter-doc
+       (set-runtime-context-function-seam-value value
+                                              context
+                                              ',accessor
+                                              ',legacy-symbol))))
+
+(defun runtime-context-approval-function-value (context accessor legacy-symbol)
+  "Returns the approval function seam value for ACCESSOR and LEGACY-SYMBOL."
+  (if context
+      (let ((resolved-context (resolve-runtime-context context :sync-from-globals-p t)))
+        (if resolved-context
+            (if (and (active-runtime-context-p resolved-context)
+                     (default-runtime-context-p resolved-context))
+                (legacy-global-value legacy-symbol)
+                (runtime-context-accessor-value resolved-context accessor))
+            (legacy-global-value legacy-symbol)))
+      (legacy-global-value legacy-symbol)))
+
+(defun set-runtime-context-approval-function-value (value context accessor legacy-symbol)
+  "Stores approval VALUE through the runtime-context bridge.
+Default-context active execution still mirrors the legacy special binding for
+compatibility with approval overrides."
   (let ((resolved-context (and context
                               (resolve-runtime-context context :sync-from-globals-p t))))
     (if resolved-context
         (progn
           (set-runtime-context-accessor-value resolved-context accessor value)
-          (when (or (active-runtime-context-p resolved-context)
-                   (and default-uses-legacy-p
-                        (default-runtime-context-p resolved-context)))
+          (when (and (active-runtime-context-p resolved-context)
+                     (default-runtime-context-p resolved-context))
             (setf (symbol-value legacy-symbol) value)))
         (setf (symbol-value legacy-symbol) value)))
   value)
 
-(defmacro define-runtime-context-function-helper (name accessor legacy-symbol getter-doc setter-doc
-                                                 &key default-uses-legacy-p)
+(defmacro define-runtime-context-approval-function-helper (name accessor legacy-symbol getter-doc setter-doc)
   `(progn
      (defun ,name (&optional context)
        ,getter-doc
-       (runtime-context-function-value context
-                                      ',accessor
-                                      ',legacy-symbol
-                                      :default-uses-legacy-p ,default-uses-legacy-p))
+       (runtime-context-approval-function-value context
+                                              ',accessor
+                                              ',legacy-symbol))
      (defun (setf ,name) (value &optional context)
        ,setter-doc
-       (set-runtime-context-function-value value
-                                          context
-                                          ',accessor
-                                          ',legacy-symbol
-                                          :default-uses-legacy-p ,default-uses-legacy-p))))
+       (set-runtime-context-approval-function-value value
+                                                  context
+                                                  ',accessor
+                                                  ',legacy-symbol))))
 
 (defun runtime-context-owned-value (context accessor)
   "Returns ACCESSOR from the resolved runtime context, preferring the active context."
@@ -690,43 +719,41 @@ as a compatibility alias."
   "Returns the default model for new agentic loops in CONTEXT."
   "Sets the default model for new agentic loops in CONTEXT.")
 
-(define-runtime-context-function-helper current-getenv-function
+(define-runtime-context-function-seam-helper current-getenv-function
   runtime-context-getenv-function
   *getenv-function*
   "Returns the current environment lookup function for CONTEXT."
   "Sets the current environment lookup function for CONTEXT.")
 
-(define-runtime-context-function-helper current-http-post-function
+(define-runtime-context-function-seam-helper current-http-post-function
   runtime-context-http-post-function
   *http-post-function*
   "Returns the current HTTP POST function for CONTEXT."
   "Sets the current HTTP POST function for CONTEXT.")
 
-(define-runtime-context-function-helper current-http-get-function
+(define-runtime-context-function-seam-helper current-http-get-function
   runtime-context-http-get-function
   *http-get-function*
   "Returns the current HTTP GET function for CONTEXT."
   "Sets the current HTTP GET function for CONTEXT.")
 
-(define-runtime-context-function-helper current-gemini-api-key-function
+(define-runtime-context-function-seam-helper current-gemini-api-key-function
   runtime-context-gemini-api-key-function
   *gemini-api-key-function*
   "Returns the current Gemini API key lookup function for CONTEXT."
   "Sets the current Gemini API key lookup function for CONTEXT.")
 
-(define-runtime-context-function-helper current-filesystem-access-approval-function
+(define-runtime-context-approval-function-helper current-filesystem-access-approval-function
   runtime-context-filesystem-access-approval-function
   *filesystem-access-approval-function*
   "Returns the current filesystem access approval function for CONTEXT."
-  "Sets the current filesystem access approval function for CONTEXT."
-  :default-uses-legacy-p t)
+  "Sets the current filesystem access approval function for CONTEXT.")
 
-(define-runtime-context-function-helper current-eval-approval-function
+(define-runtime-context-approval-function-helper current-eval-approval-function
   runtime-context-eval-approval-function
   *eval-approval-function*
   "Returns the current eval approval function for CONTEXT."
-  "Sets the current eval approval function for CONTEXT."
-  :default-uses-legacy-p t)
+  "Sets the current eval approval function for CONTEXT.")
 
 (define-transient-runtime-context-helper current-active-conversation
   runtime-context-active-conversation

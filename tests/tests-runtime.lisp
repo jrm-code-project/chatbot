@@ -435,6 +435,32 @@
                          (funcall (current-filesystem-access-approval-function context)))))
       (setf *filesystem-access-approval-function* original-approval-function))))
 
+(fiveam:test test-default-runtime-context-filesystem-approval-keeps-active-legacy-override
+  (let* ((default-context *default-runtime-context*)
+        (original-approval-function *filesystem-access-approval-function*)
+        (original-default-approval
+          (runtime-context-filesystem-access-approval-function default-context)))
+    (unwind-protect
+       (progn
+         (setf (runtime-context-filesystem-access-approval-function default-context)
+               (lambda (&rest ignored)
+                 (declare (ignore ignored))
+                 :context-approval))
+         (fiveam:is (eq :context-approval
+                        (funcall (current-filesystem-access-approval-function default-context))))
+         (let ((*filesystem-access-approval-function* (lambda (&rest ignored)
+                                                        (declare (ignore ignored))
+                                                        :legacy-approval)))
+           (call-with-runtime-context
+            default-context
+            (lambda ()
+              (fiveam:is (eq :legacy-approval
+                             (funcall (current-filesystem-access-approval-function
+                                       default-context))))))))
+      (setf *filesystem-access-approval-function* original-approval-function)
+      (setf (runtime-context-filesystem-access-approval-function default-context)
+           original-default-approval))))
+
 (fiveam:test test-explicit-runtime-context-startup-chatbot-does-not-rely-on-legacy-mirroring
   (let* ((default-context *default-runtime-context*)
          (legacy-startup-bot (make-instance 'chatbot))
