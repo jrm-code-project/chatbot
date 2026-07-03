@@ -1124,3 +1124,18 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
          (fiveam:is (search "State Digest" (cdr (assoc "content" (first history) :test #'string=))))
          (fiveam:is (string= "Mocked response."
                              (cdr (assoc "content" (car (last history)) :test #'string=)))))))))
+
+(fiveam:test test-context-pruning-kept-suffix-starts-at-user-boundary
+  (let* ((*context-pruning-threshold-characters* nil)
+         (*context-pruning-estimated-max-tokens* 12)
+         (*context-pruning-estimated-target-tokens* 10)
+         (history (list (list (cons "role" "user") (cons "content" (make-string 40 :initial-element #\A)))
+                       (list (cons "role" "model") (cons "content" "m1"))
+                       (list (cons "role" "user") (cons "content" "u2"))
+                       (list (cons "role" "model") (cons "content" "m2"))
+                       (list (cons "role" "user") (cons "content" "u3"))
+                       (list (cons "role" "model") (cons "content" "m3"))))
+         (kept (select-recent-messages-for-pruning history)))
+    (fiveam:is (string= "user" (cdr (assoc "role" (first kept) :test #'string=))))
+    (fiveam:is (equal '(("role" . "user") ("content" . "u2"))
+                     (first kept)))))

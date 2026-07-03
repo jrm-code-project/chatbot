@@ -460,6 +460,11 @@ Use NEW-CHAT instead when no persona should be loaded."
   "Returns a coarse token estimate for one conversation MESSAGE."
   (estimate-text-token-count (message-content-string message)))
 
+(defun message-role-string (message)
+  "Returns MESSAGE's role as a lowercase string when present."
+  (let ((role (cdr (assoc "role" message :test #'string=))))
+    (and role (string-downcase role))))
+
 (defun estimated-history-token-count (messages)
   "Returns a coarse token estimate for MESSAGES."
   (loop for message in messages
@@ -487,12 +492,23 @@ Use NEW-CHAT instead when no persona should be loaded."
         (target-tokens (effective-context-pruning-target-tokens))
         (kept nil)
         (kept-tokens 0))
-    (dolist (message (reverse history) (nreverse kept))
+    (dolist (message (reverse history))
       (let ((message-tokens (estimate-message-token-count message)))
         (when (or (< (length kept) minimum-keep-count)
                   (<= (+ kept-tokens message-tokens) target-tokens))
           (push message kept)
-          (incf kept-tokens message-tokens))))))
+          (incf kept-tokens message-tokens))))
+    (let* ((first-user-index
+             (position-if (lambda (message)
+                            (string= "user" (or (message-role-string message) "")))
+                          kept)))
+      (cond
+        ((or (null kept) (zerop first-user-index))
+         kept)
+        (first-user-index
+         (subseq kept first-user-index))
+        (t
+         kept)))))
 
 (defun prune-conversation-context-if-needed (conversation)
   "Returns CONVERSATION's effective history after pruning oversized context when needed."
