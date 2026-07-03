@@ -628,3 +628,26 @@
         (fiveam:is (equal '("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
                             "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-latest:generateContent")
                           (nreverse captured-urls)))))))
+
+(fiveam:test test-google-chat-retries-malformed-function-call-on-gemini-pro-latest
+  (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
+        (conv (make-instance 'conversation :chatbot bot))
+        (call-count 0)
+        (captured-urls nil))
+    (let ((*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore args))
+             (incf call-count)
+             (push url captured-urls)
+             (values
+              (if (= call-count 1)
+                  "{\"candidates\":[{\"content\":{},\"finishReason\":\"MALFORMED_FUNCTION_CALL\",\"finishMessage\":\"Malformed function call: Failed to parse function call: Function call is empty - no input to parse.\"}]}"
+                  "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Recovered after malformed function call\"}],\"role\":\"model\"}}]}")
+              200))))
+      (let ((res (chat-google bot "Retry malformed function call" conv nil)))
+       (fiveam:is (= 2 call-count))
+       (fiveam:is (string= "Recovered after malformed function call" res))
+       (fiveam:is (equal '("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
+                           "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-latest:generateContent")
+                         (nreverse captured-urls)))))))

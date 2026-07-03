@@ -505,6 +505,11 @@ Paragraph two." s))
                    (declare (ignore command args environment))
                    (make-instance 'mcp-server :name name)))
                (*mcp-initialize-function* (lambda (server) server))
+               (*mcp-send-request-function*
+                 (lambda (server method params &key timeout)
+                   (declare (ignore server params timeout))
+                   (when (string= "tools/list" method)
+                     '((:tools . (((:name . "read_graph"))))))))
                (*persona-memory-compression-thread-function*
                  (lambda (thunk thread-name)
                    (declare (ignore thread-name))
@@ -727,6 +732,11 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                           (declare (ignore command args environment))
                           (make-instance 'mcp-server :name name)))
                       (*mcp-initialize-function* (lambda (server) server))
+                      (*mcp-send-request-function*
+                        (lambda (server method params &key timeout)
+                          (declare (ignore server params timeout))
+                          (when (string= "tools/list" method)
+                            '((:tools . (((:name . "read_graph"))))))))
                       (*persona-memory-compression-thread-function*
                         (lambda (thunk thread-name)
                           (declare (ignore thread-name))
@@ -761,7 +771,8 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (mock-home (merge-pathnames "mock-home-persona-memory-server/" temp-dir))
         (personas-dir (merge-pathnames ".Personas/" mock-home))
         (test-persona-dir (merge-pathnames "persona-memory-server/" personas-dir))
-        (captured-environment nil))
+        (captured-environment nil)
+        (tools-listed-p nil))
     (ensure-directories-exist test-persona-dir)
     (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
                       :direction :output
@@ -781,6 +792,14 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                   (setf captured-environment environment)
                   (make-instance 'mcp-server :name name)))
               (*mcp-initialize-function* (lambda (server) server))
+              (*mcp-send-request-function*
+                (lambda (server method params &key timeout)
+                  (declare (ignore server params timeout))
+                  (when (string= "tools/list" method)
+                    (setf tools-listed-p t)
+                    '((:tools . (((:name . "read_graph"))
+                                 ((:name . "search_nodes"))
+                                 ((:name . "add_observations"))))))))
               (*persona-memory-compression-thread-function*
                 (lambda (thunk thread-name)
                   (declare (ignore thread-name))
@@ -808,6 +827,9 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
            (fiveam:is (= 1 (length (chatbot-mcp-servers bot))))
            (fiveam:is (string= "memory"
                                (mcp-server-name (car (chatbot-mcp-servers bot)))))
+           (fiveam:is (not (null tools-listed-p)))
+           (fiveam:is (mcp-server-tool-list-cache-valid-p
+                       (car (chatbot-mcp-servers bot))))
            (fiveam:is (string= (namestring memory-path)
                                (cdr (assoc "MEMORY_FILE_PATH"
                                            captured-environment
@@ -820,6 +842,40 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                              (test-json-elements
                               (test-json-value-any entity-record
                                                    '("observations" :observations)))))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-persona-memory-json-errors-when-memory-server-has-no-graph-tools
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-persona-memory-no-tools/" temp-dir))
+        (personas-dir (merge-pathnames ".Personas/" mock-home))
+        (test-persona-dir (merge-pathnames "persona-memory-no-tools/" personas-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "(:model \"models/gemini-mock-model\" :googleapi :google-api)" s))
+    (with-open-file (s (merge-pathnames "memory.json" test-persona-dir)
+                      :direction :output
+                      :if-exists :supersede)
+      (write-line "{\"entities\":[],\"relations\":[]}" s))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home))
+              (*start-mcp-server-function*
+                (lambda (name command args &optional environment)
+                  (declare (ignore name command args environment))
+                  (make-instance 'mcp-server :name "memory")))
+              (*mcp-initialize-function* (lambda (server) server))
+              (*mcp-send-request-function*
+                (lambda (server method params &key timeout)
+                  (declare (ignore server params timeout))
+                  (when (string= "tools/list" method)
+                    '((:tools . (((:name . "unrelated_tool"))))))))
+              (*persona-memory-compression-thread-function*
+                (lambda (thunk thread-name)
+                  (declare (ignore thunk thread-name))
+                  :not-started)))
+          (fiveam:signals error
+            (new-chat-persona "persona-memory-no-tools")))
       (uiop:delete-directory-tree mock-home :validate t))))
 
 (fiveam:test test-save-compressed-persona-memory-from-graph-json
@@ -888,6 +944,11 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                   (declare (ignore command args environment))
                   (make-instance 'mcp-server :name name)))
               (*mcp-initialize-function* (lambda (server) server))
+              (*mcp-send-request-function*
+                (lambda (server method params &key timeout)
+                  (declare (ignore server params timeout))
+                  (when (string= "tools/list" method)
+                    '((:tools . (((:name . "read_graph"))))))))
               (*persona-memory-compression-thread-function*
                 (lambda (thunk thread-name)
                   (setf captured-thread-name thread-name)
@@ -960,6 +1021,11 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                   (declare (ignore name command args environment))
                   persona-memory-server))
               (*mcp-initialize-function* (lambda (server) server))
+              (*mcp-send-request-function*
+                (lambda (server method params &key timeout)
+                  (declare (ignore server params timeout))
+                  (when (string= "tools/list" method)
+                    '((:tools . (((:name . "read_graph"))))))))
               (*persona-memory-compression-thread-function*
                 (lambda (thunk thread-name)
                   (declare (ignore thread-name))

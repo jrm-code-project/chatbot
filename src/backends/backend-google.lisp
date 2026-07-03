@@ -13,7 +13,9 @@
 (defun malformed-response-stop-reason-p (stop-reason)
   "Returns true when STOP-REASON indicates the provider malformed the response."
   (and stop-reason
-       (string-equal (princ-to-string stop-reason) "MALFORMED_RESPONSE")))
+       (member (princ-to-string stop-reason)
+               '("MALFORMED_RESPONSE" "MALFORMED_FUNCTION_CALL")
+               :test #'string-equal)))
 
 (defun response-stop-reason (value)
   "Returns a stop or finish reason from VALUE when present."

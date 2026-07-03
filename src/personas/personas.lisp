@@ -378,6 +378,24 @@
                               :if-does-not-exist :create)
         (write-string (persona-memory-graph-json->jsonl json-data) stream)))))
 
+(defun persona-memory-server-tool-name (tool)
+  "Returns TOOL's declared name when present."
+  (or (mcp-val :name tool)
+      (mcp-val "name" tool)))
+
+(defun ensure-persona-memory-server-tools (server)
+  "Ensures SERVER advertises knowledge-graph tools."
+  (let* ((tools-response (mcp-list-tools server))
+        (tools (mcp-val :tools tools-response)))
+    (unless (and tools
+                (find "read_graph"
+                      tools
+                      :test #'string=
+                      :key #'persona-memory-server-tool-name))
+      (error "Persona memory MCP server ~A did not expose knowledge graph tools."
+            (mcp-server-name server)))
+    server))
+
 (defun attach-persona-memory-mcp-server (conversation persona-dir)
   "Attaches a persona-scoped memory MCP server when PERSONA-DIR contains memory.json."
   (let ((memory-json-path (persona-memory-json-path persona-dir)))
@@ -391,9 +409,10 @@
            (log-message :info "Attaching persona memory MCP server"
                         :context `(("path" . ,(namestring memory-json-path))))
            (let* ((persona-memory-server
+                   (ensure-persona-memory-server-tools
                     (initialize-configured-mcp-server
                      "memory"
-                     :environment `(("MEMORY_FILE_PATH" . ,(namestring memory-json-path)))))
+                     :environment `(("MEMORY_FILE_PATH" . ,(namestring memory-json-path))))))
                   (shared-servers
                     (remove-if (lambda (server)
                                  (and (typep server 'mcp-server)
