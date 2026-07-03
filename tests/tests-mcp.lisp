@@ -1126,6 +1126,18 @@
                             (mcp-server-name (car (chatbot-mcp-servers bot)))))
         (fiveam:is (eq status (chatbot-mcp-startup-status bot)))))))
 
+(fiveam:test test-initialize-mcp-servers-without-config-records-empty-status
+  (let* ((bot (make-instance 'chatbot)))
+    (let ((*read-mcp-config-function* (lambda () nil)))
+      (let ((status (initialize-mcp-servers-for-chatbot bot :strict-required-p t)))
+        (fiveam:is (typep status 'mcp-startup-status))
+        (fiveam:is (= 0 (mcp-startup-status-configured-count status)))
+        (fiveam:is (= 0 (mcp-startup-status-successful-count status)))
+        (fiveam:is (= 0 (mcp-startup-status-failed-count status)))
+        (fiveam:is (null (chatbot-mcp-servers bot)))
+        (fiveam:is (eq status (chatbot-mcp-startup-status bot)))
+        (fiveam:is-true (mcp-startup-status-strict-required-p status))))))
+
 (fiveam:test test-initialize-mcp-servers-signals-required-failure-in-strict-mode
   (let* ((bot (make-instance 'chatbot))
          (captured-status nil))

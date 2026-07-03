@@ -246,22 +246,33 @@
                                  (length raw-list)))
     (values servers status)))
 
+(defun apply-and-report-mcp-startup-status (bot servers status strict-required-p)
+  "Stores SERVERS and STATUS on BOT, logs the outcome, and enforces strict policy."
+  (apply-mcp-startup-status bot servers status)
+  (log-mcp-startup-summary status)
+  (signal-mcp-startup-required-failures status strict-required-p)
+  status)
+
+(defun initialize-mcp-startup-status-from-config (bot config strict-required-p)
+  "Builds and applies MCP startup state for BOT from CONFIG."
+  (multiple-value-bind (servers status)
+     (startup-status-from-config config strict-required-p)
+    (apply-and-report-mcp-startup-status bot servers status strict-required-p)))
+
+(defun initialize-empty-mcp-startup-status (bot strict-required-p)
+  "Applies and returns the empty startup status for BOT when no config exists."
+  (apply-empty-mcp-startup-status bot strict-required-p)
+  (log-prefixed-message "MCP INFO"
+                       "No MCP configuration found. Falling back to zero tools.")
+  (chatbot-mcp-startup-status bot))
+
 (defun default-initialize-mcp-servers-for-chatbot (bot &key strict-required-p)
   "Discovers and initializes MCP servers for the chatbot."
   (log-prefixed-message "MCP INFO" "Scanning for MCP configurations...")
   (let ((config (read-mcp-config)))
     (if config
-       (multiple-value-bind (servers status)
-           (startup-status-from-config config strict-required-p)
-         (apply-mcp-startup-status bot servers status)
-         (log-mcp-startup-summary status)
-         (signal-mcp-startup-required-failures status strict-required-p)
-         status)
-       (progn
-         (apply-empty-mcp-startup-status bot strict-required-p)
-         (log-prefixed-message "MCP INFO"
-                               "No MCP configuration found. Falling back to zero tools.")
-         (chatbot-mcp-startup-status bot)))))
+       (initialize-mcp-startup-status-from-config bot config strict-required-p)
+       (initialize-empty-mcp-startup-status bot strict-required-p))))
 
 (defun initialize-mcp-servers-for-chatbot (bot &key strict-required-p)
   "Discovers and initializes MCP servers, honoring the configured test seam when present."
