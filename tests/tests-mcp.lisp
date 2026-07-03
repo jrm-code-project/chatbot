@@ -1260,6 +1260,18 @@
       (when (sb-thread:thread-alive-p worker)
         (sb-thread:terminate-thread worker)))))
 
+(fiveam:test test-mcp-reader-loop-aborts-pending-requests-on-eof
+  (let* ((server (make-instance 'mcp-server
+                                :name "test-server"
+                                :output-stream (make-string-input-stream "")))
+         (mailbox (sb-concurrency:make-mailbox)))
+    (mcp-register-request server 7 mailbox)
+    (mcp-reader-loop server)
+    (let ((message (sb-concurrency:receive-message mailbox)))
+      (fiveam:is (mcp-request-aborted-message-p message))
+      (fiveam:is (search "reader stopped" (mcp-request-aborted-reason message)))
+      (fiveam:is (= 0 (hash-table-count (mcp-server-pending-requests server)))))))
+
 (fiveam:test test-default-start-mcp-server-cleans-up-after-supervision-failure
   (let* ((mock-server-path (merge-pathnames "mock-mcp-server.lisp"
                                             (asdf:system-source-directory :chatbot)))

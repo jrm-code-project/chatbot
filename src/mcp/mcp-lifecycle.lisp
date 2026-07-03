@@ -213,13 +213,12 @@
 
 (defun abort-mcp-server-pending-requests (server name)
   "Fails all pending request mailboxes for SERVER because NAME is stopping."
-  (dolist (entry (mcp-drain-pending-requests server))
-    (sb-concurrency:send-message
-     (cdr entry)
-     (make-mcp-request-aborted-message
-      (format nil "server ~A stopped before responding to request ~A"
-              name
-              (car entry))))))
+  (abort-mcp-pending-requests
+   server
+   (lambda (id)
+     (format nil "server ~A stopped before responding to request ~A"
+             name
+             id))))
 
 (defun wait-for-mcp-server-thread-shutdown (thread)
   "Waits briefly for THREAD to exit after stream/process shutdown."

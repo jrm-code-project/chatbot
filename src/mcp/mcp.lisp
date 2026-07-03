@@ -136,6 +136,15 @@
   "Returns the abort reason stored in PAYLOAD."
   (second payload))
 
+(defun abort-mcp-pending-requests (server reason-builder)
+  "Fails all pending request mailboxes for SERVER using REASON-BUILDER.
+REASON-BUILDER is called with each pending request ID."
+  (dolist (entry (mcp-drain-pending-requests server))
+    (sb-concurrency:send-message
+     (cdr entry)
+     (make-mcp-request-aborted-message
+      (funcall reason-builder (car entry))))))
+
 (defun mcp-debug-request-target (method params)
   "Returns a short debug suffix describing the request target when useful."
   (let ((tool-name (and (string= method "tools/call")
@@ -194,17 +203,32 @@
 
 (defun mcp-reader-loop (server)
   "Asynchronous reader thread loop that parses server's standard output."
-  (let ((stream (mcp-server-output-stream server)))
+  (let ((stream (mcp-server-output-stream server))
+        (name (mcp-server-name server)))
     (handler-case
         (loop for line = (read-line stream nil :eof)
               until (eq line :eof)
               do (let ((json-data (safe-parse-json line)))
                    (when json-data
-                     (mcp-handle-incoming server json-data))))
+                     (mcp-handle-incoming server json-data)))
+              finally
+                 (abort-mcp-pending-requests
+                  server
+                  (lambda (id)
+                    (format nil "server ~A reader stopped before responding to request ~A"
+                            name
+                            id))))
       (error (e)
+        (abort-mcp-pending-requests
+         server
+         (lambda (id)
+           (format nil "server ~A reader failed before responding to request ~A: ~A"
+                   name
+                   id
+                   e)))
         (log-prefixed-message "MCP ERROR"
                               (format nil "Reader thread error for server ~A: ~A"
-                                      (mcp-server-name server)
+                                      name
                                       e))))))
 
 (defun default-mcp-send-request (server method params &key (timeout 10))
