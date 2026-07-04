@@ -54,10 +54,11 @@ These areas should not be treated as fresh debt, but as **partially retired debt
 
 2. **Agentic loop and minion functional cleanup**
    - Loop-step state and minion restoration are clearer than before.
+   - Agentic-loop startup shaping now also lives in a dedicated `src/orchestration/agentic-loop-startup.lisp` module, so startup instruction policy, history trimming, isolated startup sterility, and loop execution-profile selection are no longer interleaved with worker-thread and monitor-thread control flow.
    - Agentic loop supervision now also enforces watchdog-style timeout, failure, and zombie recovery through capped restarts, restart backoff, and last-safe-snapshot restoration in the monitor path.
    - Planner/minion orchestration now also journals agentic task results by immutable input so duplicate `spawnMinion` and `promptSubordinate` executions reuse the first completed result instead of reapplying side effects.
    - Agentic loops and subordinate prompts now also require strict validated JSON control envelopes, so the imperative shell no longer drives retries or spawns from free-form prefixes or regex-matched prose.
-   - Remaining debt: orchestration still depends on global registries, threads, and runtime-context bridging.
+   - Remaining debt: orchestration still depends on global registries, threads, and runtime-context bridging, but the startup-policy slice is now narrower and easier to evolve independently.
 
 3. **Reader vs accessor cleanup**
    - Immutable CLOS slots were tightened in several classes.
