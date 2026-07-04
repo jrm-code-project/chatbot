@@ -264,6 +264,16 @@ Use NEW-CHAT instead when no persona should be loaded."
                 :context `(("name" . ,checkpoint-name)))
     (save-minion-state conversation :checkpoint-name checkpoint-name)))
 
+(defun finalize-chat-turn-result (result &optional conversation)
+  "Applies RESULT, performs post-response compression, checkpoints, and returns the final text."
+  (let ((effective-conversation (or conversation
+                                    (chat-turn-result-conversation result))))
+    (let ((text (apply-chat-turn-result result effective-conversation)))
+      (when effective-conversation
+        (compress-conversation-context-if-needed effective-conversation)
+        (checkpoint-conversation-after-chat effective-conversation))
+      text)))
+
 (defun parse-minion-state-file (file runtime-context)
   "Returns FILE decoded to the normalized restore schema, or NIL after logging a warning."
   (handler-case

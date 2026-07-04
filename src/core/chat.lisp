@@ -50,14 +50,6 @@
          (funcall thunk)
       (setf (current-active-conversation context) previous-active-conversation))))
 
-(defun apply-and-checkpoint-chat-turn-result (result)
-  "Applies RESULT, performs post-response compression, checkpoints, and returns the final text."
-  (let ((effective-conversation (chat-turn-result-conversation result)))
-    (let ((text (apply-chat-turn-result result effective-conversation)))
-      (compress-conversation-context-if-needed effective-conversation)
-      (checkpoint-conversation-after-chat effective-conversation)
-      text)))
-
 (defun chat-backend-dispatch-key (bot)
   "Returns the backend dispatch key for BOT."
   (chatbot-backend bot))
@@ -202,7 +194,7 @@ Returns the complete response text."
      conversation
      context
      (lambda (active-conversation active-context)
-       (apply-and-checkpoint-chat-turn-result
+       (finalize-chat-turn-result
         (chat-turn input
                    :conversation active-conversation
                    :callback callback
