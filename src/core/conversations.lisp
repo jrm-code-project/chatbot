@@ -215,14 +215,23 @@ Use NEW-CHAT instead when no persona should be loaded."
 (defvar *minions-data-directory* nil
   "Seam to override the dynamic minions storage directory in unit tests.")
 
+(defun configured-minions-data-directory ()
+  "Returns the configured minions storage directory from the environment, or NIL."
+  (let ((configured (funcall *getenv-function* "CHATBOT_MINIONS_DATA_DIR")))
+    (when (and configured (string/= configured ""))
+      (uiop:ensure-directory-pathname configured))))
+
+(defun default-minions-data-directory ()
+  "Returns the default per-user runtime directory for minion checkpoint states."
+  (uiop:ensure-directory-pathname
+   (merge-pathnames (make-pathname :directory '(:relative ".chatbot" "data" "minions"))
+                    (funcall *user-homedir-pathname-function*))))
+
 (defun minions-data-directory ()
   "Returns the directory where minion checkpoint states are persisted."
   (or *minions-data-directory*
-      (let* ((base-dir (or (and (find-package "ASDF")
-                                (asdf:system-source-directory "chatbot"))
-                           (uiop:getcwd)))
-             (path (merge-pathnames "data/minions/" base-dir)))
-        (uiop:ensure-directory-pathname path))))
+      (configured-minions-data-directory)
+      (default-minions-data-directory)))
 
 (defun conversation-checkpoint-name (conversation)
   "Returns the persistence name used when checkpointing CONVERSATION."

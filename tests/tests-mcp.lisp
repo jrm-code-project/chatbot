@@ -2023,6 +2023,8 @@
 (fiveam:test test-chat-checkpoint-for-default-conversation
   (let* ((custom-context (make-runtime-context))
          (*default-conversation* (new-chat :backend :google :runtime-context custom-context))
+         (*minions-data-directory* (merge-pathnames "default-conversation-checkpoints/"
+                                                    (uiop:default-temporary-directory)))
          (checkpoint-file (merge-pathnames "DefaultConversation.json" (minions-data-directory))))
     ;; Delete any pre-existing checkpoint
     (when (probe-file checkpoint-file)
@@ -2051,6 +2053,8 @@
 
 (fiveam:test test-restore-conversation-from-checkpoint
   (let* ((filename "TestRestoreConv.json")
+         (*minions-data-directory* (merge-pathnames "restore-conversation-checkpoints/"
+                                                    (uiop:default-temporary-directory)))
          (checkpoint-file (merge-pathnames filename (minions-data-directory)))
          (scoped-directory (uiop:ensure-directory-pathname
                             (merge-pathnames "restore-scope/" (uiop:temporary-directory))))

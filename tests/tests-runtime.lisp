@@ -46,14 +46,16 @@
 
 (fiveam:test test-chat-with-ambient-default-conversation-uses-conversation-runtime-context
   (let* ((custom-context (make-runtime-context))
-        (conv (new-chat :backend :google :runtime-context custom-context))
-        (legacy-http-called-p nil)
-        (context-http-called-p nil)
-        (original-default-conversation *default-conversation*)
-        (original-context-default (runtime-context-default-conversation *default-runtime-context*))
-        (original-gemini-api-key-function *gemini-api-key-function*)
-        (original-http-post-function *http-post-function*)
-        (checkpoint-file (merge-pathnames "DefaultConversation.json" (minions-data-directory))))
+         (conv (new-chat :backend :google :runtime-context custom-context))
+         (legacy-http-called-p nil)
+         (context-http-called-p nil)
+         (original-default-conversation *default-conversation*)
+         (original-context-default (runtime-context-default-conversation *default-runtime-context*))
+         (original-gemini-api-key-function *gemini-api-key-function*)
+         (original-http-post-function *http-post-function*)
+         (*minions-data-directory* (merge-pathnames "runtime-context-checkpoints/"
+                                                    (uiop:default-temporary-directory)))
+         (checkpoint-file (merge-pathnames "DefaultConversation.json" (minions-data-directory))))
     (when (probe-file checkpoint-file)
       (delete-file checkpoint-file))
     (setf (runtime-context-gemini-api-key-function custom-context)
@@ -84,6 +86,33 @@
       (setf *http-post-function* original-http-post-function)
       (when (probe-file checkpoint-file)
         (delete-file checkpoint-file)))))
+
+(fiveam:test test-minions-data-directory-defaults-to-user-runtime-state
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-minions-default/" temp-dir))
+         (*minions-data-directory* nil)
+         (*getenv-function* (lambda (name)
+                              (declare (ignore name))
+                              nil))
+         (*user-homedir-pathname-function* (lambda ()
+                                             mock-home)))
+    (let ((resolved (minions-data-directory)))
+      (fiveam:is (string= (namestring (uiop:ensure-directory-pathname
+                                       (merge-pathnames ".chatbot/data/minions/" mock-home)))
+                          (namestring resolved))))))
+
+(fiveam:test test-minions-data-directory-prefers-environment-override
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (env-dir (merge-pathnames "env-minions-root/" temp-dir))
+         (*minions-data-directory* nil)
+         (*getenv-function* (lambda (name)
+                              (if (string= name "CHATBOT_MINIONS_DATA_DIR")
+                                  (namestring env-dir)
+                                  nil)))
+         (*user-homedir-pathname-function* (lambda ()
+                                             (merge-pathnames "ignored-home/" temp-dir))))
+    (fiveam:is (string= (namestring (uiop:ensure-directory-pathname env-dir))
+                        (namestring (minions-data-directory))))))
 
 (fiveam:test test-make-runtime-context-inherits-default-conversation-from-canonical-context-not-legacy-global
   (let* ((default-context *default-runtime-context*)
