@@ -892,6 +892,14 @@ queued, and :EXHAUSTED when LOOP has no restart budget left."
 (defvar *agentic-loop-monitor-lock* (sb-thread:make-mutex :name "agentic-loop-monitor-lock")
   "Mutex protecting the monitor thread activation state.")
 
+(defvar *agentic-loop-monitor-log-level* :warn
+  "Minimum log level used inside the background monitor thread.")
+
+(defun make-agentic-loop-monitor-runtime-context (&optional template-context)
+  "Returns the runtime context used by the background monitor thread."
+  (runtime-context-with-logging-settings template-context
+                                         :log-level *agentic-loop-monitor-log-level*))
+
 (defun monitor-agentic-loops-once (&optional context)
   "Scans all registered loops and pushes stuck, pending, or zombie loops into valid states."
   (let ((now (get-high-precision-timestamp)))
@@ -998,11 +1006,20 @@ queued, and :EXHAUSTED when LOOP has no restart budget left."
   "Starts the background monitor thread."
   (sb-thread:with-mutex (*agentic-loop-monitor-lock*)
     (unless *agentic-loop-monitor-active*
-      (setf *agentic-loop-monitor-active* t)
-      (setf *agentic-loop-monitor-thread*
-            (sb-thread:make-thread #'run-agentic-loop-monitor
-                                   :name "Agentic-Loop-Monitor"))
-      (log-message :info "Agentic loop monitor started.")))
+      (let ((monitor-context
+              (make-agentic-loop-monitor-runtime-context
+               (or (resolve-runtime-context nil)
+                   *default-runtime-context*))))
+        (setf *agentic-loop-monitor-active* t)
+        (setf *agentic-loop-monitor-thread*
+              (sb-thread:make-thread
+               (lambda ()
+                 (call-with-runtime-context monitor-context
+                                            #'run-agentic-loop-monitor
+                                            :default-conversation-compatibility-p nil
+                                            :legacy-function-seam-compatibility-p nil))
+               :name "Agentic-Loop-Monitor"))
+        (log-message :info "Agentic loop monitor started."))))
   *agentic-loop-monitor-thread*)
 
 (defun stop-agentic-loop-monitor ()

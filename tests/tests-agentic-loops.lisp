@@ -477,6 +477,39 @@ blind polling alone under heavier full-suite load."
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))
 
+(fiveam:test test-monitor-runtime-context-suppresses-info-logs-without-muting-main-thread
+  (let* ((stream (make-string-output-stream))
+         (context (make-runtime-context :logging-enabled-p t
+                                        :log-level :info
+                                        :log-stream stream))
+         (conversation (new-chat :backend :openai :runtime-context context))
+         (loop (make-instance 'agentic-loop
+                              :id (next-agentic-loop-id)
+                              :goal "Reap finished loop"
+                              :conversation conversation
+                              :runtime-context context
+                              :status :completed
+                              :finished-at (- (get-high-precision-timestamp) 301))))
+    (unwind-protect
+        (progn
+          (register-agentic-loop loop)
+          (call-with-runtime-context
+           context
+           (lambda ()
+             (log-message :info "main thread info survives")))
+          (call-with-runtime-context
+           (make-agentic-loop-monitor-runtime-context context)
+           (lambda ()
+             (reap-orphaned-threads-and-sockets)))
+          (let ((output (get-output-stream-string stream)))
+            (fiveam:is (eq :warn (runtime-context-log-level
+                                  (make-agentic-loop-monitor-runtime-context context))))
+            (fiveam:is (search "main thread info survives" output))
+            (fiveam:is-false (search "Reaper: Pruning completed loop" output))
+            (fiveam:is (null (find-agentic-loop (agentic-loop-id loop))))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
 (fiveam:test test-monitor-leaves-exhausted-failed-loop-terminal
   (let* ((*agentic-loop-supervisor-max-restarts* 1)
         (*agentic-loop-supervisor-restart-backoff-seconds* 0.0d0)
