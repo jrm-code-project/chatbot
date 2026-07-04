@@ -199,6 +199,86 @@
      :malformed-response-fallback-attempted-p
      (getf state :malformed-response-fallback-attempted-p))))
 
+(defun google-tool-arguments-log-label (name tool-call)
+  "Returns the debug label for one Google tool request."
+  (declare (ignore tool-call))
+  (format nil "Google tool arguments for ~A" name))
+
+(defun google-function-response-message (name response-payload)
+  "Returns one Google functionResponse user message for NAME and RESPONSE-PAYLOAD."
+  `(("role" . "user")
+    ("parts" . ,(vector
+                (list (cons "functionResponse"
+                            `(("name" . ,name)
+                              ("response" . ,response-payload))))))))
+
+(defun google-tool-success-message (id name args-str res-text tool-call)
+  "Returns the Google tool success response message."
+  (declare (ignore id args-str tool-call))
+  (google-function-response-message name `(("result" . ,res-text))))
+
+(defun google-tool-error-message (id name args-str condition tool-call)
+  "Returns the Google tool error response message."
+  (declare (ignore id args-str tool-call))
+  (google-function-response-message name
+                                   (chatbot-tool-error-payload name condition)))
+
+(defun google-tool-call-model-message (tool-call)
+  "Returns the Google model-side functionCall message for TOOL-CALL."
+  (let* ((name (cdr (assoc :name tool-call)))
+        (raw-args (cdr (assoc :raw-args tool-call)))
+        (payload-args (if raw-args
+                          (json-encodable-value raw-args)
+                          (empty-json-object)))
+        (thought-signature (cdr (assoc :thought-signature tool-call))))
+    `(("role" . "model")
+     ("parts" . ,(vector
+                  (append
+                   `(("functionCall" . (("name" . ,name)
+                                        ("args" . ,payload-args))))
+                   (when thought-signature
+                     `(("thoughtSignature" . ,thought-signature)))))))))
+
+(defun google-tool-recursion-messages (tool-calls tool-results)
+  "Returns the Google recursion messages formed from TOOL-CALLS and TOOL-RESULTS."
+  (append (list (google-tool-call-model-message (car tool-calls)))
+         tool-results))
+
+(defun google-tool-recursion-state (bot conversation outcome recursive-history recursion-messages)
+  "Returns the next Google request state after one tool-recursion round."
+  (google-request-state
+   bot
+   nil
+   conversation
+   (getf outcome :file-attachments)
+   (getf outcome :effective-model)
+   (getf outcome :effective-generation-config)
+   :request-contents (append (getf outcome :request-contents)
+                            recursion-messages)
+   :history-messages recursive-history
+   :malformed-response-fallback-attempted-p
+   (getf outcome :malformed-response-fallback-attempted-p)))
+
+(defun continue-google-provider-tool-recursion (bot conversation outcome next-depth step)
+  "Continues the Google turn loop after the model requested tool execution."
+  (continue-stateless-provider-tool-recursion
+   bot
+   (getf outcome :history-messages)
+   (provider-turn-outcome-tool-calls outcome)
+   #'google-tool-arguments-log-label
+   #'google-tool-success-message
+   #'google-tool-recursion-messages
+   (lambda (recursive-history recursion-messages)
+     (funcall step
+             (google-tool-recursion-state
+              bot
+              conversation
+              outcome
+              recursive-history
+              recursion-messages)
+             next-depth))
+   :error-builder #'google-tool-error-message))
+
 (defun google-final-text-retryable-p (bot state final-text)
   "Returns true when FINAL-TEXT should trigger the gemini-pro-latest retry path."
   (and (or (null final-text)
@@ -324,61 +404,8 @@
            :continue-with-tools
            (lambda (state outcome next-depth step)
              (declare (ignore state))
-             (continue-stateless-provider-tool-recursion
-              bot
-              (getf outcome :history-messages)
-              (provider-turn-outcome-tool-calls outcome)
-              (lambda (name tool-call)
-                (declare (ignore tool-call))
-                (format nil "Google tool arguments for ~A" name))
-              (lambda (id name args-str res-text tool-call)
-                (declare (ignore id args-str))
-                (let ((response-payload `(("result" . ,res-text))))
-                  `(("role" . "user")
-                   ("parts" . ,(vector
-                                (list (cons "functionResponse"
-                                            `(("name" . ,name)
-                                              ("response" . ,response-payload)))))))))
-              (lambda (tool-calls tool-results)
-                (let* ((tool-call (car tool-calls))
-                      (name (cdr (assoc :name tool-call)))
-                      (raw-args (cdr (assoc :raw-args tool-call)))
-                      (payload-args (if raw-args
-                                        (json-encodable-value raw-args)
-                                        (empty-json-object)))
-                      (thought-signature (cdr (assoc :thought-signature tool-call)))
-                      (model-msg `(("role" . "model")
-                                   ("parts" . ,(vector
-                                                (append
-                                                 `(("functionCall" . (("name" . ,name) ("args" . ,payload-args))))
-                                                 (when thought-signature
-                                                   `(("thoughtSignature" . ,thought-signature)))))))))
-                  (append (list model-msg)
-                         tool-results)))
-              (lambda (recursive-history recursion-messages)
-                (funcall step
-                        (google-request-state
-                         bot
-                         nil
-                         conversation
-                         (getf outcome :file-attachments)
-                         (getf outcome :effective-model)
-                         (getf outcome :effective-generation-config)
-                         :request-contents (append (getf outcome :request-contents)
-                                                   recursion-messages)
-                         :history-messages recursive-history
-                         :malformed-response-fallback-attempted-p
-                         (getf outcome :malformed-response-fallback-attempted-p))
-                        next-depth))
-              :error-builder
-              (lambda (id name args-str condition tool-call)
-                (declare (ignore id args-str tool-call))
-                (let ((response-payload (chatbot-tool-error-payload name condition)))
-                  `(("role" . "user")
-                   ("parts" . ,(vector
-                                (list (cons "functionResponse"
-                                            `(("name" . ,name)
-                                              ("response" . ,response-payload)))))))))))
+             (continue-google-provider-tool-recursion
+              bot conversation outcome next-depth step))
            :finalize-turn
            (lambda (state outcome)
              (finish-stateless-text-turn (getf state :history-messages)
