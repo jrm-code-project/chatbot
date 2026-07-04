@@ -55,6 +55,47 @@
       ("content" . nil)
       ("tool_calls" . ,assistant-tool-calls))))
 
+(defun openai-tool-arguments-log-label (name tool-call)
+  "Returns the debug label for one OpenAI-compatible tool request."
+  (declare (ignore tool-call))
+  (format nil "OpenAI tool arguments for ~A" name))
+
+(defun openai-tool-recursion-messages (tool-calls ordered-tool-responses)
+  "Returns the OpenAI recursion messages formed from TOOL-CALLS and ORDERED-TOOL-RESPONSES."
+  (append (list (openai-assistant-tool-call-message tool-calls))
+          ordered-tool-responses))
+
+(defun openai-tool-recursion-state (bot conversation outcome recursive-history recursion-messages)
+  "Returns the next OpenAI request state after one tool-recursion round."
+  (openai-request-state bot
+                        nil
+                        conversation
+                        (getf outcome :file-attachments)
+                        (getf outcome :effective-generation-config)
+                        :history-messages recursive-history
+                        :request-messages (append (getf outcome :request-messages)
+                                                  recursion-messages)))
+
+(defun continue-openai-provider-tool-recursion (bot conversation outcome next-depth step)
+  "Continues the OpenAI-compatible turn loop after the model requested tool execution."
+  (continue-stateless-provider-tool-recursion
+   bot
+   (getf outcome :history-messages)
+   (provider-turn-outcome-tool-calls outcome)
+   #'openai-tool-arguments-log-label
+   #'openai-tool-result-message
+   #'openai-tool-recursion-messages
+   (lambda (recursive-history recursion-messages)
+     (funcall step
+              (openai-tool-recursion-state
+               bot
+               conversation
+               outcome
+               recursive-history
+               recursion-messages)
+              next-depth))
+   :error-builder #'openai-tool-error-message))
+
 (defun openai-request-target (bot)
   "Returns BOT's resolved backend, API key, base URL, and backend label."
   (let ((backend (chatbot-backend bot)))
@@ -266,29 +307,8 @@
            :continue-with-tools
            (lambda (state outcome next-depth step)
              (declare (ignore state))
-             (continue-stateless-provider-tool-recursion
-              bot
-              (getf outcome :history-messages)
-              (provider-turn-outcome-tool-calls outcome)
-              (lambda (name tool-call)
-                (declare (ignore tool-call))
-                (format nil "OpenAI tool arguments for ~A" name))
-              #'openai-tool-result-message
-              (lambda (tool-calls ordered-tool-responses)
-                (append (list (openai-assistant-tool-call-message tool-calls))
-                        ordered-tool-responses))
-              (lambda (recursive-history recursion-messages)
-                (funcall step
-                         (openai-request-state bot
-                                               nil
-                                               conversation
-                                               (getf outcome :file-attachments)
-                                               (getf outcome :effective-generation-config)
-                                               :history-messages recursive-history
-                                               :request-messages (append (getf outcome :request-messages)
-                                                                         recursion-messages))
-                         next-depth))
-              :error-builder #'openai-tool-error-message))
+             (continue-openai-provider-tool-recursion
+              bot conversation outcome next-depth step))
            :finalize-turn
            (lambda (state outcome)
              (finish-stateless-text-turn (getf state :history-messages)
