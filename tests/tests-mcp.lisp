@@ -2052,10 +2052,20 @@
 (fiveam:test test-restore-conversation-from-checkpoint
   (let* ((filename "TestRestoreConv.json")
          (checkpoint-file (merge-pathnames filename (minions-data-directory)))
-         (bot (conversation-chatbot (new-chat :backend :google :model "gemini-3.5-flash" :system-instruction "Sterile context.")))
+         (scoped-directory (uiop:ensure-directory-pathname
+                            (merge-pathnames "restore-scope/" (uiop:temporary-directory))))
+         (bot (conversation-chatbot (new-chat :backend :google
+                                              :model "gemini-3.5-flash"
+                                              :system-instruction "Sterile context."
+                                              :parent-name "Supervisor"
+                                              :depth 4
+                                              :token-budget 900
+                                              :spent-tokens 321
+                                              :scoped-directory scoped-directory)))
          (conv (make-instance 'conversation :chatbot bot)))
     (setf (chatbot-persona-name bot) "TestRestoreConv")
     (setf (conversation-adaptive-context-pruning-max-tokens conv) 84)
+    (setf (conversation-interaction-id conv) "interaction-42")
     (setf (conversation-messages conv) (list (list (cons "role" "user") (cons "content" "Original Msg"))))
     (save-minion-state conv)
     (fiveam:is-true (probe-file checkpoint-file))
@@ -2066,7 +2076,13 @@
              (fiveam:is (eq :google (chatbot-backend r-bot)))
              (fiveam:is (string= "gemini-3.5-flash" (chatbot-model r-bot)))
              (fiveam:is (string= "Sterile context." (chatbot-system-instruction r-bot)))
+             (fiveam:is (string= "Supervisor" (chatbot-parent-name r-bot)))
+             (fiveam:is (= 4 (chatbot-depth r-bot)))
+             (fiveam:is (= 900 (chatbot-token-budget r-bot)))
+             (fiveam:is (= 321 (chatbot-spent-tokens r-bot)))
+             (fiveam:is (equal scoped-directory (chatbot-scoped-directory r-bot)))
              (fiveam:is (= 84 (conversation-adaptive-context-pruning-max-tokens restored)))
+             (fiveam:is (string= "interaction-42" (conversation-interaction-id restored)))
              (fiveam:is (equal (list (list (cons "role" "user") (cons "content" "Original Msg")))
                                (conversation-messages restored)))))
       (when (probe-file checkpoint-file)

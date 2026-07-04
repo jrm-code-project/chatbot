@@ -2,6 +2,8 @@
 
 This document prioritizes the highest-value technical debt currently visible in the `chatbot` codebase. It focuses on debt that increases change risk, operational fragility, or maintenance cost.
 
+It now also incorporates the later snapshot that was mistakenly written to `TECHNICAL-DEBT.md-`, so the current file reflects both the longer-running debt register and the most recent repo-shape findings.
+
 ## Priority scale
 
 - **P0** — high-risk architectural or operational debt that can cause broad regressions
@@ -24,6 +26,18 @@ This document prioritizes the highest-value technical debt currently visible in 
 | **P2** | Duplicate code trees | **The repository contains a mirrored sandbox code tree that can drift from `src/`.** | `minion-sandbox-Gopher\` contains 24 tracked files, while `src\` contains 39 tracked files. The mirrored tree duplicates major runtime modules such as `core\chat.lisp`, `mcp\tool-execution.lisp`, and backend files. | Near-copies multiply maintenance cost and create a real risk of fixing behavior in one tree but not the other. | Either generate the sandbox tree from a single source, replace it with fixtures/test artifacts, or delete it if it is no longer required. |
 | **P2** | Runtime artifacts in the repository | **Persisted minion state files are tracked in git.** | `data/minions\` contains many tracked JSON state files such as `Planner.json`, `Gopher.json`, `Documentation.json`, and others. `save-minion-state` in `src/core/conversations.lisp` writes into this directory. | Checked-in runtime state creates noise, invites accidental coupling between code and local state, and can confuse tests and reviews. | Move persistent runtime artifacts out of the tracked repository tree or formalize them as fixtures in a separate test-data area with clear ownership. |
 | **P2** | Test coverage shape | **The highest-risk lifecycle and concurrency paths appear less directly exercised than core request/response behavior.** | The suite is broad (`tests/tests-*.lisp`), but the riskiest areas are teardown races, background thread/process cleanup, and shared-state interaction across runtime contexts. | The code most likely to fail in production is not the easiest to validate with ordinary unit tests. Without stronger lifecycle tests, regressions may only appear under real runtime conditions. | Add focused tests around MCP shutdown, thread cleanup, and recovery behavior, ideally with deterministic seams already present in `vars.lisp`. |
+
+## Additional current-state findings
+
+These items came from the later debt snapshot and sharpen the operational picture of the repository as it exists today.
+
+| Priority | Area | Debt | Evidence | Why it matters | Recommended direction |
+| --- | --- | --- | --- | --- | --- |
+| **P0** | Source layout | **Core orchestration logic is still concentrated in a few very large files.** | `src/orchestration/agentic-loops.lisp` (~50 KB), `src/core/conversations.lisp` (~42 KB), `src/core/vars.lisp` (~36 KB), and `src/core/data.lisp` (~31 KB). | Cross-cutting changes still land in a small set of hotspot files, which raises merge pressure and regression risk. Recent loop/compression/logging work had to touch several of these files together. | Split by lifecycle phase and concern: agentic-loop startup vs. supervision vs. monitor behavior; conversation construction vs. compression vs. checkpoint persistence; runtime-context accessors vs. compatibility behavior. |
+| **P0** | Persistence model | **Checkpoint and minion-state persistence is manually mapped in multiple places.** | `save-minion-state`, `minion-restoration-spec`, `instantiate-restored-minion`, and `restore-conversation-from-checkpoint` in `src/core/conversations.lisp` all hand-map overlapping fields such as backend, model, system instruction, adaptive pruning threshold, interaction id, and history. | Every new persisted field requires touching several save/restore paths, which is brittle and easy to partially update. Recent adaptive-compression persistence work had to change multiple restoration seams together. | Introduce an explicit checkpoint schema with shared encode/decode helpers, then have checkpoint restore and minion restore consume the same normalized representation. |
+| **P1** | Duplicate code trees | **The mirrored sandbox tree is still an active maintenance risk.** | `minion-sandbox-Gopher\` contains tracked copies of major runtime modules such as `core\chat.lisp`, `core\conversations.lisp`, `mcp\tool-execution.lisp`, and backend files. | Duplicate trees multiply maintenance cost and make it easy to fix one path while forgetting the other. | Either generate the sandbox tree from `src\`, shrink it to true fixtures only, or remove it if it is no longer required. |
+| **P1** | Build cleanliness | **Routine compilation still emits avoidable warning noise.** | In `src/backends/backend-google.lisp`, the lambda at lines 334-338 receives `tool-call` but does not use or ignore it. Similar warning-level cleanup remains in some tests. | Persistent warning noise hides real regressions and makes build output harder to trust. | Make warning cleanup a standing rule: remove or explicitly ignore unused bindings and keep regular test/build output warning-light. |
+| **P1** | Test structure | **Several test files are large enough to be hard to evolve safely.** | `tests/tests-runtime.lisp` (~121 KB), `tests/tests-mcp.lisp` (~116 KB), and `tests/tests-personas.lisp` (~90 KB). | Large integration-heavy test files make it harder to find coverage gaps, isolate failures, or add narrowly scoped regressions. | Split test files by behavior slice rather than subsystem umbrella, especially around runtime context, MCP lifecycle, persona loading, and checkpoint restore semantics. |
 
 ## Recently improved, but not finished
 
@@ -85,7 +99,13 @@ These areas should not be treated as fresh debt, but as **partially retired debt
 ## Suggested fix order
 
 1. **Retire the legacy-global/runtime-context bridge** enough that new work no longer depends on it.
-2. **Refactor MCP lifecycle and startup/shutdown mechanics** into smaller, testable layers.
-3. **Break up provider submission functions** and the large `tool-execution` hub.
-4. **Remove duplicate runtime trees and tracked state artifacts** so the repository shape becomes easier to trust.
-5. **Deepen lifecycle and concurrency tests** after the high-risk modules are decomposed.
+2. **Refactor checkpoint persistence and restore into a shared schema layer** so new state fields stop requiring parallel manual edits.
+3. **Refactor MCP lifecycle and startup/shutdown mechanics** into smaller, testable layers.
+4. **Break up the largest orchestration hotspots** in `agentic-loops.lisp` and `conversations.lisp`.
+5. **Remove duplicate runtime trees and tracked state artifacts** so the repository shape becomes easier to trust.
+6. **Clean warning noise and split giant tests** to improve signal before deeper refactors.
+7. **Deepen lifecycle and concurrency tests** after the high-risk modules are decomposed.
+
+## Current snapshot summary
+
+The latest repo scan reinforces that the biggest remaining debt is **structural concentration**: a few hotspot orchestration files, duplicated persistence mapping, tracked runtime artifacts, and a mirrored sandbox tree still raise the cost and risk of otherwise modest changes.

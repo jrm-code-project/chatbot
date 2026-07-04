@@ -237,30 +237,11 @@ Use NEW-CHAT instead when no persona should be loaded."
     (when name
       (let* ((dir (minions-data-directory))
              (file-path (merge-pathnames (format nil "~A.json" name) dir))
-             (state-plist
-              (list :name name
-                    :backend (string-downcase (symbol-name (chatbot-backend bot)))
-                    :model (or (chatbot-model bot) "")
-                    :parent-name (chatbot-parent-name bot)
-                    :depth (chatbot-depth bot)
-                    :token-budget (chatbot-token-budget bot)
-                    :spent-tokens (chatbot-spent-tokens bot)
-                    :scoped-directory (and (chatbot-scoped-directory bot)
-                                           (namestring (chatbot-scoped-directory bot)))
-                    :system-instruction (let ((inst (chatbot-system-instruction bot)))
-                                          (cond
-                                            ((null inst) "")
-                                            ((stringp inst) inst)
-                                            ((vectorp inst) (coerce inst 'list))
-                                            (t "")))
-                    :adaptive-context-pruning-max-tokens
-                    (conversation-adaptive-context-pruning-max-tokens conversation)
-                    :interaction-id (or (conversation-interaction-id conversation) "")
-                    :messages (conversation-messages conversation))))
+             (state-plist (conversation-persistence-state conversation :name name)))
         (ensure-directories-exist file-path)
         (with-open-file (stream file-path
-                               :direction :output
-                               :if-exists :supersede
+                              :direction :output
+                              :if-exists :supersede
                                :if-does-not-exist :create)
           (write-string (cl-json:encode-json-to-string state-plist) stream))
         (log-message :info "Freeze-dried minion state"
@@ -274,115 +255,57 @@ Use NEW-CHAT instead when no persona should be loaded."
                 :context `(("name" . ,checkpoint-name)))
     (save-minion-state conversation :checkpoint-name checkpoint-name)))
 
-(defun get-string-plist-value (plist key)
-  "Gets the value associated with KEY (a string) in a string-keyed PLIST."
-  (loop for (k v) on plist by #'cddr
-        when (string-equal k key)
-        return v))
-
-(defun get-message-field (msg key-kw key-str)
-  "Safely retrieves a field value from MSG (supporting keyword alist, string alist, or plist)."
-  (cond
-    ((listp msg)
-     (let ((assoc-val (or (assoc key-kw msg) (assoc key-str msg :test #'string-equal))))
-       (if (consp assoc-val)
-           (cdr assoc-val)
-           (get-string-plist-value msg key-str))))
-    (t nil)))
-
-(defun parse-minion-state-file (file)
-  "Returns FILE decoded from JSON, or NIL after logging a warning."
+(defun parse-minion-state-file (file runtime-context)
+  "Returns FILE decoded to the normalized restore schema, or NIL after logging a warning."
   (handler-case
-      (cl-json:decode-json-from-string (uiop:read-file-string file))
+      (decode-persisted-conversation-state
+       (cl-json:decode-json-from-string (uiop:read-file-string file))
+       :runtime-context runtime-context
+       :append-recovery-handshake-p t)
     (error (e)
       (log-message :warn "Failed to parse minion state file"
-                  :context `(("file" . ,(namestring file))
-                             ("error" . ,(princ-to-string e))))
+                 :context `(("file" . ,(namestring file))
+                            ("error" . ,(princ-to-string e))))
       nil)))
 
-(defun minion-state-depth (state)
-  "Returns STATE's depth, defaulting to 1."
-  (or (get-string-plist-value state "depth") 1))
+(defun load-sorted-minion-states (directory runtime-context)
+  "Returns DIRECTORY's normalized minion restore specs sorted shallowest-first."
+  (let ((files (uiop:directory-files directory "*.json")))
+    (sort (remove nil
+                  (mapcar (lambda (file)
+                            (parse-minion-state-file file runtime-context))
+                          files))
+          #'<
+          :key (lambda (state) (getf state :depth)))))
 
-(defun load-sorted-minion-states (directory)
-  "Returns DIRECTORY's minion states sorted shallowest-first."
-  (sort (remove nil
-               (mapcar #'parse-minion-state-file
-                       (uiop:directory-files directory "*.json")))
-        #'<
-        :key #'minion-state-depth))
-
-(defun normalize-restored-system-instruction (raw-system-instruction)
-  "Returns RAW-SYSTEM-INSTRUCTION normalized for NEW-CHAT."
-  (cond
-    ((null raw-system-instruction) nil)
-    ((stringp raw-system-instruction) raw-system-instruction)
-    ((listp raw-system-instruction) (coerce raw-system-instruction 'vector))
-    (t nil)))
-
-(defun normalize-restored-message (msg)
-  "Returns MSG normalized to the internal role/content alist shape."
-  (list (cons "role" (get-message-field msg :role "role"))
-        (cons "content" (get-message-field msg :content "content"))))
-
-(defun restored-minion-history (messages)
-  "Returns normalized restored MESSAGES with the crash-recovery handshake appended."
-  (let ((normalized-messages
-         (if (and messages (listp messages))
-             (mapcar #'normalize-restored-message messages)
-             nil)))
-    (append normalized-messages
-           (list (list (cons "role" "user")
-                       (cons "content"
-                             "[SYSTEM: Recovered from unexpected shutdown. Please review your context and resume your last uncompleted task.]"))))))
-
-(defun minion-restoration-spec (state root-bot)
-  "Returns a normalized restoration spec for one saved minion STATE."
-  (let* ((name (get-string-plist-value state "name"))
-        (backend-str (get-string-plist-value state "backend"))
-        (scoped-dir-str (get-string-plist-value state "scopedDirectory")))
-    (list :name name
-         :backend (if (and backend-str (string/= backend-str ""))
-                      (intern (string-upcase backend-str) "KEYWORD")
-                      :gemini)
-         :model (get-string-plist-value state "model")
-         :parent-name (get-string-plist-value state "parentName")
-         :depth (minion-state-depth state)
-         :token-budget (get-string-plist-value state "tokenBudget")
-         :spent-tokens (or (get-string-plist-value state "spentTokens") 0)
-         :scoped-directory (and scoped-dir-str
-                                (uiop:ensure-directory-pathname scoped-dir-str))
-         :system-instruction
-         (normalize-restored-system-instruction
-          (get-string-plist-value state "systemInstruction"))
-         :adaptive-context-pruning-max-tokens
-         (get-string-plist-value state "adaptiveContextPruningMaxTokens")
-         :interaction-id (get-string-plist-value state "interactionId")
-         :history (restored-minion-history (get-string-plist-value state "messages"))
-         :runtime-context (chatbot-runtime-context root-bot))))
+(defun instantiate-conversation-from-restored-state (restoration)
+  "Returns one restored conversation from normalized RESTORATION."
+  (let ((restored-conv
+          (new-chat :backend (getf restoration :backend)
+                   :model (getf restoration :model)
+                   :system-instruction (getf restoration :system-instruction)
+                   :parent-name (getf restoration :parent-name)
+                   :depth (getf restoration :depth)
+                   :token-budget (getf restoration :token-budget)
+                   :spent-tokens (getf restoration :spent-tokens)
+                   :scoped-directory (getf restoration :scoped-directory)
+                   :runtime-context (getf restoration :runtime-context))))
+    (setf (conversation-interaction-id restored-conv)
+          (getf restoration :interaction-id))
+    (setf (conversation-adaptive-context-pruning-max-tokens restored-conv)
+          (getf restoration :adaptive-context-pruning-max-tokens))
+    (setf (conversation-messages restored-conv)
+          (getf restoration :history))
+    restored-conv))
 
 (defun instantiate-restored-minion (restoration)
   "Returns one restored subordinate conversation from RESTORATION."
   (let* ((name (getf restoration :name))
-        (sub-conv (new-chat :backend (getf restoration :backend)
-                            :model (getf restoration :model)
-                            :system-instruction (getf restoration :system-instruction)
-                            :parent-name (getf restoration :parent-name)
-                            :depth (getf restoration :depth)
-                            :token-budget (getf restoration :token-budget)
-                            :spent-tokens (getf restoration :spent-tokens)
-                            :scoped-directory (getf restoration :scoped-directory)
-                            :runtime-context (getf restoration :runtime-context)))
-        (sub-bot (conversation-chatbot sub-conv))
-        (interaction-id (getf restoration :interaction-id)))
+         (sub-conv (instantiate-conversation-from-restored-state restoration))
+         (sub-bot (conversation-chatbot sub-conv)))
     (when name
       (terminate-active-threads-by-name name)
       (setf (chatbot-persona-name sub-bot) name))
-    (when (and interaction-id (string/= interaction-id ""))
-      (setf (conversation-interaction-id sub-conv) interaction-id))
-    (setf (conversation-adaptive-context-pruning-max-tokens sub-conv)
-          (getf restoration :adaptive-context-pruning-max-tokens))
-    (setf (conversation-messages sub-conv) (getf restoration :history))
     sub-conv))
 
 (defun restoration-parent-is-root-p (restoration root-bot)
@@ -431,9 +354,7 @@ Use NEW-CHAT instead when no persona should be loaded."
     (when (uiop:directory-exists-p dir)
       (let ((restored-convs (make-hash-table :test #'equal)))
         (dolist (restoration
-                 (mapcar (lambda (state)
-                           (minion-restoration-spec state root-bot))
-                         (load-sorted-minion-states dir)))
+                 (load-sorted-minion-states dir (chatbot-runtime-context root-bot)))
           (let ((sub-conv (instantiate-restored-minion restoration)))
             (attach-restored-minion root-bot restored-convs restoration sub-conv))))
       (log-message :info "MCRS: Restoration bootloader completed successfully."))))
@@ -697,35 +618,11 @@ Use NEW-CHAT instead when no persona should be loaded."
     (unless (probe-file file-path)
       (error "Checkpoint file not found: ~A" (namestring file-path)))
     (let* ((raw-text (uiop:read-file-string file-path))
-           (state (cl-json:decode-json-from-string raw-text))
-           (backend-str (get-string-plist-value state "backend"))
-           (backend-kw (if (and backend-str (string/= backend-str ""))
-                           (intern (string-upcase backend-str) "KEYWORD")
-                           :gemini))
-           (model (get-string-plist-value state "model"))
-           (system-instruction-raw (get-string-plist-value state "systemInstruction"))
-           (system-instruction (cond
-                                 ((null system-instruction-raw) nil)
-                                 ((stringp system-instruction-raw) system-instruction-raw)
-                                 ((listp system-instruction-raw) (coerce system-instruction-raw 'vector))
-                                 (t nil)))
-          (adaptive-context-pruning-max-tokens
-            (get-string-plist-value state "adaptiveContextPruningMaxTokens"))
-          (interaction-id (get-string-plist-value state "interactionId"))
-          (messages (get-string-plist-value state "messages")))
-      (let ((conv (new-chat :backend backend-kw
-                            :model (and (string/= model "") model)
-                            :system-instruction system-instruction
-                            :runtime-context runtime-context)))
-        (setf (conversation-adaptive-context-pruning-max-tokens conv)
-              adaptive-context-pruning-max-tokens)
-        (setf (conversation-interaction-id conv) (and (string/= interaction-id "") interaction-id))
-        (when (and messages (listp messages))
-          (setf (conversation-messages conv)
-                (mapcar (lambda (msg)
-                          (list (cons "role" (get-message-field msg :role "role"))
-                                (cons "content" (get-message-field msg :content "content"))))
-                        messages)))
-        (log-message :info "Restored conversation from checkpoint"
-                     :context `(("file" . ,(namestring file-path))))
-        conv))))
+           (restoration
+             (decode-persisted-conversation-state
+              (cl-json:decode-json-from-string raw-text)
+              :runtime-context runtime-context))
+           (conv (instantiate-conversation-from-restored-state restoration)))
+      (log-message :info "Restored conversation from checkpoint"
+                   :context `(("file" . ,(namestring file-path))))
+      conv)))
