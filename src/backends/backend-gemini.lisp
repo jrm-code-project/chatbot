@@ -63,6 +63,41 @@
     ("result" . ,(list `(("type" . "text")
                          ("text" . ,(chatbot-tool-error-text name condition)))))))
 
+(defun gemini-tool-arguments-log-label (name tool-call)
+  "Returns the debug label for one Gemini tool request."
+  (declare (ignore tool-call))
+  (format nil "Gemini tool arguments for ~A" name))
+
+(defun gemini-tool-call-results (bot outcome)
+  "Returns ordered Gemini function_result steps for OUTCOME."
+  (provider-tool-call-results
+   bot
+   (provider-turn-outcome-tool-calls outcome)
+   #'gemini-tool-arguments-log-label
+   #'gemini-tool-result-message
+   :error-builder #'gemini-tool-error-message))
+
+(defun gemini-tool-recursion-state (state conversation outcome results)
+  "Returns the next Gemini request state after one tool-recursion round."
+  (gemini-request-state results
+                        conversation
+                        nil
+                        (getf outcome :effective-model)
+                        (getf outcome :effective-generation-config)
+                        :messages (getf state :messages)
+                        :persona-memory (getf state :persona-memory)
+                        :persona-diary-entries (getf state :persona-diary-entries)
+                        :original-interaction-id (getf state :original-interaction-id)
+                        :current-interaction-id (getf outcome :interaction-id)
+                        :live-user-input (getf state :live-user-input)))
+
+(defun continue-gemini-provider-tool-recursion (bot state conversation outcome next-depth step)
+  "Continues the Gemini turn loop after the model requested tool execution."
+  (let ((results (gemini-tool-call-results bot outcome)))
+    (funcall step
+             (gemini-tool-recursion-state state conversation outcome results)
+             next-depth)))
+
 (defun gemini-request-url ()
   "Returns the Gemini Interactions streaming endpoint."
   (concatenate 'string *gemini-base-url* "/interactions?alt=sse"))
@@ -337,28 +372,8 @@
               :recursion-depth current-depth))
            :continue-with-tools
            (lambda (state outcome next-depth step)
-             (let ((results
-                     (provider-tool-call-results
-                      bot
-                      (provider-turn-outcome-tool-calls outcome)
-                      (lambda (name tool-call)
-                        (declare (ignore tool-call))
-                        (format nil "Gemini tool arguments for ~A" name))
-                      #'gemini-tool-result-message
-                      :error-builder #'gemini-tool-error-message)))
-               (funcall step
-                        (gemini-request-state results
-                                              conversation
-                                              nil
-                                              (getf outcome :effective-model)
-                                              (getf outcome :effective-generation-config)
-                                              :messages (getf state :messages)
-                                              :persona-memory (getf state :persona-memory)
-                                              :persona-diary-entries (getf state :persona-diary-entries)
-                                              :original-interaction-id (getf state :original-interaction-id)
-                                              :current-interaction-id (getf outcome :interaction-id)
-                                              :live-user-input (getf state :live-user-input))
-                        next-depth)))
+             (continue-gemini-provider-tool-recursion
+              bot state conversation outcome next-depth step))
            :finalize-turn
            (lambda (state outcome)
              (let* ((text (provider-turn-outcome-text outcome))
