@@ -1323,6 +1323,44 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (assert-json-field= second-payload "input" "Second turn")
         (fiveam:is (string= "gemini-3.5-flash" (chatbot-model (conversation-chatbot conv))))))))
 
+(fiveam:test test-common-lisp-code-to-user-prompt-uses-gemini-flash-latest
+  (let ((captured-payload nil))
+    (let* ((*get-all-mcp-tools-function* (lambda (bot)
+                                           (declare (ignore bot))
+                                           nil))
+           (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+           (*http-post-function*
+             (lambda (url &rest args)
+               (declare (ignore url))
+               (setf captured-payload (getf args :content))
+               (values
+                (make-string-input-stream
+                 "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Please implement a function that returns the square of a number.\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-flash-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
+                200))))
+      (fiveam:is
+       (string= "Please implement a function that returns the square of a number."
+                (common-lisp-code-to-user-prompt
+                 "(defun square (x)
+                    \"Returns the square of X.\"
+                    (* x x))")))
+      (let ((payload (decode-test-json captured-payload)))
+        (assert-json-field= payload "model" "gemini-flash-latest")
+        (fiveam:is
+         (search "expert Common Lisp developer"
+                 (test-json-value-any payload '("input" :input))))
+        (fiveam:is
+         (search "```commonlisp"
+                 (test-json-value-any payload '("input" :input))))
+        (fiveam:is
+         (search "(defun square (x)"
+                 (test-json-value-any payload '("input" :input))))))))
+
+(fiveam:test test-common-lisp-code-to-user-prompt-requires-non-empty-code
+  (fiveam:signals error
+    (common-lisp-code-to-user-prompt "")))
+
 (fiveam:test test-gemini-chat-retries-malformed-response-on-google-gemini-pro-latest
   (let ((conv (new-chat :backend :gemini :include-timestamp-p t :include-model-p t))
         (captured-urls nil)

@@ -25,6 +25,7 @@
            "RUN-ARENA"
            "ROUND-ROBIN-CHAT"
            "SEND-LATEST-SCREENSHOT"
+           "COMMON-LISP-CODE-TO-USER-PROMPT"
            "LISP-NEWS"
            "MAKE-RUNTIME-CONTEXT"
            "NEW-CHAT"
