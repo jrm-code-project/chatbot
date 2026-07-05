@@ -1283,6 +1283,23 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
     (fiveam:is (= 200000 (effective-context-pruning-max-tokens)))
     (fiveam:is (= 150000 (effective-context-pruning-target-tokens)))))
 
+(fiveam:test test-context-pruning-adaptive-threshold-stays-within-configured-budget
+  (let* ((*context-pruning-threshold-characters* nil)
+        (*context-pruning-estimated-max-tokens* 100)
+        (*context-pruning-estimated-target-tokens* 75)
+        (conv (new-chat :backend :google))
+        (large-history
+          (list (list (cons "role" "user")
+                      (cons "content" (make-string 160 :initial-element #\A)))
+                (list (cons "role" "model")
+                      (cons "content" (make-string 160 :initial-element #\B))))))
+    (update-adaptive-context-pruning-max-tokens conv large-history)
+    (fiveam:is (= 100 (conversation-adaptive-context-pruning-max-tokens conv)))
+    (fiveam:is (= 100 (effective-context-pruning-max-tokens conv)))
+    (setf (conversation-adaptive-context-pruning-max-tokens conv) 180)
+    (fiveam:is (= 100 (effective-context-pruning-max-tokens conv)))
+    (fiveam:is (= 75 (effective-context-pruning-target-tokens conv)))))
+
 (fiveam:test test-context-pruning-runs-after-turn-completes
   (let* ((*context-pruning-threshold-characters* nil)
         (*context-pruning-estimated-max-tokens* 100)
@@ -1359,6 +1376,7 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
             (recompressed-history
               (compressed-conversation-history-if-needed conv expanded-history)))
         (fiveam:is (= (* 2 compressed-total-tokens) adaptive-threshold))
+        (fiveam:is (< adaptive-threshold *context-pruning-estimated-max-tokens*))
         (fiveam:is (> expanded-total-tokens adaptive-threshold))
         (fiveam:is (< expanded-total-tokens *context-pruning-estimated-max-tokens*))
         (fiveam:is (not (equal expanded-history recompressed-history)))

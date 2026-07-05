@@ -461,10 +461,11 @@ Use NEW-CHAT instead when no persona should be loaded."
         max-tokens)))
 
 (defun update-adaptive-context-pruning-max-tokens (conversation history)
-  "Updates CONVERSATION to trigger the next compression near twice HISTORY's current total estimated size."
+  "Updates CONVERSATION with a per-conversation compression ceiling no higher than the configured budget."
   (let ((compressed-total-tokens (estimated-conversation-context-token-count conversation history)))
     (setf (conversation-adaptive-context-pruning-max-tokens conversation)
-          (max 1 (* 2 compressed-total-tokens)))))
+          (min (configured-context-pruning-max-tokens)
+               (max 1 (* 2 compressed-total-tokens))))))
 
 (defun effective-history-compression-max-tokens (conversation)
   "Returns the estimated history-token budget available before compression should trigger."
@@ -480,9 +481,14 @@ Use NEW-CHAT instead when no persona should be loaded."
 
 (defun effective-context-pruning-max-tokens (&optional conversation)
   "Returns the effective estimated max-token ceiling, including per-conversation adaptation."
-  (or (and conversation
-           (conversation-adaptive-context-pruning-max-tokens conversation))
-      (configured-context-pruning-max-tokens)))
+  (let ((configured-max-tokens (configured-context-pruning-max-tokens)))
+    (if conversation
+        (let ((adaptive-max-tokens
+                (conversation-adaptive-context-pruning-max-tokens conversation)))
+          (if adaptive-max-tokens
+              (min configured-max-tokens adaptive-max-tokens)
+              configured-max-tokens))
+        configured-max-tokens)))
 
 (defun effective-context-pruning-target-tokens (&optional conversation)
   "Returns the effective estimated post-compression target token count."
@@ -576,6 +582,12 @@ Use NEW-CHAT instead when no persona should be loaded."
                       (compress-with-raw-target retry-raw-target-tokens)
                       initial-pass))
                 (compressed-history (getf final-pass :history))
+                (next-adaptive-max-tokens
+                  (min (configured-context-pruning-max-tokens)
+                       (max 1
+                            (* 2
+                               (estimated-conversation-context-token-count conversation
+                                                                         compressed-history)))))
                 (old-messages (getf final-pass :old-messages))
                 (raw-messages (getf final-pass :raw-messages))
                 (digest (getf final-pass :digest)))
@@ -588,7 +600,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                                      ("history-target-tokens" . ,(princ-to-string history-target-tokens))
                                      ("effective-max-tokens" . ,(princ-to-string max-tokens))
                                      ("effective-target-tokens" . ,(princ-to-string target-tokens))
-                                     ("next-effective-max-tokens" . ,(princ-to-string (* 2 (estimated-conversation-context-token-count conversation compressed-history))))
+                                     ("next-effective-max-tokens" . ,(princ-to-string next-adaptive-max-tokens))
                                      ("compressed-total-tokens" . ,(princ-to-string (estimated-conversation-context-token-count conversation compressed-history)))
                                      ("compressed-history-tokens" . ,(princ-to-string (estimated-history-token-count compressed-history)))
                                      ("old-messages-count" . ,(princ-to-string (length old-messages)))
