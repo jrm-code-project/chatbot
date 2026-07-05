@@ -1591,7 +1591,8 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
            (beta-file (merge-pathnames "beta.lisp" source-dir))
            (ignored-file (merge-pathnames "ignore.txt" source-dir))
            (wild-path (merge-pathnames "*.lisp" source-dir))
-           (master-file (merge-pathnames "master-wild-training-examples.jsonl" temp-dir)))
+           (master-file (merge-pathnames "master-wild-training-examples.jsonl" temp-dir))
+           (progress-file (merge-pathnames "master-wild-training-examples.progress.sexp" temp-dir)))
       (ensure-directories-exist alpha-file)
       (with-open-file (stream alpha-file :direction :output :if-exists :supersede :if-does-not-exist :create)
         (write-string (format nil "~%~%(defun alpha (x)~%  (+ x 1))") stream))
@@ -1611,7 +1612,9 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                       (declare (ignore url args))
                       (values (make-string-input-stream (pop responses))
                               200)))
-                  (examples (append-wild-lisp-files-to-training-examples wild-path master-file))
+                  (examples (append-wild-lisp-files-to-training-examples wild-path
+                                                                         master-file
+                                                                         :progress-pathname progress-file))
                   (lines (cl-ppcre:split "\\r?\\n"
                                          (string-trim '(#\Return #\Linefeed)
                                                       (uiop:read-file-string master-file)))))
@@ -1620,6 +1623,70 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
              (fiveam:is (search "\"seed\"" (first lines)))
              (fiveam:is (search "Prompt for alpha" (second lines)))
              (fiveam:is (search "Prompt for beta" (third lines))))
+        (when (probe-file progress-file)
+          (delete-file progress-file))
+        (when (probe-file master-file)
+          (delete-file master-file))
+        (when (uiop:directory-exists-p source-dir)
+          (uiop:delete-directory-tree source-dir :validate t))))))
+
+(fiveam:test test-append-wild-lisp-files-to-training-examples-resumes-from-progress
+  (let ((responses
+          (list
+           "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-2\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Prompt for beta\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-2\",\"model\":\"gemini-flash-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")))
+    (let* ((temp-dir (uiop:default-temporary-directory))
+           (source-dir (merge-pathnames "append-wild-lisp-files-resume/" temp-dir))
+           (alpha-file (merge-pathnames "alpha.lisp" source-dir))
+           (beta-file (merge-pathnames "beta.lisp" source-dir))
+           (wild-path (merge-pathnames "*.lisp" source-dir))
+           (master-file (merge-pathnames "master-wild-training-resume.jsonl" temp-dir))
+           (progress-file (merge-pathnames "master-wild-training-resume.progress.sexp" temp-dir))
+           (alpha-form (format nil "(defun alpha (x)~%  (+ x 1))"))
+           (alpha-example (format-training-example "Prompt for alpha" alpha-form)))
+      (ensure-directories-exist alpha-file)
+      (with-open-file (stream alpha-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-string (format nil "~%~%(defun alpha (x)~%  (+ x 1))") stream))
+      (with-open-file (stream beta-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-string (format nil "~%~%(defun beta (y)~%  (* y 2))") stream))
+      (with-open-file (stream master-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-line "{\"messages\":[{\"role\":\"system\",\"content\":\"seed\"}]}" stream)
+        (write-line alpha-example stream))
+      (let ((committed-length (master-training-example-file-length master-file)))
+        (with-open-file (stream master-file :direction :output :if-exists :append :if-does-not-exist :create)
+          (write-line "CORRUPTED_PARTIAL_OUTPUT" stream))
+        (write-training-progress-state
+         progress-file
+         (list :completed-files (list (training-progress-file-key alpha-file))
+               :master-length committed-length)))
+      (unwind-protect
+           (let* ((*get-all-mcp-tools-function* (lambda (bot)
+                                                  (declare (ignore bot))
+                                                  nil))
+                  (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+                  (*http-post-function*
+                    (lambda (url &rest args)
+                      (declare (ignore url args))
+                      (values (make-string-input-stream (pop responses))
+                              200)))
+                  (examples
+                    (append-wild-lisp-files-to-training-examples
+                     wild-path
+                     master-file
+                     :progress-pathname progress-file))
+                  (lines (cl-ppcre:split "\\r?\\n"
+                                         (string-trim '(#\Return #\Linefeed)
+                                                      (uiop:read-file-string master-file)))))
+             (fiveam:is (= 1 (length examples)))
+             (fiveam:is (= 3 (length lines)))
+             (fiveam:is (search "\"seed\"" (first lines)))
+             (fiveam:is (search "Prompt for alpha" (second lines)))
+             (fiveam:is (search "Prompt for beta" (third lines)))
+             (fiveam:is-false (search "CORRUPTED_PARTIAL_OUTPUT"
+                                      (uiop:read-file-string master-file))))
+        (when (probe-file progress-file)
+          (delete-file progress-file))
         (when (probe-file master-file)
           (delete-file master-file))
         (when (uiop:directory-exists-p source-dir)

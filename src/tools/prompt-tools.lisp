@@ -68,6 +68,73 @@
     (and type
          (string-equal type "lisp"))))
 
+(defun default-training-progress-pathname (master-pathname)
+  "Returns the default progress pathname used for MASTER-PATHNAME."
+  (pathname (format nil "~A.progress.sexp" (namestring master-pathname))))
+
+(defun empty-training-progress-state ()
+  "Returns the default empty progress state for training export."
+  (list :completed-files nil
+        :master-length 0))
+
+(defun read-training-progress-state (progress-pathname)
+  "Returns training export progress loaded from PROGRESS-PATHNAME, or an empty state."
+  (let ((resolved-path (probe-file progress-pathname))
+        (eof-marker (gensym "EOF")))
+    (if resolved-path
+        (with-open-file (stream resolved-path :direction :input)
+          (let ((state (read stream nil eof-marker)))
+            (if (eq state eof-marker)
+                (empty-training-progress-state)
+                state)))
+        (empty-training-progress-state))))
+
+(defun write-training-progress-state (progress-pathname state)
+  "Persists training export STATE to PROGRESS-PATHNAME."
+  (ensure-directories-exist progress-pathname)
+  (with-open-file (stream progress-pathname
+                          :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create)
+    (write state :stream stream)
+    (terpri stream))
+  state)
+
+(defun training-progress-file-key (pathname)
+  "Returns the stable progress key used to track PATHNAME."
+  (string-downcase (namestring (truename pathname))))
+
+(defun master-training-example-file-length (master-pathname)
+  "Returns the current character length of MASTER-PATHNAME, or zero when absent."
+  (let ((resolved-path (probe-file master-pathname)))
+    (if resolved-path
+        (with-open-file (stream resolved-path :direction :input)
+          (file-length stream))
+        0)))
+
+(defun rewrite-master-training-example-prefix (master-pathname retained-length)
+  "Rewrites MASTER-PATHNAME to keep only its first RETAINED-LENGTH characters."
+  (let ((resolved-path (probe-file master-pathname)))
+    (when resolved-path
+      (let ((prefix
+              (with-open-file (stream resolved-path :direction :input)
+                (let* ((safe-length (max 0 retained-length))
+                       (buffer (make-string safe-length)))
+                  (read-sequence buffer stream)
+                  buffer))))
+        (with-open-file (stream master-pathname
+                                :direction :output
+                                :if-exists :supersede
+                                :if-does-not-exist :create)
+          (write-string prefix stream))))))
+
+(defun synchronize-master-training-examples-with-progress (master-pathname progress-state)
+  "Rolls MASTER-PATHNAME back to PROGRESS-STATE's committed length when needed."
+  (let ((committed-length (or (safe-getf progress-state :master-length) 0))
+        (current-length (master-training-example-file-length master-pathname)))
+    (when (> current-length committed-length)
+      (rewrite-master-training-example-prefix master-pathname committed-length))))
+
 (defun append-directory-lisp-files-to-training-examples (directory-pathname master-pathname
                                                          &key callback runtime-context)
   "Recursively appends training examples for all Lisp files under DIRECTORY-PATHNAME to MASTER-PATHNAME."
@@ -80,12 +147,31 @@
                          (expand-chat-input-directory-files directory-pathname))))
 
 (defun append-wild-lisp-files-to-training-examples (wild-pathname master-pathname
-                                                    &key callback runtime-context)
-  "Appends training examples for Lisp files matching WILD-PATHNAME to MASTER-PATHNAME."
-  (mapcan (lambda (pathname)
-            (append-file-forms-to-training-examples pathname
-                                                    master-pathname
-                                                    :callback callback
-                                                    :runtime-context runtime-context))
-          (remove-if-not #'lisp-source-file-p
-                         (expand-chat-input-file-spec wild-pathname))))
+                                                    &key progress-pathname callback runtime-context)
+  "Appends training examples for Lisp files matching WILD-PATHNAME to MASTER-PATHNAME.
+
+Progress is persisted so interrupted runs can resume without reprocessing files
+already committed to the master output."
+  (let* ((resolved-progress-pathname (or progress-pathname
+                                         (default-training-progress-pathname master-pathname)))
+         (progress-exists-p (not (null (probe-file resolved-progress-pathname))))
+         (progress-state (read-training-progress-state resolved-progress-pathname))
+         (completed-files (or (safe-getf progress-state :completed-files) nil))
+         (new-examples nil))
+    (when progress-exists-p
+      (synchronize-master-training-examples-with-progress master-pathname progress-state))
+    (dolist (pathname (remove-if-not #'lisp-source-file-p
+                                     (expand-chat-input-file-spec wild-pathname)))
+      (let ((file-key (training-progress-file-key pathname)))
+        (unless (member file-key completed-files :test #'string=)
+          (let ((file-examples (append-file-forms-to-training-examples pathname
+                                                                       master-pathname
+                                                                       :callback callback
+                                                                       :runtime-context runtime-context)))
+            (setf new-examples (append new-examples file-examples))
+            (setf completed-files (append completed-files (list file-key)))
+            (setf progress-state
+                  (list :completed-files completed-files
+                        :master-length (master-training-example-file-length master-pathname)))
+            (write-training-progress-state resolved-progress-pathname progress-state)))))
+    new-examples))
