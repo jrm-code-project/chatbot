@@ -316,12 +316,25 @@
     (initialize-mcp-servers-for-chatbot bot :strict-required-p strict-required-p)
     bot))
 
+(defun startup-chatbot-ready-p (bot)
+  "Returns true when BOT already has initialized shared MCP startup state."
+  (and bot
+       (or (chatbot-mcp-startup-status bot)
+           (chatbot-mcp-servers bot))))
+
 (defun ensure-startup-chatbot-initialized (context strict-required-p)
   "Returns the existing shared startup chatbot for CONTEXT, or creates it."
-  (or (current-startup-chatbot context)
-      (let ((bot (make-startup-chatbot context strict-required-p)))
-        (setf (current-startup-chatbot context) bot)
-        bot)))
+  (let ((existing-bot (current-startup-chatbot context)))
+    (cond
+      ((startup-chatbot-ready-p existing-bot)
+       existing-bot)
+      (existing-bot
+       (initialize-mcp-servers-for-chatbot existing-bot :strict-required-p strict-required-p)
+       existing-bot)
+      (t
+       (let ((bot (make-startup-chatbot context strict-required-p)))
+         (setf (current-startup-chatbot context) bot)
+         bot)))))
 
 (defun initialize-startup-chatbot (&rest args)
   "Creates the shared startup chatbot and initializes MCP servers if needed."
@@ -342,6 +355,10 @@
     (let ((resolved-context (resolve-runtime-context context)))
       (when (current-auto-initialize-startup-mcp-servers-p resolved-context)
         (initialize-startup-chatbot resolved-context :strict-required-p strict-required-p)))))
+
+(defun initialize-startup-chatbot-on-load ()
+  "Initializes the shared startup chatbot during system load."
+  (initialize-startup-chatbot))
 
 (defun startup-chatbot-mcp-servers (&optional context)
   "Returns the shared MCP server list when startup initialization has occurred."
@@ -424,4 +441,4 @@ Servers shared from STARTUP-BOT remain owned by the startup chatbot."
     (finalize-chatbot-shutdown bot startup-bot resolved-context)))
 
 (eval-when (:load-toplevel :execute)
-  (maybe-auto-initialize-startup-chatbot))
+  (initialize-startup-chatbot-on-load))

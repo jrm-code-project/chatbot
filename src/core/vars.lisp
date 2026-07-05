@@ -748,13 +748,13 @@ default-context compatibility is still desired."
 (defvar *max-minion-depth* 3
   "The global maximum nesting depth allowed for the minion hierarchy.")
 
-(defvar *context-pruning-estimated-max-tokens* 100000
+(defvar *context-pruning-estimated-max-tokens* 200000
   "Estimated prompt-token ceiling above which completed conversation history is auto-compressed.")
 
-(defvar *context-pruning-estimated-target-tokens* 75000
+(defvar *context-pruning-estimated-target-tokens* 150000
   "Estimated prompt-token target after compressing oversized conversation history.")
 
-(defvar *context-pruning-threshold-characters* 400000
+(defvar *context-pruning-threshold-characters* 800000
   "Compatibility character ceiling for auto-pruning, aligned with the default estimated token window.")
 
 (defvar *active-planner* nil

@@ -1275,6 +1275,14 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
           (fiveam:is (string= "Mocked response."
                               (cdr (assoc "content" (car (last history)) :test #'string=)))))))))
 
+(fiveam:test test-context-pruning-default-window-targets-200k-budget
+  (let ((*context-pruning-threshold-characters* 800000)
+        (*context-pruning-estimated-max-tokens* 200000)
+        (*context-pruning-estimated-target-tokens* 150000))
+    (fiveam:is (= 200000 (configured-context-pruning-max-tokens)))
+    (fiveam:is (= 200000 (effective-context-pruning-max-tokens)))
+    (fiveam:is (= 150000 (effective-context-pruning-target-tokens)))))
+
 (fiveam:test test-context-pruning-runs-after-turn-completes
   (let* ((*context-pruning-threshold-characters* nil)
         (*context-pruning-estimated-max-tokens* 100)
