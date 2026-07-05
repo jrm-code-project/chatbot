@@ -112,7 +112,26 @@
          (*user-homedir-pathname-function* (lambda ()
                                              (merge-pathnames "ignored-home/" temp-dir))))
     (fiveam:is (string= (namestring (uiop:ensure-directory-pathname env-dir))
-                        (namestring (minions-data-directory))))))
+                       (namestring (minions-data-directory))))))
+
+(fiveam:test test-read-file-forms-as-text-reads-all-forms-with-line-boundaries
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (file (merge-pathnames "read-file-forms-as-text.lisp" temp-dir))
+        (contents
+          (format nil "~%~%(defun alpha (x)~%  (+ x 1))~%~%(defmacro with-beta (value)~%  `(list ,value))~%~%(gamma) (delta)")))
+    (with-open-file (stream file :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-string contents stream))
+    (unwind-protect
+        (let ((forms (read-file-forms-as-text file))
+              (expected-alpha (format nil "(defun alpha (x)~%  (+ x 1))"))
+              (expected-beta (format nil "(defmacro with-beta (value)~%  `(list ,value))")))
+          (fiveam:is (= 4 (length forms)))
+          (fiveam:is (string= expected-alpha (first forms)))
+          (fiveam:is (string= expected-beta (second forms)))
+          (fiveam:is (string= "(gamma) (delta)" (third forms)))
+          (fiveam:is (string= "(gamma) (delta)" (fourth forms))))
+      (when (probe-file file)
+        (delete-file file)))))
 
 (fiveam:test test-make-runtime-context-inherits-default-conversation-from-canonical-context-not-legacy-global
   (let* ((default-context *default-runtime-context*)

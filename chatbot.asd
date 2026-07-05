@@ -28,6 +28,7 @@
      (:file "vars"               :pathname "core/vars" :depends-on ("package" "data"))
     (:file "runtime-compatibility" :pathname "core/runtime-compatibility" :depends-on ("package" "vars"))
     (:file "json-utils"         :pathname "utils/json-utils" :depends-on ("package"))
+    (:file "source-utils"       :pathname "utils/source-utils" :depends-on ("package"))
      (:file "logging"            :pathname "utils/logging" :depends-on ("package" "vars"))
     (:file "chat-routing"       :pathname "core/chat-routing" :depends-on ("package" "vars" "data" "logging"))
     (:file "chat-entry"         :pathname "core/chat-entry" :depends-on ("package" "vars" "data" "chat-routing"))
