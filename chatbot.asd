@@ -72,7 +72,7 @@
      (:file "test-runner"        :pathname "core/test-runner" :depends-on ("package"))
      (:file "round-robin"        :pathname "orchestration/round-robin" :depends-on ("package" "data" "attachments" "prompt-decoration" "text-utils" "chat"))
      (:file "sandbox-personas"   :pathname "orchestration/sandbox-personas" :depends-on ("package" "data" "conversations" "prompt-decoration" "text-utils" "chat"))
-     (:file "prompt-tools"       :pathname "tools/prompt-tools" :depends-on ("package" "vars" "chat"))
+     (:file "prompt-tools"       :pathname "tools/prompt-tools" :depends-on ("package" "vars" "chat" "attachment-paths"))
      (:file "screenshot-tools"   :pathname "tools/screenshot-tools" :depends-on ("package" "attachment-paths" "chat"))
      (:file "news-tools"         :pathname "tools/news-tools" :depends-on ("package" "chat"))))))
 

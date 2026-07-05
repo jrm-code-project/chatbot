@@ -1380,6 +1380,251 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
   (fiveam:signals error
     (common-lisp-code-to-user-prompt "")))
 
+(fiveam:test test-read-file-forms-to-user-prompts-pairs-generated-prompts-with-form-text
+  (let ((captured-payloads nil)
+        (responses
+          (list
+           "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Prompt for alpha\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-flash-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}"
+           "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-2\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Prompt for beta\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-2\",\"model\":\"gemini-flash-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")))
+    (let* ((temp-dir (uiop:default-temporary-directory))
+           (file (merge-pathnames "read-file-forms-to-user-prompts.lisp" temp-dir))
+           (contents
+             (format nil "~%~%(defun alpha (x)~%  (+ x 1))~%~%(defun beta (y)~%  (* y 2))")))
+      (with-open-file (stream file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-string contents stream))
+      (unwind-protect
+           (let* ((*get-all-mcp-tools-function* (lambda (bot)
+                                                  (declare (ignore bot))
+                                                  nil))
+                  (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+                  (*http-post-function*
+                    (lambda (url &rest args)
+                      (declare (ignore url))
+                      (push (getf args :content) captured-payloads)
+                      (values (make-string-input-stream (pop responses))
+                              200)))
+                  (result (read-file-forms-to-user-prompts file))
+                  (expected-alpha (format nil "(defun alpha (x)~%  (+ x 1))"))
+                  (expected-beta (format nil "(defun beta (y)~%  (* y 2))")))
+             (fiveam:is
+              (equal (list (list "Prompt for alpha" expected-alpha)
+                           (list "Prompt for beta" expected-beta))
+                     result))
+             (fiveam:is (= 2 (length captured-payloads)))
+             (let ((first-payload (decode-test-json (second captured-payloads)))
+                   (second-payload (decode-test-json (first captured-payloads))))
+               (fiveam:is (search expected-alpha
+                                  (test-json-value-any first-payload '("input" :input))))
+               (fiveam:is (search expected-beta
+                                  (test-json-value-any second-payload '("input" :input))))))
+        (when (probe-file file)
+          (delete-file file))))))
+
+(fiveam:test test-format-training-example-returns-chatml-json
+  (let* ((json (format-training-example "Write a square function."
+                                        "(defun square (x) (* x x))"))
+         (payload (decode-test-json json))
+         (messages (test-json-elements (test-json-value-any payload '("messages" :messages))))
+         (user-message (first messages))
+         (assistant-message (second messages)))
+    (fiveam:is (string= "user"
+                        (test-json-value-any user-message '("role" :role))))
+    (fiveam:is (string= "Write a square function."
+                        (test-json-value-any user-message '("content" :content))))
+    (fiveam:is (string= "assistant"
+                        (test-json-value-any assistant-message '("role" :role))))
+    (fiveam:is (string= "(defun square (x) (* x x))"
+                        (test-json-value-any assistant-message '("content" :content))))))
+
+(fiveam:test test-read-file-forms-to-training-examples-formats-generated-pairs
+  (let ((responses
+          (list
+           "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Prompt for alpha\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-flash-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}"
+           "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-2\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Prompt for beta\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-2\",\"model\":\"gemini-flash-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")))
+    (let* ((temp-dir (uiop:default-temporary-directory))
+           (file (merge-pathnames "read-file-forms-to-training-examples.lisp" temp-dir))
+           (contents
+             (format nil "~%~%(defun alpha (x)~%  (+ x 1))~%~%(defun beta (y)~%  (* y 2))")))
+      (with-open-file (stream file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-string contents stream))
+      (unwind-protect
+           (let* ((*get-all-mcp-tools-function* (lambda (bot)
+                                                  (declare (ignore bot))
+                                                  nil))
+                  (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+                  (*http-post-function*
+                    (lambda (url &rest args)
+                      (declare (ignore url args))
+                      (values (make-string-input-stream (pop responses))
+                              200)))
+                  (examples (read-file-forms-to-training-examples file))
+                  (first-payload (decode-test-json (first examples)))
+                  (second-payload (decode-test-json (second examples)))
+                  (first-messages (test-json-elements (test-json-value-any first-payload '("messages" :messages))))
+                  (second-messages (test-json-elements (test-json-value-any second-payload '("messages" :messages))))
+                  (expected-alpha (format nil "(defun alpha (x)~%  (+ x 1))"))
+                  (expected-beta (format nil "(defun beta (y)~%  (* y 2))")))
+             (fiveam:is (= 2 (length examples)))
+             (fiveam:is (string= "Prompt for alpha"
+                                 (test-json-value-any (first first-messages) '("content" :content))))
+             (fiveam:is (string= expected-alpha
+                                 (test-json-value-any (second first-messages) '("content" :content))))
+             (fiveam:is (string= "Prompt for beta"
+                                 (test-json-value-any (first second-messages) '("content" :content))))
+             (fiveam:is (string= expected-beta
+                                 (test-json-value-any (second second-messages) '("content" :content)))))
+        (when (probe-file file)
+          (delete-file file))))))
+
+(fiveam:test test-append-file-forms-to-training-examples-appends_jsonl_examples
+  (let ((responses
+          (list
+           "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Prompt for alpha\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-flash-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}"
+           "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-2\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Prompt for beta\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-2\",\"model\":\"gemini-flash-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")))
+    (let* ((temp-dir (uiop:default-temporary-directory))
+           (source-file (merge-pathnames "append-file-forms-to-training-examples.lisp" temp-dir))
+           (master-file (merge-pathnames "master-training-examples.jsonl" temp-dir))
+           (contents
+             (format nil "~%~%(defun alpha (x)~%  (+ x 1))~%~%(defun beta (y)~%  (* y 2))")))
+      (with-open-file (stream source-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-string contents stream))
+      (with-open-file (stream master-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-line "{\"messages\":[{\"role\":\"system\",\"content\":\"seed\"}]}" stream))
+      (unwind-protect
+           (let* ((*get-all-mcp-tools-function* (lambda (bot)
+                                                  (declare (ignore bot))
+                                                  nil))
+                  (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+                  (*http-post-function*
+                    (lambda (url &rest args)
+                      (declare (ignore url args))
+                      (values (make-string-input-stream (pop responses))
+                              200)))
+                  (examples (append-file-forms-to-training-examples source-file master-file))
+                  (lines (cl-ppcre:split "\\r?\\n"
+                                         (string-trim '(#\Return #\Linefeed)
+                                                      (uiop:read-file-string master-file)))))
+             (fiveam:is (= 2 (length examples)))
+             (fiveam:is (= 3 (length lines)))
+             (fiveam:is (search "\"seed\"" (first lines)))
+             (fiveam:is (search "Prompt for alpha" (second lines)))
+             (fiveam:is (search "Prompt for beta" (third lines))))
+        (when (probe-file source-file)
+          (delete-file source-file))
+        (when (probe-file master-file)
+          (delete-file master-file))))))
+
+(fiveam:test test-append-directory-lisp-files-to-training-examples-walks_recursively
+  (let ((responses
+          (list
+           "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Prompt for alpha\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-flash-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}"
+           "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-2\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Prompt for beta\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-2\",\"model\":\"gemini-flash-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")))
+    (let* ((temp-dir (uiop:default-temporary-directory))
+           (source-dir (merge-pathnames "append-directory-lisp-files/" temp-dir))
+           (nested-dir (merge-pathnames "nested/" source-dir))
+           (root-file (merge-pathnames "alpha.lisp" source-dir))
+           (nested-file (merge-pathnames "beta.lisp" nested-dir))
+           (ignored-file (merge-pathnames "ignore.txt" source-dir))
+           (master-file (merge-pathnames "master-directory-training-examples.jsonl" temp-dir)))
+      (ensure-directories-exist root-file)
+      (ensure-directories-exist nested-file)
+      (with-open-file (stream root-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-string (format nil "~%~%(defun alpha (x)~%  (+ x 1))") stream))
+      (with-open-file (stream nested-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-string (format nil "~%~%(defun beta (y)~%  (* y 2))") stream))
+      (with-open-file (stream ignored-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-string "not lisp" stream))
+      (with-open-file (stream master-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-line "{\"messages\":[{\"role\":\"system\",\"content\":\"seed\"}]}" stream))
+      (unwind-protect
+           (let* ((*get-all-mcp-tools-function* (lambda (bot)
+                                                  (declare (ignore bot))
+                                                  nil))
+                  (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+                  (*http-post-function*
+                    (lambda (url &rest args)
+                      (declare (ignore url args))
+                      (values (make-string-input-stream (pop responses))
+                              200)))
+                  (examples (append-directory-lisp-files-to-training-examples source-dir master-file))
+                  (lines (cl-ppcre:split "\\r?\\n"
+                                         (string-trim '(#\Return #\Linefeed)
+                                                      (uiop:read-file-string master-file)))))
+             (fiveam:is (= 2 (length examples)))
+             (fiveam:is (= 3 (length lines)))
+             (fiveam:is (search "\"seed\"" (first lines)))
+             (fiveam:is (search "Prompt for alpha" (second lines)))
+             (fiveam:is (search "Prompt for beta" (third lines))))
+        (when (probe-file master-file)
+          (delete-file master-file))
+        (when (uiop:directory-exists-p source-dir)
+          (uiop:delete-directory-tree source-dir :validate t))))))
+
+(fiveam:test test-append-wild-lisp-files-to-training-examples-expands_wildcards
+  (let ((responses
+          (list
+           "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-1\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Prompt for alpha\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"gemini-flash-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}"
+           "data: {\"event_type\":\"interaction.created\",\"interaction\":{\"id\":\"session-2\"}}
+data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Prompt for beta\"}}
+data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-2\",\"model\":\"gemini-flash-latest\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")))
+    (let* ((temp-dir (uiop:default-temporary-directory))
+           (source-dir (merge-pathnames "append-wild-lisp-files/" temp-dir))
+           (alpha-file (merge-pathnames "alpha.lisp" source-dir))
+           (beta-file (merge-pathnames "beta.lisp" source-dir))
+           (ignored-file (merge-pathnames "ignore.txt" source-dir))
+           (wild-path (merge-pathnames "*.lisp" source-dir))
+           (master-file (merge-pathnames "master-wild-training-examples.jsonl" temp-dir)))
+      (ensure-directories-exist alpha-file)
+      (with-open-file (stream alpha-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-string (format nil "~%~%(defun alpha (x)~%  (+ x 1))") stream))
+      (with-open-file (stream beta-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-string (format nil "~%~%(defun beta (y)~%  (* y 2))") stream))
+      (with-open-file (stream ignored-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-string "not lisp" stream))
+      (with-open-file (stream master-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+        (write-line "{\"messages\":[{\"role\":\"system\",\"content\":\"seed\"}]}" stream))
+      (unwind-protect
+           (let* ((*get-all-mcp-tools-function* (lambda (bot)
+                                                  (declare (ignore bot))
+                                                  nil))
+                  (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+                  (*http-post-function*
+                    (lambda (url &rest args)
+                      (declare (ignore url args))
+                      (values (make-string-input-stream (pop responses))
+                              200)))
+                  (examples (append-wild-lisp-files-to-training-examples wild-path master-file))
+                  (lines (cl-ppcre:split "\\r?\\n"
+                                         (string-trim '(#\Return #\Linefeed)
+                                                      (uiop:read-file-string master-file)))))
+             (fiveam:is (= 2 (length examples)))
+             (fiveam:is (= 3 (length lines)))
+             (fiveam:is (search "\"seed\"" (first lines)))
+             (fiveam:is (search "Prompt for alpha" (second lines)))
+             (fiveam:is (search "Prompt for beta" (third lines))))
+        (when (probe-file master-file)
+          (delete-file master-file))
+        (when (uiop:directory-exists-p source-dir)
+          (uiop:delete-directory-tree source-dir :validate t))))))
+
 (fiveam:test test-gemini-chat-retries-malformed-response-on-google-gemini-pro-latest
   (let ((conv (new-chat :backend :gemini :include-timestamp-p t :include-model-p t))
         (captured-urls nil)
