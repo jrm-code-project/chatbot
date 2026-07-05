@@ -33,39 +33,6 @@
     (fiveam:is (string= "done" (getf control :reply)))
     (fiveam:is (null (getf control :spawn)))))
 
-(fiveam:test test-update-scratchpad-tool-writes-file-and-decorates-next-prompt
-  (let* ((temp-dir (uiop:default-temporary-directory))
-         (bot (conversation-chatbot
-               (new-chat :backend :openai
-                         :scoped-directory (merge-pathnames "scratchpad-tool-bot/" temp-dir)
-                         :filesystem-tools-p t
-                         :filesystem-read-only-p t
-                         :scratchpad-required-p t)))
-         (scratchpad-path (chatbot-scratchpad-pathname bot)))
-    (unwind-protect
-         (progn
-           (execute-chatbot-tool-by-name
-            bot
-            "updateScratchpad"
-            '(("originalGoal" . "Build the feature")
-              ("currentStatus" . "Inspected the codebase")
-              ("nextStep" . "Edit the target file")))
-           (fiveam:is (probe-file scratchpad-path))
-           (let ((contents (uiop:read-file-string scratchpad-path))
-                 (decorated (decorate-live-user-input bot "Continue working.")))
-             (fiveam:is (search "Original goal:" contents))
-             (fiveam:is (search "Build the feature" contents))
-             (fiveam:is (search "Inspected the codebase" contents))
-             (fiveam:is (search "Edit the target file" contents))
-             (fiveam:is (search "Scratchpad memory" decorated))
-             (fiveam:is (search "Build the feature" decorated))
-             (fiveam:is (search "call updateScratchpad" decorated))))
-      (when (and scratchpad-path (probe-file scratchpad-path))
-        (delete-file scratchpad-path))
-      (let ((scratchpad-dir (chatbot-scoped-directory bot)))
-        (when (and scratchpad-dir (uiop:directory-exists-p scratchpad-dir))
-          (uiop:delete-directory-tree scratchpad-dir :validate t))))))
-
 (defun test-openai-subordinate-stream (reply &key spawn)
   "Returns one OpenAI-compatible SSE stream whose content is a structured subordinate reply."
   (format nil
@@ -1507,16 +1474,6 @@
                                                            '(("name" . "Bello")
                                                              ("prompt" . "Hi Bello")))))
              (fiveam:is (string= "Minion Bello here." prompt-res)))
-           (let* ((bello-conv (find "Bello"
-                                    (chatbot-subordinates bot)
-                                    :key #'subordinate-conversation-name
-                                    :test #'string-equal))
-                  (scratchpad-path (chatbot-scratchpad-pathname
-                                    (conversation-chatbot bello-conv))))
-             (fiveam:is (probe-file scratchpad-path))
-             (let ((scratchpad (uiop:read-file-string scratchpad-path)))
-               (fiveam:is (search "Hi Bello" scratchpad))
-               (fiveam:is (search "Minion Bello here." scratchpad))))
            ;; 5. Spawn a persona-based minion named Jerry
            (let ((spawn-res (execute-chatbot-tool-by-name bot "spawnMinion"
                                                           '(("name" . "Jerry")
@@ -1531,20 +1488,6 @@
                (fiveam:is (not (null jerry-info)))
                (fiveam:is (string-equal "openai" (cdr (assoc :backend jerry-info))))
                (fiveam:is (string-equal "persona-model" (cdr (assoc :model jerry-info))))))
-           (let* ((bello-conv (find "Bello"
-                                    (chatbot-subordinates bot)
-                                    :key #'subordinate-conversation-name
-                                    :test #'string-equal))
-                  (jerry-conv (find "Jerry"
-                                    (chatbot-subordinates bot)
-                                    :key #'subordinate-conversation-name
-                                    :test #'string-equal))
-                  (bello-scratchpad (chatbot-scratchpad-pathname
-                                     (conversation-chatbot bello-conv)))
-                  (jerry-scratchpad (chatbot-scratchpad-pathname
-                                     (conversation-chatbot jerry-conv))))
-             (fiveam:is (not (equal (namestring bello-scratchpad)
-                                    (namestring jerry-scratchpad)))))
            ;; 7. Dismiss Jerry and Bello
            (let ((dismiss-res (execute-chatbot-tool-by-name bot "dismissMinion" '(("name" . "Bello")))))
              (fiveam:is (string= "Minion 'Bello' and all of its subordinates dismissed successfully." dismiss-res)))
@@ -1982,8 +1925,6 @@
             (fiveam:is-true (chatbot-planner-p planner-bot))
             (fiveam:is (string= "Planner" (chatbot-persona-name planner-bot)))
             (fiveam:is (string= +planner-system-instruction+ (chatbot-system-instruction planner-bot)))
-            (fiveam:is (search "Avoid filler, preambles, reassurance, repetition, and conversational chattiness."
-                               (chatbot-system-instruction planner-bot)))
             (fiveam:is (= 1 (length history)))
             (let ((msg (first history)))
               (fiveam:is (string= "user" (cdr (assoc "role" msg :test #'string=))))
@@ -1991,10 +1932,9 @@
                                  (cdr (assoc "content" msg :test #'string=))))
               (fiveam:is (search "Develop schema for leaders."
                                  (cdr (assoc "content" msg :test #'string=)))))
-            (fiveam:is (= 7 (length tool-names)))
+            (fiveam:is (= 6 (length tool-names)))
             (fiveam:is (member "readFileLines" tool-names :test #'string=))
             (fiveam:is (member "directory" tool-names :test #'string=))
-            (fiveam:is (member "updateScratchpad" tool-names :test #'string=))
             (fiveam:is (member "webSearch" tool-names :test #'string=))
             (fiveam:is (member "hyperspecSearch" tool-names :test #'string=))
             (fiveam:is (member "submitPlan" tool-names :test #'string=))
@@ -2003,37 +1943,6 @@
             (fiveam:is-false (member "writeFile" tool-names :test #'string=))
             (fiveam:is-false (member "deleteFile" tool-names :test #'string=))
             (fiveam:is-false (member "spawnMinion" tool-names :test #'string=))))
-      (setf (current-active-conversation context) original-active-conversation)
-      (setf (current-active-planner context) original-active-planner)
-      (setf (current-active-planner-parent-conversation context) original-parent-conversation))))
-
-(fiveam:test test-format-delegation-instruction-demands-low-chattiness
-  (let ((instruction (format-delegation-instruction "Bello" 2 400)))
-    (fiveam:is (search "Be terse and utilitarian." instruction))
-    (fiveam:is (search "Avoid filler, preambles, reassurance, repetition, and conversational chattiness."
-                      instruction))))
-
-(fiveam:test test-invoke-planner-tool-allocates-distinct-scratchpads
-  (let* ((context (make-runtime-context))
-         (bot (conversation-chatbot (new-chat :backend :google :runtime-context context)))
-         (original-active-conversation (current-active-conversation context))
-         (original-active-planner (current-active-planner context))
-         (original-parent-conversation (current-active-planner-parent-conversation context)))
-    (unwind-protect
-         (progn
-           (setf (current-active-conversation context) (make-instance 'conversation :chatbot bot))
-           (execute-chatbot-tool-by-name bot "invokePlanner" '(("contextSummary" . "First goal")))
-           (let* ((first-planner (current-active-planner context))
-                  (first-path (chatbot-scratchpad-pathname
-                              (conversation-chatbot first-planner))))
-             (setf (current-active-planner context) nil)
-             (setf (current-active-planner-parent-conversation context) nil)
-             (execute-chatbot-tool-by-name bot "invokePlanner" '(("contextSummary" . "Second goal")))
-             (let* ((second-planner (current-active-planner context))
-                    (second-path (chatbot-scratchpad-pathname
-                                 (conversation-chatbot second-planner))))
-               (fiveam:is (not (equal (namestring first-path)
-                                     (namestring second-path)))))))
       (setf (current-active-conversation context) original-active-conversation)
       (setf (current-active-planner context) original-active-planner)
       (setf (current-active-planner-parent-conversation context) original-parent-conversation))))

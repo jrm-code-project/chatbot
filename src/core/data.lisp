@@ -263,11 +263,6 @@
     :accessor chatbot-scoped-directory
     :initform nil
     :documentation "The localized sandbox directory where built-in filesystem tools may operate.")
-   (scratchpad-required-p
-    :initarg :scratchpad-required-p
-    :accessor chatbot-scratchpad-required-p
-    :initform nil
-    :documentation "Flag indicating whether this chatbot must maintain scratchpad.txt state between turns.")
    (planner-p
     :initarg :planner-p
     :accessor chatbot-planner-p
@@ -391,69 +386,6 @@
 (defun make-persona-registry ()
   "Returns a fresh explicit sandbox persona registry."
   (make-instance 'persona-registry))
-
-(defparameter +chatbot-scratchpad-filename+ "scratchpad.txt"
-  "Stable filename used for chatbot scratchpad state.")
-
-(defvar *chatbot-autonomous-sandbox-id-counter* 0
-  "Monotonic counter used to allocate unique autonomous sandbox directories.")
-
-(defvar *chatbot-autonomous-sandbox-id-lock*
-  (sb-thread:make-mutex :name "chatbot-autonomous-sandbox-id-lock")
-  "Mutex protecting autonomous sandbox id allocation.")
-
-(defun next-chatbot-autonomous-sandbox-id ()
-  "Returns the next unique id for autonomous sandbox directory allocation."
-  (sb-thread:with-mutex (*chatbot-autonomous-sandbox-id-lock*)
-    (incf *chatbot-autonomous-sandbox-id-counter*)))
-
-(defun unique-chatbot-sandbox-directory (base-directory prefix)
-  "Returns a new unique sandbox directory under BASE-DIRECTORY using PREFIX."
-  (let* ((root (uiop:ensure-directory-pathname base-directory))
-         (directory (merge-pathnames
-                     (format nil "~A-~D/" prefix (next-chatbot-autonomous-sandbox-id))
-                     root)))
-    (ensure-directories-exist directory)
-    (uiop:ensure-directory-pathname directory)))
-
-(defun chatbot-scratchpad-directory (bot)
-  "Returns the directory where BOT keeps scratchpad.txt, or NIL when unavailable."
-  (or (chatbot-scoped-directory bot)
-      (chatbot-filesystem-root-directory bot)))
-
-(defun chatbot-scratchpad-pathname (bot)
-  "Returns BOT's scratchpad pathname, or NIL when BOT has no scratchpad directory."
-  (let ((directory (chatbot-scratchpad-directory bot)))
-    (when directory
-      (merge-pathnames +chatbot-scratchpad-filename+
-                       (uiop:ensure-directory-pathname directory)))))
-
-(defun write-chatbot-scratchpad (bot original-goal current-status next-step)
-  "Writes BOT's scratchpad.txt with ORIGINAL-GOAL, CURRENT-STATUS, and NEXT-STEP."
-  (let ((path (chatbot-scratchpad-pathname bot)))
-    (unless path
-      (error "Scratchpad path is unavailable for chatbot ~A."
-             (or (chatbot-persona-name bot) "<unnamed>")))
-    (ensure-directories-exist path)
-    (with-open-file (stream path
-                            :direction :output
-                            :if-exists :supersede
-                            :if-does-not-exist :create)
-      (format stream "Original goal:~%~A~%~%Current status:~%~A~%~%Next immediate step:~%~A~%"
-              original-goal
-              current-status
-              next-step))
-    path))
-
-(defun read-chatbot-scratchpad-text (bot)
-  "Returns BOT's scratchpad contents, or NIL when scratchpad.txt is absent or blank."
-  (let ((path (chatbot-scratchpad-pathname bot)))
-    (when path
-      (let ((resolved (probe-file path)))
-        (when resolved
-          (let ((contents (uiop:read-file-string resolved)))
-            (unless (string= "" (string-trim '(#\Space #\Tab #\Return #\Linefeed) contents))
-              contents)))))))
 
 (defun ensure-class-finalized (class)
   "Returns CLASS after finalizing it when required for slot introspection."

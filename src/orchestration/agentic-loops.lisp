@@ -258,7 +258,7 @@
 (defun build-agentic-loop-step-prompt (loop)
   "Builds the next autonomous prompt for LOOP."
   (format nil
-          "Autonomous goal: ~A~%Iteration: ~D of ~D.~%~A~%Use available tools when helpful. Be terse and utilitarian. No filler, preambles, reassurance, repetition, or conversational chattiness. Before your final response on every turn, call updateScratchpad so scratchpad.txt records originalGoal, currentStatus, and nextStep. You MUST reply with ONLY one strict JSON object in exactly this schema: {\"status\":\"continue\",\"summary\":\"concise progress update and next step\"} or {\"status\":\"final\",\"summary\":\"final result\"}. Do not add commentary before or after the JSON. The status field must be either continue or final, and the summary field must be a non-empty string."
+          "Autonomous goal: ~A~%Iteration: ~D of ~D.~%~A~%Use available tools when helpful. You MUST reply with ONLY one strict JSON object in exactly this schema: {\"status\":\"continue\",\"summary\":\"concise progress update and next step\"} or {\"status\":\"final\",\"summary\":\"final result\"}. Do not add commentary before or after the JSON. The status field must be either continue or final, and the summary field must be a non-empty string."
           (agentic-loop-goal loop)
           (1+ (agentic-loop-current-iteration loop))
           (agentic-loop-max-iterations loop)
@@ -266,23 +266,6 @@
             (if (string= history "")
                 "Previous steps: none."
                 (format nil "Previous steps:~A" history)))))
-
-(defun ensure-agentic-loop-scratchpad-directory (loop)
-  "Ensures LOOP's chatbot has a dedicated scoped directory for scratchpad.txt."
-  (let* ((bot (conversation-chatbot (agentic-loop-conversation loop)))
-         (parent-dir (or (chatbot-scoped-directory bot)
-                         (chatbot-filesystem-root-directory bot)
-                         (merge-pathnames "agentic-loop-sandboxes/"
-                                          (uiop:default-temporary-directory))))
-         (loop-dir (unique-chatbot-sandbox-directory
-                    parent-dir
-                    (format nil "agentic-loop-~D" (agentic-loop-id loop)))))
-    (setf (chatbot-scoped-directory bot) loop-dir)
-    (setf (chatbot-filesystem-root-directory bot) loop-dir)
-    (let ((scratchpad-path (chatbot-scratchpad-pathname bot)))
-      (when (and scratchpad-path (probe-file scratchpad-path))
-        (delete-file scratchpad-path)))
-    bot))
 
 (defun parse-agentic-loop-control-response (response)
   "Parses one strict structured loop control RESPONSE."
@@ -441,10 +424,6 @@
           :status (if final-p :completed :running)
           :result-summary (and final-p
                                (getf control :summary))
-          :scratchpad-current-status (getf control :summary)
-          :scratchpad-next-step (if final-p
-                                   "Done."
-                                   (getf control :summary))
           :outcome (if final-p :completed :continue))))
 
 (defun make-agentic-loop-interruption-state (loop iteration prompt condition)
@@ -456,8 +435,6 @@
         :record (make-agentic-loop-step-record iteration :interrupted
                                                :prompt prompt
                                                :note (princ-to-string condition))
-        :scratchpad-current-status (princ-to-string condition)
-        :scratchpad-next-step "Resolve the interruption, then resume the loop."
         :outcome :interrupted))
 
 (defun clear-agentic-loop-active-step-state (loop)
@@ -533,7 +510,6 @@
 (defun run-agentic-loop-step (loop)
   "Runs one autonomous iteration for LOOP."
   (let* ((conversation (agentic-loop-conversation loop))
-         (bot (conversation-chatbot conversation))
          (prompt (or (agentic-loop-pending-step-prompt loop)
                      (build-agentic-loop-step-prompt loop)))
          (snapshot (snapshot-conversation-state conversation))
@@ -544,32 +520,19 @@
     (handler-case
         (progn
           (ensure-agentic-loop-not-interrupted loop)
-          (multiple-value-bind (response scratchpad-state)
-              (call-with-chatbot-scratchpad-step
-               bot
-               (agentic-loop-goal loop)
-               (lambda ()
-                 (funcall (or (agentic-loop-chat-function-override loop)
-                              #'chat)
-                          prompt
-                          :conversation conversation)))
+          (let ((response (funcall (or (agentic-loop-chat-function-override loop)
+                                      #'chat)
+                                  prompt
+                                  :conversation conversation)))
             (ensure-agentic-loop-not-interrupted loop)
-            (let ((state (make-agentic-loop-response-state iteration prompt response)))
-              (unless (chatbot-scratchpad-step-updated-p scratchpad-state)
-                (write-chatbot-scratchpad bot
-                                          (agentic-loop-goal loop)
-                                          (getf state :scratchpad-current-status)
-                                          (getf state :scratchpad-next-step))
-                (mark-chatbot-scratchpad-step-updated bot))
-              (apply-agentic-loop-step-state loop state))))
+            (apply-agentic-loop-step-state
+             loop
+             (make-agentic-loop-response-state iteration prompt response))))
       (agentic-loop-interrupted (condition)
         (restore-conversation-state conversation snapshot)
-        (let ((state (make-agentic-loop-interruption-state loop iteration prompt condition)))
-          (write-chatbot-scratchpad bot
-                                    (agentic-loop-goal loop)
-                                    (getf state :scratchpad-current-status)
-                                    (getf state :scratchpad-next-step))
-          (apply-agentic-loop-step-state loop state))))))
+        (apply-agentic-loop-step-state
+         loop
+         (make-agentic-loop-interruption-state loop iteration prompt condition))))))
 
 (defun agentic-loop-watchdog-restart-allowed-p (loop)
   "Returns true when LOOP still has restart budget remaining."
@@ -765,7 +728,6 @@ queued, and :EXHAUSTED when LOOP has no restart budget left."
           (apply-agentic-loop-execution-profile loop-conversation
                                                 :backend backend
                                                 :model model))
-    (ensure-agentic-loop-scratchpad-directory loop)
     (let ((loop-context (make-agentic-loop-runtime-context loop template-context loop-conversation)))
       (setf (agentic-loop-runtime-context loop) loop-context)
       (setf (chatbot-runtime-context (conversation-chatbot loop-conversation)) loop-context))
