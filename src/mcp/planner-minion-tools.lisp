@@ -8,6 +8,8 @@
 You are a minion named '~A' at hierarchical depth ~D.
 You have been allocated a token budget of ~A.
 You are capable of delegating tasks to your own subordinate minions if needed.
+Be terse and utilitarian. Avoid filler, preambles, reassurance, repetition, and conversational chattiness.
+Before your final response on every turn, call updateScratchpad so scratchpad.txt records the originalGoal, currentStatus, and nextStep for this task.
 You MUST respond with ONLY a strict JSON object in exactly this schema:
 {\"reply\":\"plain text for the parent shell\",\"spawn\":null}
 or
@@ -30,6 +32,8 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
                                             "You are a worker minion named '~A'.~%"
                                             "You must DIRECTLY write Lisp code and execute tasks yourself.~%"
                                             "Do NOT request delegation or child spawns.~%"
+                                            "Be terse and utilitarian. Avoid filler, preambles, reassurance, repetition, and conversational chattiness.~%"
+                                            "Before your final response on every turn, call updateScratchpad so scratchpad.txt records the originalGoal, currentStatus, and nextStep for this task.~%"
                                             "You MUST respond with ONLY strict JSON in this exact schema: {\"reply\":\"plain text for the parent shell\",\"spawn\":null}.~%"
                                             "Do not add commentary before or after the JSON.")
                                name)
@@ -128,6 +132,21 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
         (append (chatbot-subordinates bot) (list sub-conv)))
   sub-conv)
 
+(defun autonomous-sandbox-root-directory (bot fallback-segment)
+  "Returns BOT's parent sandbox root, creating a stable fallback tree when needed."
+  (let ((root (or (chatbot-scoped-directory bot)
+                  (chatbot-filesystem-root-directory bot)
+                  (merge-pathnames fallback-segment
+                                   (uiop:default-temporary-directory)))))
+    (ensure-directories-exist (uiop:ensure-directory-pathname root))
+    (uiop:ensure-directory-pathname root)))
+
+(defun unique-minion-sandbox-directory (bot name)
+  "Returns a fresh dedicated sandbox directory for one spawned minion NAME."
+  (unique-chatbot-sandbox-directory
+   (autonomous-sandbox-root-directory bot "minion-sandboxes/")
+   (format nil "minion-sandbox-~A" name)))
+
 (defun spawn-subordinate-conversation (bot name child-depth child-dir
                                       &key persona-name backend-kw model
                                         system-instruction requested-budget web-tools-p)
@@ -140,6 +159,7 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
                                  :depth child-depth
                                  :token-budget requested-budget
                                  :scoped-directory child-dir
+                                 :scratchpad-required-p t
                                  :web-tools-p web-tools-p
                                  :filesystem-tools-p t
                                  :filesystem-read-only-p t)
@@ -151,6 +171,7 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
                          :depth child-depth
                          :token-budget requested-budget
                          :scoped-directory child-dir
+                         :scratchpad-required-p t
                          :web-tools-p web-tools-p
                          :filesystem-tools-p t
                          :filesystem-read-only-p t)))
@@ -213,11 +234,7 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
         (t
          (when (chatbot-token-budget bot)
            (incf (chatbot-spent-tokens bot) budget))
-         (let* ((parent-dir (or (chatbot-scoped-directory bot)
-                                (chatbot-filesystem-root-directory bot)
-                                (uiop:default-temporary-directory)))
-                (child-dir (merge-pathnames (format nil "minion-sandbox-~A/" child-name) parent-dir)))
-           (ensure-directories-exist child-dir)
+         (let* ((child-dir (unique-minion-sandbox-directory bot child-name)))
            (let* ((child-depth (1+ (chatbot-depth bot)))
                   (sub-conv
                     (spawn-subordinate-conversation
@@ -278,15 +295,36 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
      bot
      task-key
      (lambda ()
-       (let* ((response (chat prompt :conversation sub-conv))
+       (let* ((sub-bot (conversation-chatbot sub-conv))
+              (response (car (multiple-value-list
+                              (call-with-chatbot-scratchpad-step
+                               sub-bot
+                               prompt
+                               (lambda ()
+                                 (chat prompt :conversation sub-conv))))))
               (control (parse-subordinate-control-response response))
-              (sub-bot (conversation-chatbot sub-conv))
               (spawn-msg (maybe-execute-subordinate-spawn-request sub-bot
                                                                   (getf control :spawn))))
+         (write-chatbot-scratchpad
+          sub-bot
+          prompt
+          (getf control :reply)
+          (if (getf control :spawn)
+              (format nil "Spawn subordinate ~A with budget ~A, then continue."
+                      (mcp-val "name" (getf control :spawn))
+                      (mcp-val "budget" (getf control :spawn)))
+              "Wait for the next instruction from the parent."))
+         (mark-chatbot-scratchpad-step-updated sub-bot)
          (save-minion-state sub-conv)
          (if spawn-msg
              (format nil "~A~%~A" (getf control :reply) spawn-msg)
              (getf control :reply)))))))
+
+(defun planner-sandbox-directory (bot)
+  "Returns the dedicated planner sandbox directory for BOT."
+  (unique-chatbot-sandbox-directory
+   (autonomous-sandbox-root-directory bot "planner-sandboxes/")
+   "planner-sandbox"))
 
 (defun execute-spawn-minion-tool (bot arguments tool-name)
   "Runs the built-in spawnMinion tool."
@@ -355,11 +393,7 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
                                      requested-budget remaining)))))
          (when requested-budget
           (incf (chatbot-spent-tokens bot) requested-budget)))
-       (let* ((parent-dir (or (chatbot-scoped-directory bot)
-                             (chatbot-filesystem-root-directory bot)
-                             (uiop:default-temporary-directory)))
-             (child-dir (merge-pathnames (format nil "minion-sandbox-~A/" name) parent-dir)))
-         (ensure-directories-exist child-dir)
+       (let* ((child-dir (unique-minion-sandbox-directory bot name)))
          (let* ((child-depth (1+ (chatbot-depth bot)))
                (sub-conv
                  (spawn-subordinate-conversation
@@ -452,11 +486,16 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
                            tool-name))
          (parent-conv (or (current-active-conversation (chatbot-runtime-context bot))
                           (make-instance 'conversation :chatbot bot)))
+         (planner-dir (planner-sandbox-directory bot))
          (planner-conv (new-chat :backend (chatbot-backend bot)
                                  :model (chatbot-model bot)
                                  :system-instruction +planner-system-instruction+
                                  :parent-name (chatbot-persona-name bot)
                                  :depth (1+ (chatbot-depth bot))
+                                 :scratchpad-required-p t
+                                 :scoped-directory planner-dir
+                                 :filesystem-tools-p t
+                                 :filesystem-read-only-p t
                                  :planner-p t
                                  :runtime-context (chatbot-runtime-context bot))))
     (setf (chatbot-persona-name (conversation-chatbot planner-conv)) "Planner")

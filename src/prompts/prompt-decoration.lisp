@@ -52,14 +52,22 @@ also returns the effective model name to use for that turn."
   "Decorates string INPUT with transient prompt prefixes requested by CHATBOT."
   (if (and chatbot
            (stringp input))
-      (let ((parts nil))
+      (let ((parts nil)
+            (body input))
         (when (chatbot-include-timestamp-p chatbot)
           (push (funcall *prompt-timestamp-function*) parts))
         (when (chatbot-include-model-p chatbot)
           (push (format-prompt-model-indicator (or effective-model
                                                   (chatbot-model chatbot)))
                 parts))
+        (when (chatbot-scratchpad-required-p chatbot)
+          (setf body
+                (format nil
+                        "[Scratchpad memory]~%~A~%~%Before finishing this turn, call updateScratchpad with originalGoal, currentStatus, and nextStep so scratchpad.txt stays current.~%~%Current input:~%~A"
+                        (or (read-chatbot-scratchpad-text chatbot)
+                            "Scratchpad empty.")
+                        input)))
         (if parts
-            (format nil "~{~A~^ ~} ~A" (nreverse parts) input)
-            input))
+            (format nil "~{~A~^ ~} ~A" (nreverse parts) body)
+            body))
       input))

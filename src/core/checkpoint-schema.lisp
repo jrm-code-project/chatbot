@@ -81,6 +81,7 @@
           :spent-tokens (chatbot-spent-tokens bot)
           :scoped-directory (and (chatbot-scoped-directory bot)
                                  (namestring (chatbot-scoped-directory bot)))
+          :scratchpad-required-p (chatbot-scratchpad-required-p bot)
           :system-instruction (persisted-system-instruction-value
                                (chatbot-system-instruction bot))
           :adaptive-context-pruning-max-tokens
@@ -108,6 +109,7 @@
           :scoped-directory (and scoped-dir-str
                                  (not (empty-string-p scoped-dir-str))
                                  (uiop:ensure-directory-pathname scoped-dir-str))
+          :scratchpad-required-p (get-string-plist-value state "scratchpadRequiredP")
           :system-instruction
           (normalize-persisted-system-instruction
            (get-string-plist-value state "systemInstruction"))

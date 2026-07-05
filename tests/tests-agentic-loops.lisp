@@ -111,6 +111,98 @@ blind polling alone under heavier full-suite load."
                            (chatbot-system-instruction
                             (conversation-chatbot cloned))))))))
 
+(fiveam:test test-agentic-loop-instructions-demand-low-chattiness
+  (let* ((conversation (new-chat :backend :openai))
+         (loop (make-instance 'agentic-loop
+                              :id 1
+                              :goal "Ship feature"
+                              :conversation conversation
+                              :runtime-context (chatbot-runtime-context
+                                                (conversation-chatbot conversation))
+                              :max-iterations 3)))
+    (fiveam:is (search "Avoid filler, preambles, reassurance, repetition, and conversational chattiness."
+                       *agentic-loop-start-system-instruction*))
+    (fiveam:is (search "avoid any conversational chattiness"
+                       *isolated-agentic-loop-start-system-instruction*))
+    (fiveam:is (search "call updateScratchpad"
+                       *agentic-loop-start-system-instruction*))
+    (fiveam:is (search "No filler, preambles, reassurance, repetition, or conversational chattiness."
+                       (build-agentic-loop-step-prompt loop)))))
+
+(fiveam:test test-agentic-loop-replays-scratchpad-into-next-iteration
+  (let* ((calls 0)
+         (observed-prompts nil)
+         (first-prompt-ok nil)
+         (second-prompt-ok nil)
+         (*agentic-loop-chat-function*
+          (lambda (prompt &key conversation callback file files temperature top-p)
+             (declare (ignore callback file files temperature top-p))
+             (incf calls)
+             (let* ((bot (conversation-chatbot conversation))
+                    (decorated-prompt (decorate-live-user-input bot prompt)))
+               (push decorated-prompt observed-prompts)
+               (cond
+                 ((= calls 1)
+                  (setf first-prompt-ok (not (null (search "Scratchpad empty." decorated-prompt))))
+                  (execute-chatbot-tool-by-name
+                   bot
+                   "updateScratchpad"
+                   '(("originalGoal" . "Finish the task")
+                     ("currentStatus" . "Inspected the first file")
+                     ("nextStep" . "Open the second file")))
+                  (test-agentic-loop-response "continue"
+                                              "Inspected the first file; next open the second file"))
+                 (t
+                  (setf second-prompt-ok
+                        (and (search "Original goal:" decorated-prompt)
+                             (search "Finish the task" decorated-prompt)
+                             (search "Inspected the first file" decorated-prompt)
+                             (search "Open the second file" decorated-prompt)))
+                  (execute-chatbot-tool-by-name
+                   bot
+                   "updateScratchpad"
+                   '(("originalGoal" . "Finish the task")
+                     ("currentStatus" . "task complete")
+                     ("nextStep" . "Done.")))
+                  (test-agentic-loop-response "final" "task complete"))))))
+         (conversation (new-chat :backend :openai)))
+    (unwind-protect
+         (let ((loop (start-agentic-loop conversation "Finish the task" :max-iterations 3)))
+           (fiveam:is (eq :completed
+                           (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
+           (fiveam:is (= 2 calls))
+           (fiveam:is-true first-prompt-ok)
+           (fiveam:is-true second-prompt-ok)
+           (let* ((bot (conversation-chatbot (agentic-loop-conversation loop)))
+                   (scratchpad-path (chatbot-scratchpad-pathname bot)))
+              (fiveam:is (probe-file scratchpad-path))
+              (fiveam:is (search "task complete"
+                                (uiop:read-file-string scratchpad-path)))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
+(fiveam:test test-agentic-loops-allocate-distinct-scratchpads
+  (let* ((*agentic-loop-chat-function*
+          (lambda (prompt &key conversation callback file files temperature top-p)
+            (declare (ignore prompt conversation callback file files temperature top-p))
+            (test-agentic-loop-response "final" "done")))
+         (conversation (new-chat :backend :openai)))
+    (unwind-protect
+         (let ((loop-a (start-agentic-loop conversation "Goal A" :max-iterations 2))
+               (loop-b (start-agentic-loop conversation "Goal B" :max-iterations 2)))
+           (fiveam:is (eq :completed
+                          (wait-for-agentic-loop-status loop-a '(:completed :failed :limit-reached))))
+           (fiveam:is (eq :completed
+                          (wait-for-agentic-loop-status loop-b '(:completed :failed :limit-reached))))
+           (let* ((path-a (chatbot-scratchpad-pathname
+                           (conversation-chatbot (agentic-loop-conversation loop-a))))
+                  (path-b (chatbot-scratchpad-pathname
+                           (conversation-chatbot (agentic-loop-conversation loop-b)))))
+             (fiveam:is (not (equal (namestring path-a)
+                                    (namestring path-b))))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
 (fiveam:test test-start-agentic-loop-completes-and-records-result
   (let ((*agentic-loop-chat-function*
          (lambda (prompt &key conversation callback file files temperature top-p)

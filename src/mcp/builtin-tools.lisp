@@ -43,6 +43,19 @@
                                                   (:description . "Array of file lines to write in order.")))))
                       (:required . ("pathname" "useLfOnly" "endWithEol" "lines"))))))
 
+(defun builtin-update-scratchpad-tool ()
+  "Returns the built-in updateScratchpad tool definition."
+  '((:name . "updateScratchpad")
+    (:description . "Overwrites scratchpad.txt with the current goal, status, and immediate next step.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("originalGoal" . ((:type . "string")
+                                                        (:description . "The durable original goal being pursued.")))
+                                     ("currentStatus" . ((:type . "string")
+                                                         (:description . "The current status or progress summary.")))
+                                     ("nextStep" . ((:type . "string")
+                                                    (:description . "The immediate next step to take after this turn.")))))
+                      (:required . ("originalGoal" "currentStatus" "nextStep"))))))
+
 (defun builtin-delete-file-tool ()
   "Returns the built-in deleteFile tool definition."
   '((:name . "deleteFile")
@@ -329,6 +342,8 @@
             (push (cons :built-in (builtin-write-file-tool)) tools))
           (push (cons :built-in (builtin-directory-tool)) tools)
           (push (cons :built-in (builtin-read-file-lines-tool)) tools))
+        (when (chatbot-scratchpad-required-p bot)
+          (push (cons :built-in (builtin-update-scratchpad-tool)) tools))
         (when (or (chatbot-system-instruction-path bot)
                   (vectorp (chatbot-system-instruction bot)))
           (push (cons :built-in (builtin-replace-system-instructions-tool)) tools)

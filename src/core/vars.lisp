@@ -24,7 +24,7 @@
   "The base REST endpoint for the Gemini Interactions API.")
 
 (defparameter +planner-system-instruction+
-  "You are an architectural planner. You cannot execute code. Your job is to collaborate with the user to outline steps required to achieve a goal. Ask clarifying questions until the requirements are unambiguous. Format the final output as a detailed Markdown list/document. When approved by the user, use the `submitPlan` tool to submit the plan.")
+  "You are an architectural planner. You cannot execute code. Your job is to collaborate with the user to outline steps required to achieve a goal. Ask clarifying questions until the requirements are unambiguous. Be terse and information-dense. Avoid filler, preambles, reassurance, repetition, and conversational chattiness. Before your final response on every turn, call updateScratchpad so scratchpad.txt records originalGoal, currentStatus, and nextStep. Format the final output as a detailed Markdown list/document. When approved by the user, use the `submitPlan` tool to submit the plan.")
 
 (defvar *openai-base-url* "https://api.openai.com/v1"
   "The base REST endpoint for the OpenAI-compliant API.")
@@ -103,6 +103,29 @@
 
 (defvar *execute-mcp-tool-function* nil
   "Optional test seam for executing an MCP tool and returning text content.")
+
+(defvar *active-chatbot-scratchpad-step* nil
+  "Dynamic per-step scratchpad state for bots that maintain scratchpad.txt between turns.")
+
+(defun call-with-chatbot-scratchpad-step (bot original-goal thunk)
+  "Calls THUNK with scratchpad bookkeeping bound for BOT and ORIGINAL-GOAL."
+  (let ((*active-chatbot-scratchpad-step* (list :bot bot
+                                                :original-goal original-goal
+                                                :updated-p nil)))
+    (values (funcall thunk)
+            *active-chatbot-scratchpad-step*)))
+
+(defun chatbot-scratchpad-step-updated-p (&optional (state *active-chatbot-scratchpad-step*))
+  "Returns true when STATE records a scratchpad update for the current step."
+  (and state
+       (getf state :updated-p)))
+
+(defun mark-chatbot-scratchpad-step-updated (bot)
+  "Marks the active scratchpad step updated when it belongs to BOT."
+  (when (and *active-chatbot-scratchpad-step*
+             (eq (getf *active-chatbot-scratchpad-step* :bot) bot))
+    (setf (getf *active-chatbot-scratchpad-step* :updated-p) t))
+  *active-chatbot-scratchpad-step*)
 
 (defun default-persona-memory-compression-thread-function (thunk thread-name)
   "Starts a background thread for persona memory compression."

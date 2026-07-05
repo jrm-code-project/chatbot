@@ -7,11 +7,11 @@
   "Maximum number of recent stored messages retained when cloning a conversation for an agentic loop.")
 
 (defvar *agentic-loop-start-system-instruction*
-  "You are an autonomous agent executing the current goal. Focus on the goal, use available tools when helpful, follow configured safety and approval constraints, and reply tersely without conversational filler."
+  "You are an autonomous agent executing the current goal. Focus on the goal, use available tools when helpful, follow configured safety and approval constraints, and reply tersely. Avoid filler, preambles, reassurance, repetition, and conversational chattiness. Before your final response on every turn, call updateScratchpad so scratchpad.txt records originalGoal, currentStatus, and nextStep."
   "Compact system instruction used for agentic-loop startup clones.")
 
 (defvar *isolated-agentic-loop-start-system-instruction*
-  "You are a background process. Reply in JSON."
+  "You are a background process. Reply in JSON. Be extremely terse and avoid any conversational chattiness. Before your final response on every turn, call updateScratchpad so scratchpad.txt records originalGoal, currentStatus, and nextStep."
   "Brutally sterile system instruction used for isolated agentic-loop startup clones.")
 
 (defun trim-agentic-loop-start-history (messages)
@@ -37,6 +37,7 @@
                  :system-instruction (if isolate-p
                                          *isolated-agentic-loop-start-system-instruction*
                                          *agentic-loop-start-system-instruction*)
+                 :scratchpad-required-p t
                  :system-instruction-path nil
                  :system-instruction-storage-kind :transient))
 

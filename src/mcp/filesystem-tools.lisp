@@ -322,6 +322,28 @@
                                                                              "endWithEol"
                                                                              tool-name))))))))
 
+(defun execute-update-scratchpad-tool (bot arguments tool-name)
+  "Runs the built-in updateScratchpad tool."
+  (declare (ignore tool-name))
+  (let* ((original-goal (normalize-builtin-tool-string-argument
+                         (or (mcp-val "originalGoal" arguments)
+                             (mcp-val :original-goal arguments))
+                         "originalGoal"
+                         "updateScratchpad"))
+         (current-status (normalize-builtin-tool-string-argument
+                          (or (mcp-val "currentStatus" arguments)
+                              (mcp-val :current-status arguments))
+                          "currentStatus"
+                          "updateScratchpad"))
+         (next-step (normalize-builtin-tool-string-argument
+                     (or (mcp-val "nextStep" arguments)
+                         (mcp-val :next-step arguments))
+                     "nextStep"
+                     "updateScratchpad"))
+         (path (write-chatbot-scratchpad bot original-goal current-status next-step)))
+    (mark-chatbot-scratchpad-step-updated bot)
+    (format nil "Updated scratchpad: ~A" (file-namestring path))))
+
 (defun execute-delete-file-tool (bot arguments tool-name)
   "Runs the built-in deleteFile tool."
   (multiple-value-bind (pathname-foundp pathname)

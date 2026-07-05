@@ -85,7 +85,7 @@
         :legacy-function-seam-compatibility-p nil)
        base-context)))
 
-(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p)
+(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p scratchpad-required-p)
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
@@ -125,6 +125,7 @@ configuration, instructions, or preloaded memory."
                                  :spent-tokens spent-tokens
                                  :scoped-directory (or scoped-directory filesystem-root-directory)
                                  :filesystem-read-only-p filesystem-read-only-p
+                                 :scratchpad-required-p scratchpad-required-p
                                  :planner-p planner-p)))
         (when (startup-chatbot-mcp-servers resolved-context)
           (setf (chatbot-mcp-servers bot)
@@ -135,7 +136,7 @@ configuration, instructions, or preloaded memory."
      :default-conversation-compatibility-p nil
      :legacy-function-seam-compatibility-p nil)))
 
-(defun new-chat-persona (persona-name &key runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory (web-tools-p nil web-tools-supplied-p) (enable-git-tools-p nil enable-git-tools-supplied-p) (filesystem-tools-p nil filesystem-tools-supplied-p) (filesystem-read-only-p nil filesystem-read-only-supplied-p) (planner-p nil planner-supplied-p))
+(defun new-chat-persona (persona-name &key runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory (web-tools-p nil web-tools-supplied-p) (enable-git-tools-p nil enable-git-tools-supplied-p) (filesystem-tools-p nil filesystem-tools-supplied-p) (filesystem-read-only-p nil filesystem-read-only-supplied-p) (planner-p nil planner-supplied-p) (scratchpad-required-p nil scratchpad-required-supplied-p))
   "Creates a new chat session for a given chatbot persona.
 The persona's configuration is read from ~/.Personas/<persona-name>/config.lisp
 and the system instructions are loaded from the persona's system-instruction file set.
@@ -151,6 +152,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                    :token-budget token-budget
                    :spent-tokens spent-tokens
                    :scoped-directory scoped-directory
+                   :scratchpad-required-p (if scratchpad-required-supplied-p scratchpad-required-p nil)
                    :filesystem-read-only-p (if filesystem-read-only-supplied-p filesystem-read-only-p nil)
                    :planner-p (if planner-supplied-p planner-p nil)))
         (let* ((config-path (probe-file (merge-pathnames "config.lisp" persona-dir)))
@@ -204,6 +206,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                                :token-budget token-budget
                                :spent-tokens spent-tokens
                                :scoped-directory (or scoped-directory persona-dir)
+                               :scratchpad-required-p (if scratchpad-required-supplied-p scratchpad-required-p nil)
                                :filesystem-read-only-p (if filesystem-read-only-supplied-p filesystem-read-only-p nil)
                                :planner-p (if planner-supplied-p planner-p nil))
                      persona-dir)
@@ -264,12 +267,39 @@ Use NEW-CHAT instead when no persona should be loaded."
                 :context `(("name" . ,checkpoint-name)))
     (save-minion-state conversation :checkpoint-name checkpoint-name)))
 
+(defun last-conversation-user-message-content (conversation)
+  "Returns the latest user message content recorded on CONVERSATION, or NIL."
+  (loop for message in (reverse (conversation-messages conversation))
+        for role = (cdr (assoc "role" message :test #'string=))
+        when (string= role "user")
+          return (cdr (assoc "content" message :test #'string=))))
+
+(defun maybe-backfill-chatbot-scratchpad (conversation response-text)
+  "Ensures CONVERSATION's scratchpad.txt reflects the latest turn when required."
+  (let* ((bot (conversation-chatbot conversation))
+         (step-state *active-chatbot-scratchpad-step*))
+    (when (and bot
+               (chatbot-scratchpad-required-p bot)
+               (not (and step-state
+                         (eq (getf step-state :bot) bot)
+                         (chatbot-scratchpad-step-updated-p step-state))))
+      (write-chatbot-scratchpad
+       bot
+       (or (and step-state (getf step-state :original-goal))
+           (last-conversation-user-message-content conversation)
+           "Continue the current task.")
+       (or response-text
+           "No status recorded.")
+       "Continue from the latest recorded state.")
+      (mark-chatbot-scratchpad-step-updated bot))))
+
 (defun finalize-chat-turn-result (result &optional conversation)
   "Applies RESULT, performs post-response compression, checkpoints, and returns the final text."
   (let ((effective-conversation (or conversation
                                     (chat-turn-result-conversation result))))
     (let ((text (apply-chat-turn-result result effective-conversation)))
       (when effective-conversation
+        (maybe-backfill-chatbot-scratchpad effective-conversation text)
         (compress-conversation-context-if-needed effective-conversation)
         (checkpoint-conversation-after-chat effective-conversation))
       text)))
