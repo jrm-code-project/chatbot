@@ -133,6 +133,31 @@
       (when (probe-file file)
         (delete-file file)))))
 
+(fiveam:test test-read-file-forms-as-text-omits-empty-strings
+  (let ((original-read-file-form-ranges (symbol-function 'read-file-form-ranges))
+        (original-read-file-form-text-for-range (symbol-function 'read-file-form-text-for-range)))
+    (unwind-protect
+        (progn
+          (setf (symbol-function 'read-file-form-ranges)
+                (lambda (pathname)
+                  (declare (ignore pathname))
+                  (list :alpha :blank :beta :whitespace)))
+          (setf (symbol-function 'read-file-form-text-for-range)
+                (lambda (pathname range)
+                  (declare (ignore pathname))
+                  (case range
+                    (:alpha "(defun alpha () 1)")
+                    (:blank "")
+                    (:beta "(defun beta () 2)")
+                    (:whitespace (format nil "~%  ~%"))
+                    (otherwise ""))))
+          (fiveam:is (equal (list "(defun alpha () 1)"
+                                  "(defun beta () 2)")
+                             (read-file-forms-as-text #P"ignored.lisp"))))
+      (setf (symbol-function 'read-file-form-ranges) original-read-file-form-ranges)
+      (setf (symbol-function 'read-file-form-text-for-range)
+           original-read-file-form-text-for-range))))
+
 (fiveam:test test-make-runtime-context-inherits-default-conversation-from-canonical-context-not-legacy-global
   (let* ((default-context *default-runtime-context*)
         (legacy-conversation (new-chat))

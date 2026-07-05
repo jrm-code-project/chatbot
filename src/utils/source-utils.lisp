@@ -21,6 +21,10 @@
   (string-right-trim '(#\Newline #\Return)
                      (trim-leading-newlines text)))
 
+(defun empty-form-source-text-p (text)
+  "Returns true when TEXT contains no non-whitespace source characters."
+  (string= "" (string-trim '(#\Space #\Tab #\Newline #\Return) text)))
+
 (defun read-file-form-text-for-range (pathname range)
   "Returns the line-bounded source text in PATHNAME covering RANGE."
   (with-open-file (stream pathname :direction :input)
@@ -57,6 +61,7 @@
 
 The file is processed in two passes: the first pass uses READ to locate each form,
 and the second pass uses READ-LINE to recover the enclosing line text."
-  (mapcar (lambda (range)
-            (read-file-form-text-for-range pathname range))
-          (read-file-form-ranges pathname)))
+  (remove-if #'empty-form-source-text-p
+             (mapcar (lambda (range)
+                       (read-file-form-text-for-range pathname range))
+                     (read-file-form-ranges pathname))))
