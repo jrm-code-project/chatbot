@@ -212,7 +212,7 @@ Use NEW-CHAT instead when no persona should be loaded."
              (start-persona-memory-compression-thread conversation persona-dir)
              conversation))))))
 
-(defvar *minions-data-directory* nil
+(defparameter *minions-data-directory* nil
   "Seam to override the dynamic minions storage directory in unit tests.")
 
 (defun configured-minions-data-directory ()

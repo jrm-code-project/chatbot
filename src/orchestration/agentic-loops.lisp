@@ -15,16 +15,16 @@
 (defvar *agentic-loop-registry-lock* (sb-thread:make-mutex :name "agentic-loop-registry-lock"))
 (defvar *agentic-loop-id-counter* 0)
 (defvar *agentic-loop-id-lock* (sb-thread:make-mutex :name "agentic-loop-id-lock"))
-(defvar *agentic-loop-chat-function* nil
+(defparameter *agentic-loop-chat-function* nil
   "Optional test seam overriding the chat function used by agentic loops.")
 
-(defvar *agentic-loop-supervisor-timeout-seconds* 180.0d0
+(defparameter *agentic-loop-supervisor-timeout-seconds* 180.0d0
   "Maximum seconds an in-flight loop step may run before the watchdog restarts it.")
 
-(defvar *agentic-loop-supervisor-max-restarts* 2
+(defparameter *agentic-loop-supervisor-max-restarts* 2
   "Maximum watchdog-managed restarts for one agentic loop before it is left failed.")
 
-(defvar *agentic-loop-supervisor-restart-backoff-seconds* 1.0d0
+(defparameter *agentic-loop-supervisor-restart-backoff-seconds* 1.0d0
   "Seconds the watchdog waits before respawning a restarted loop.")
 
 (define-condition agentic-loop-approval-required (error)
@@ -797,7 +797,7 @@ queued, and :EXHAUSTED when LOOP has no restart budget left."
 (defvar *agentic-loop-monitor-lock* (sb-thread:make-mutex :name "agentic-loop-monitor-lock")
   "Mutex protecting the monitor thread activation state.")
 
-(defvar *agentic-loop-monitor-log-level* :warn
+(defparameter *agentic-loop-monitor-log-level* :warn
   "Minimum log level used inside the background monitor thread.")
 
 (defun make-agentic-loop-monitor-runtime-context (&optional template-context)
@@ -849,7 +849,7 @@ queued, and :EXHAUSTED when LOOP has no restart budget left."
          (mark-agentic-loop-supervisor-failed loop
                                               (format nil "Unrecognized loop status: ~A" status))))))))
 
-(defvar *reaper-interval-seconds* 600
+(defparameter *reaper-interval-seconds* 600
   "Interval in seconds between thread and memory reaper sweeps (default 10 minutes).")
 
 (defvar *last-reaper-execution-time* 0

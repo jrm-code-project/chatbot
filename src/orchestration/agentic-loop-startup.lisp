@@ -3,16 +3,16 @@
 
 (in-package "CHATBOT")
 
-(defvar *agentic-loop-start-history-message-limit* 6
+(defparameter *agentic-loop-start-history-message-limit* 6
   "Maximum number of recent stored messages retained when cloning a conversation for an agentic loop.")
 
-(defvar *agentic-loop-start-system-instruction*
+(defparameter *agentic-loop-start-system-instruction*
   (format nil
           "You are an autonomous agent executing the current goal. Focus on the goal, use available tools when helpful, follow configured safety and approval constraints, and reply tersely without conversational filler.~%~%~A"
           +agentic-operational-directive+)
   "Compact system instruction used for agentic-loop startup clones.")
 
-(defvar *isolated-agentic-loop-start-system-instruction*
+(defparameter *isolated-agentic-loop-start-system-instruction*
   (format nil
           "You are a background process. Reply in JSON.~%~%~A"
           +agentic-operational-directive+)

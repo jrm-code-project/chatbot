@@ -20,7 +20,7 @@
                   *agentic-loop-default-model*
                   *default-runtime-context*))
 
-(defvar *gemini-base-url* "https://generativelanguage.googleapis.com/v1beta"
+(defparameter *gemini-base-url* "https://generativelanguage.googleapis.com/v1beta"
   "The base REST endpoint for the Gemini Interactions API.")
 
 (defparameter +agentic-operational-directive+
@@ -29,31 +29,32 @@
 * **Iteration 2:** Evaluate the results of Iteration 1. Identify errors, gather missing context, or execute the next phase of the plan.
 * **Iteration 3+:** Verify the final outcome against the original goal, test the code, or refine the data. Do not signal completion or ask for approval until you have thoroughly iterated, tested, and verified your work against the goal. Show your work.
 **TOOL EXECUTION MANDATE (NO HALLUCINATIONS):** You are strictly forbidden from hallucinating actions or faking results. If your step requires gathering data or writing to the disk, you MUST explicitly invoke the corresponding tool (e.g., `search_nodes`, `writeFile`).
-* Do NOT simply write a JSON summary claiming you performed an action if you have not explicitly executed the tool call to do so.
-* If you need to use a tool, emit the tool call. Do not return the `{\"status\":\"continue\"}` JSON until you have actually received the tool's execution result in your context.
-* Summarizing work you did not physically perform via a tool call is a critical failure. Pull the trigger; do not just describe the bullet.")
+  * Do NOT claim you performed an action if you have not explicitly executed the tool call.
+  * **SIMULTANEOUS FIRING REQUIRED:** When you invoke a tool, you MUST simultaneously output the required `{\"status\":\"continue\", \"summary\":\"...\"}` JSON object in your text response.
+  * Do NOT wait for the tool execution result to return the JSON. The JSON summary should simply state which tool you are currently firing and what you expect to do with the result in the next iteration.
+  * Summarizing work you did not physically perform via a tool call is a critical failure. Pull the trigger; do not just describe the bullet.")
 
 (defparameter +planner-system-instruction+
   (format nil
           "You are an architectural planner. You cannot execute code. Your job is to collaborate with the user to outline steps required to achieve a goal. Ask clarifying questions until the requirements are unambiguous. Format the final output as a detailed Markdown list/document. When approved by the user, use the `submitPlan` tool to submit the plan.~%~%~A"
           +agentic-operational-directive+))
 
-(defvar *openai-base-url* "https://api.openai.com/v1"
+(defparameter *openai-base-url* "https://api.openai.com/v1"
   "The base REST endpoint for the OpenAI-compliant API.")
 
-(defvar *openai-api-key* nil
+(defparameter *openai-api-key* nil
   "The API key for the OpenAI-compliant API. If nil, looks up the OPENAI_API_KEY environment variable.")
 
-(defvar *getenv-function* #'uiop:getenv
+(defparameter *getenv-function* #'uiop:getenv
   "Function used to read environment variables.")
 
-(defvar *gemini-api-key-function* #'google:gemini-api-key
+(defparameter *gemini-api-key-function* #'google:gemini-api-key
   "Function used to resolve the Gemini API key.")
 
-(defvar *web-search-function* #'google:web-search
+(defparameter *web-search-function* #'google:web-search
   "Function used by the built-in web grounding search tool.")
 
-(defvar *hyperspec-search-function* #'google:hyperspec-search
+(defparameter *hyperspec-search-function* #'google:hyperspec-search
   "Function used by the built-in HyperSpec grounding search tool.")
 
 (defun default-filesystem-access-approval-function (bot directory tool-name)
@@ -63,10 +64,10 @@
             tool-name
             (namestring directory)))
 
-(defvar *filesystem-access-approval-function* #'default-filesystem-access-approval-function
+(defparameter *filesystem-access-approval-function* #'default-filesystem-access-approval-function
   "Function used to approve persona filesystem access outside the current allowlist.")
 
-(defvar *bypass-eval-approval-p* nil
+(defparameter *bypass-eval-approval-p* nil
   "When T, bypasses interactive evaluation approval and automatically returns T.")
 
 (defun default-eval-approval-function (bot source tool-name)
@@ -77,50 +78,50 @@
                 tool-name
                 source)))
 
-(defvar *eval-approval-function* #'default-eval-approval-function
+(defparameter *eval-approval-function* #'default-eval-approval-function
   "Function used to approve evaluation of a specific expression for the eval tool.")
 
-(defvar *user-homedir-pathname-function* #'user-homedir-pathname
+(defparameter *user-homedir-pathname-function* #'user-homedir-pathname
   "Function used to resolve the current user's home directory pathname.")
 
-(defvar *read-mcp-config-function* nil
+(defparameter *read-mcp-config-function* nil
   "Optional test seam for reading MCP configuration.")
 
-(defvar *start-mcp-server-function* nil
+(defparameter *start-mcp-server-function* nil
   "Optional test seam for launching an MCP server.")
 
-(defvar *stop-mcp-server-function* nil
+(defparameter *stop-mcp-server-function* nil
   "Optional test seam for stopping an MCP server.")
 
-(defvar *mcp-send-request-function* nil
+(defparameter *mcp-send-request-function* nil
   "Optional test seam for sending an MCP JSON-RPC request.")
 
-(defvar *mcp-debug-p* nil
+(defparameter *mcp-debug-p* nil
   "Global flag controlling whether verbose MCP JSON-RPC and lifecycle debug messages are logged.")
 
-(defvar *mcp-initialize-function* nil
+(defparameter *mcp-initialize-function* nil
   "Optional test seam for performing the MCP initialize handshake.")
 
-(defvar *mcp-call-tool-function* nil
+(defparameter *mcp-call-tool-function* nil
   "Optional test seam for invoking an MCP tool call.")
 
-(defvar *initialize-mcp-servers-for-chatbot-function* nil
+(defparameter *initialize-mcp-servers-for-chatbot-function* nil
   "Optional test seam for startup MCP initialization orchestration.")
 
-(defvar *get-all-mcp-tools-function* nil
+(defparameter *get-all-mcp-tools-function* nil
   "Optional test seam for enumerating all MCP tools for a chatbot.")
 
-(defvar *find-mcp-server-and-tool-function* nil
+(defparameter *find-mcp-server-and-tool-function* nil
   "Optional test seam for resolving an MCP tool by name.")
 
-(defvar *execute-mcp-tool-function* nil
+(defparameter *execute-mcp-tool-function* nil
   "Optional test seam for executing an MCP tool and returning text content.")
 
 (defun default-persona-memory-compression-thread-function (thunk thread-name)
   "Starts a background thread for persona memory compression."
   (sb-thread:make-thread thunk :name thread-name))
 
-(defvar *persona-memory-compression-thread-function*
+(defparameter *persona-memory-compression-thread-function*
   #'default-persona-memory-compression-thread-function
   "Function used to start background persona memory compression threads.")
 
@@ -138,7 +139,7 @@
     (error "~A must be a non-empty string." context))
   value)
 
-(defvar *backend-default-models*
+(defparameter *backend-default-models*
   '((:gemini . "gemini-3.5-flash")
     (:google . "gemini-3.5-flash")
     (:openai . "gpt-4o")
@@ -182,7 +183,7 @@ Unknown backends fall back to the Gemini default."
   (or *openai-api-key*
       (funcall (current-getenv-function) "OPENAI_API_KEY")))
 
-(defvar *lm-studio-base-url* "http://127.0.0.1:1234"
+(defparameter *lm-studio-base-url* "http://127.0.0.1:1234"
   "The host root for the local LM Studio API.")
 
 (defun lm-studio-api-base-url ()
@@ -192,13 +193,13 @@ Unknown backends fall back to the Gemini default."
         base-url
         (concatenate 'string base-url "/v1"))))
 
-(defvar *lm-studio-default-api-key* "lm_studio"
+(defparameter *lm-studio-default-api-key* "lm_studio"
   "Fallback API key used when LM Studio credentials are otherwise unset.")
 
-(defvar *lm-studio-api-key* nil
+(defparameter *lm-studio-api-key* nil
   "The API key for the LM Studio API.")
 
-(defvar *lm-studio-http-read-timeout* 600
+(defparameter *lm-studio-http-read-timeout* 600
   "Minimum HTTP response timeout in seconds for the LM Studio backend.")
 
 (defun lm-studio-api-key ()
@@ -218,17 +219,17 @@ Unknown backends fall back to the Gemini default."
   "Returns the Gemini API key using the current runtime seam."
   (funcall (current-gemini-api-key-function)))
 
-(defvar *gemini-api-revision* "2026-05-20"
+(defparameter *gemini-api-revision* "2026-05-20"
   "API revision header value used for Gemini Interactions requests.")
 
 (defun gemini-api-revision ()
   "Returns the configured Gemini API revision header value."
   (require-non-empty-string *gemini-api-revision* "Gemini API revision"))
 
-(defvar *http-post-function* #'dexador:post
+(defparameter *http-post-function* #'dexador:post
   "Function used to perform HTTP POST requests.")
 
-(defvar *http-get-function* #'dexador:get
+(defparameter *http-get-function* #'dexador:get
   "Function used to perform HTTP GET requests.")
 
 (defun eager-mcp-startup-enabled-p ()
@@ -757,16 +758,16 @@ default-context compatibility is still desired."
 
 (setf *default-runtime-context* (make-runtime-context))
 
-(defvar *max-minion-depth* 3
+(defparameter *max-minion-depth* 3
   "The global maximum nesting depth allowed for the minion hierarchy.")
 
-(defvar *context-pruning-estimated-max-tokens* 200000
+(defparameter *context-pruning-estimated-max-tokens* 200000
   "Estimated prompt-token ceiling above which completed conversation history is auto-compressed.")
 
-(defvar *context-pruning-estimated-target-tokens* 150000
+(defparameter *context-pruning-estimated-target-tokens* 150000
   "Estimated prompt-token target after compressing oversized conversation history.")
 
-(defvar *context-pruning-threshold-characters* 800000
+(defparameter *context-pruning-threshold-characters* 800000
   "Compatibility character ceiling for auto-pruning, aligned with the default estimated token window.")
 
 (defvar *active-planner* nil

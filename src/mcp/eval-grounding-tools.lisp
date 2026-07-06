@@ -117,7 +117,7 @@
              :tool-name tool-name
              :reason (format nil "Search failed for query ~S: ~A" query e)))))
 
-(defvar *eval-tool-timeout-seconds* 60
+(defparameter *eval-tool-timeout-seconds* 60
   "Maximum number of seconds an approved eval tool expression may run.")
 
 (defun execute-approved-eval-expression (expression form tool-name)

@@ -22,7 +22,7 @@
   "Returns the current local prompt timestamp string."
   (format-prompt-timestamp (get-universal-time)))
 
-(defvar *prompt-timestamp-function* #'default-prompt-timestamp-function
+(defparameter *prompt-timestamp-function* #'default-prompt-timestamp-function
   "Function used to generate the current prompt timestamp string.")
 
 (defparameter +google-gemini-model-override-marker+ #\$
