@@ -3,17 +3,6 @@
 
 (in-package "CHATBOT")
 
-(defparameter +google-default-safety-settings+
-  #((("category" . "HARM_CATEGORY_HARASSMENT")
-     ("threshold" . "BLOCK_NONE"))
-    (("category" . "HARM_CATEGORY_HATE_SPEECH")
-     ("threshold" . "BLOCK_NONE"))
-    (("category" . "HARM_CATEGORY_SEXUALLY_EXPLICIT")
-     ("threshold" . "BLOCK_NONE"))
-    (("category" . "HARM_CATEGORY_DANGEROUS_CONTENT")
-     ("threshold" . "BLOCK_NONE")))
-  "Default Google generateContent safety settings sent with each request.")
-
 (defun generate-content-role-for-message (role)
   "Normalizes a stored conversation ROLE for Google generateContent."
   (if (assistant-like-role-p role) "model" "user"))
@@ -118,7 +107,3 @@
                                                     (translate-mcp-tool-to-gemini-fn (cdr pair)))
                                                   mcp-tools)
                                           'vector)))))))
-
-(defun generate-content-request-safety-settings ()
-  "Returns the Google generateContent safetySettings payload."
-  (copy-seq +google-default-safety-settings+))
