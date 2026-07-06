@@ -66,7 +66,7 @@
       (format nil "~{~A~^~%~%~}" texts))))
 
 (defun retry-on-google-gemini-pro-latest (bot input conversation callback
-                                            &key file-attachments request-contents history-messages cached-content-name
+                                            &key file-attachments request-contents history-messages
                                               effective-generation-config
                                               return-turn-result-p
                                               (recursion-depth 0))
@@ -77,7 +77,6 @@
                conversation
                callback
                :file-attachments file-attachments
-               :cached-content-name cached-content-name
                :effective-model +google-gemini-model-override-model+
                :effective-generation-config effective-generation-config
                :malformed-response-fallback-attempted-p t
@@ -139,7 +138,8 @@
               (list (cons "systemInstruction"
                          (list (cons "parts"
                                      (system-instruction-text-parts system-inst))))))
-            (when gemini-tools
+            (when (and gemini-tools
+                       (null cached-content-name))
               (list (cons "tools" gemini-tools)))
             (when generation-config
               (list (cons "generationConfig" generation-config))))))
@@ -412,7 +412,6 @@
               :file-attachments (getf state :file-attachments)
               :request-contents (getf state :request-contents)
               :history-messages (getf state :history-messages)
-              :cached-content-name (getf state :cached-content-name)
               :effective-generation-config (getf state :effective-generation-config)
               :return-turn-result-p t
               :recursion-depth current-depth))

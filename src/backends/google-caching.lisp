@@ -77,6 +77,7 @@
          (policy (chatbot-content-cache-policy bot))
          (prefix-contents (google-cacheable-prefix-contents conversation))
          (system-instruction (chatbot-system-instruction bot))
+         (gemini-tools (generate-content-request-tools bot))
          (estimated-tokens (google-cacheable-prefix-token-count conversation))
          (minimum-tokens (or (chatbot-content-cache-min-tokens bot)
                              *default-content-cache-min-tokens*)))
@@ -94,7 +95,9 @@
                        (when system-instruction
                          (list (cons "systemInstruction"
                                      (list (cons "parts"
-                                                 (system-instruction-text-parts system-instruction))))))))
+                                                 (system-instruction-text-parts system-instruction))))))
+                       (when gemini-tools
+                         (list (cons "tools" gemini-tools)))))
              (fingerprint (cl-json:encode-json-to-string body)))
         (list :body body
               :fingerprint fingerprint
