@@ -1420,6 +1420,53 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
          (fiveam:is (string= "Primary response."
                              (cdr (assoc "content" (car (last history)) :test #'string=)))))))))
 
+(fiveam:test test-context-token-breakdown-separates-digest-history
+  (let* ((conv (new-chat :backend :google
+                        :system-instruction (make-string 40 :initial-element #\S)))
+        (history (list (make-context-digest-message "Earlier digest state.")
+                       (list (cons "role" "user")
+                             (cons "content" "Fresh question."))))
+        (breakdown (conversation-context-token-breakdown conv history)))
+    (fiveam:is (> (getf breakdown :fixed-context-tokens) 0))
+    (fiveam:is (> (getf breakdown :history-tokens) 0))
+    (fiveam:is (> (getf breakdown :digest-message-tokens) 0))
+    (fiveam:is (> (getf breakdown :non-digest-history-tokens) 0))
+    (fiveam:is (= (getf breakdown :total-tokens)
+                 (+ (getf breakdown :fixed-context-tokens)
+                    (getf breakdown :history-tokens))))))
+
+(fiveam:test test-summarize-old-history-source-text-unwraps-existing-digest
+  (let ((source-text
+         (summarize-old-history-source-text
+          (list (make-context-digest-message "Prior digest summary.")
+                (list (cons "role" "user")
+                      (cons "content" "Need follow-up work."))))))
+    (fiveam:is (search "Existing State Digest content to preserve and refine:" source-text))
+    (fiveam:is (search "Prior digest summary." source-text))
+    (fiveam:is (search "user: Need follow-up work." source-text))
+    (fiveam:is-false (search "[State Digest of previous turns:" source-text))))
+
+(fiveam:test test-summarize-old-history-bounds-digest-size
+  (let* ((*context-pruning-threshold-characters* nil)
+        (*context-pruning-estimated-max-tokens* 100)
+        (*context-pruning-estimated-target-tokens* 20)
+        (*context-pruning-max-digest-tokens* 8)
+        (conversation (new-chat :backend :google))
+        (long-summary (make-string 200 :initial-element #\D)))
+    (let ((*gemini-api-key-function* (lambda () "mocked-api-key"))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore url args))
+             (values
+              (format nil "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"~A\"}], \"role\": \"model\"}}]}" long-summary)
+              200))))
+      (let ((digest (summarize-old-history
+                    (list (list (cons "role" "user") (cons "content" "First turn"))
+                          (list (cons "role" "model") (cons "content" "Second turn")))
+                    conversation)))
+        (fiveam:is (stringp digest))
+        (fiveam:is (<= (estimate-text-token-count digest) 8))))))
+
 (fiveam:test test-context-pruning-does-not-trigger-when-fixed-context-alone-exceeds-budget
   (let* ((*context-pruning-threshold-characters* nil)
         (*context-pruning-estimated-max-tokens* 100)

@@ -1987,12 +1987,35 @@
            (fiveam:is (stringp res))
            (fiveam:is (search "test-plan-file-123.md" res))
            ;; Verify it was appended to system-instruction
-           (let ((inst (chatbot-system-instruction bot)))
+           (let ((inst (system-instruction-text (chatbot-system-instruction bot))))
              (fiveam:is (search "Base instruction." inst))
              (fiveam:is (search "[EXECUTING PLAN FROM test-plan-file-123.md]" inst))
              (fiveam:is (search "## Step 1: Code." inst))))
       (when (probe-file filename)
         (delete-file filename)))))
+
+(fiveam:test test-load-plan-to-system-instructions-replaces-older-plan
+  (let* ((bot (conversation-chatbot (new-chat :backend :google :system-instruction "Base instruction.")))
+         (first-file "test-plan-file-older.md")
+         (second-file "test-plan-file-newer.md"))
+    (with-open-file (s first-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-string "Old plan body." s))
+    (with-open-file (s second-file :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-string "New plan body." s))
+    (unwind-protect
+         (progn
+           (load-plan-to-system-instructions bot first-file)
+           (load-plan-to-system-instructions bot second-file)
+           (let ((inst (system-instruction-text (chatbot-system-instruction bot))))
+            (fiveam:is (search "Base instruction." inst))
+            (fiveam:is-false (search "Old plan body." inst))
+            (fiveam:is-false (search "[EXECUTING PLAN FROM test-plan-file-older.md]" inst))
+            (fiveam:is (search "[EXECUTING PLAN FROM test-plan-file-newer.md]" inst))
+            (fiveam:is (search "New plan body." inst))))
+      (when (probe-file first-file)
+        (delete-file first-file))
+      (when (probe-file second-file)
+        (delete-file second-file)))))
 
 (fiveam:test test-chat-routing-to-active-planner
   (let* ((custom-context (make-runtime-context))
