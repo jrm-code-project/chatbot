@@ -113,7 +113,10 @@
   (let ((mcp-tools (get-all-chatbot-tools chatbot)))
     (when mcp-tools
       (list `(("functionDeclarations" . ,(coerce
-                                          (mapcar (lambda (pair)
-                                                    (translate-mcp-tool-to-gemini-fn (cdr pair)))
-                                                  mcp-tools)
+                                          (sort (mapcar (lambda (pair)
+                                                          (translate-mcp-tool-to-gemini-fn (cdr pair)))
+                                                        mcp-tools)
+                                                #'string<
+                                                :key (lambda (tool)
+                                                       (mcp-val :name tool)))
                                           'vector)))))))

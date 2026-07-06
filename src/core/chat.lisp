@@ -3,9 +3,12 @@
 
 (in-package "CHATBOT")
 
-(defun annotate-chat-turn-result (result conversation)
+(defun annotate-chat-turn-result (result conversation &key provider-conversation)
   "Returns RESULT annotated with its target CONVERSATION."
-  (append (list :conversation conversation) result))
+  (append (list :conversation conversation)
+          (when provider-conversation
+            (list :provider-conversation provider-conversation))
+          result))
 
 (defun chat-backend-dispatch-key (bot)
   "Returns the backend dispatch key for BOT."
@@ -117,14 +120,17 @@
                                                   temperature
                                                   explicit-top-p-specified-p
                                                   top-p)))
-    (annotate-chat-turn-result
-     (dispatch-chat-turn (getf prepared-state :turn-conversation)
-                         (getf prepared-state :effective-input)
-                         callback
-                         :file-attachments (getf prepared-state :file-attachments)
-                         :effective-model (getf prepared-state :effective-model)
-                         :effective-generation-config (getf prepared-state :effective-generation-config))
-     conversation)))
+    (let* ((provider-result
+             (dispatch-chat-turn (getf prepared-state :turn-conversation)
+                                 (getf prepared-state :effective-input)
+                                 callback
+                                 :file-attachments (getf prepared-state :file-attachments)
+                                 :effective-model (getf prepared-state :effective-model)
+                                 :effective-generation-config (getf prepared-state :effective-generation-config)))
+           (provider-conversation (chat-turn-result-conversation provider-result)))
+      (annotate-chat-turn-result provider-result
+                                conversation
+                                :provider-conversation provider-conversation))))
 
 (defun chat (input &key conversation callback file files (temperature nil temperaturep) (top-p nil top-pp))
   "Sends user input to the active conversation using the appropriate backend API.

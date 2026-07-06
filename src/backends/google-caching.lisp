@@ -3,6 +3,12 @@
 
 (in-package "CHATBOT")
 
+(defparameter *google-content-cache-stale-refresh-fraction* 0.25d0
+  "Fraction of a cache TTL remaining below which Google explicit caches are considered stale.")
+
+(defparameter *google-content-cache-stale-refresh-min-remaining-seconds* 600
+  "Minimum remaining lifetime that marks a Google explicit cache as stale enough to refresh.")
+
 (defun google-explicit-content-cache-supported-p (bot)
   "Returns true when BOT's backend supports explicit Gemini cachedContents usage."
   (eq (chatbot-backend bot) :google))
@@ -74,6 +80,36 @@
     (+ (or system-instruction-tokens 0)
        content-tokens)))
 
+(defun canonical-content-cache-fingerprint-value (value)
+  "Returns a stable Lisp representation of VALUE suitable for cache fingerprinting."
+  (cond
+    ((hash-table-p value)
+     (list :object
+           (sort (let (entries)
+                   (maphash (lambda (key nested-value)
+                              (push (cons (json-key-string key)
+                                          (canonical-content-cache-fingerprint-value nested-value))
+                                    entries))
+                            value)
+                   entries)
+                 #'string<
+                 :key #'car)))
+    ((json-object-alist-p value)
+     (list :object
+           (sort (mapcar (lambda (entry)
+                           (cons (json-key-string (car entry))
+                                 (canonical-content-cache-fingerprint-value (cdr entry))))
+                         value)
+                 #'string<
+                 :key #'car)))
+    ((vectorp value)
+     (list :array
+           (map 'list #'canonical-content-cache-fingerprint-value value)))
+    ((listp value)
+     (list :array
+           (mapcar #'canonical-content-cache-fingerprint-value value)))
+    (t value)))
+
 (defun google-cacheable-prefix-descriptor (conversation &key effective-model)
   "Returns the explicit-cache descriptor for CONVERSATION, or NIL when caching should be skipped."
   (let* ((bot (conversation-chatbot conversation))
@@ -101,7 +137,8 @@
                                                  (system-instruction-text-parts system-instruction))))))
                        (when gemini-tools
                          (list (cons "tools" gemini-tools)))))
-             (fingerprint (cl-json:encode-json-to-string body)))
+             (fingerprint (prin1-to-string
+                           (canonical-content-cache-fingerprint-value body))))
         (list :body body
               :fingerprint fingerprint
               :estimated-tokens estimated-tokens)))))
@@ -110,6 +147,96 @@
   "Returns the resource name from one decoded cachedContents RESPONSE."
   (or (cdr (assoc :name response))
       (cdr (assoc "name" response :test #'string=))))
+
+(defun cached-content-response-field (response key)
+  "Returns KEY from one decoded cachedContents RESPONSE."
+  (or (cdr (assoc key response))
+      (cdr (assoc (string-downcase (symbol-name key)) response :test #'string=))
+      (cdr (assoc (case key
+                    (:expire-time "expireTime")
+                    (:update-time "updateTime")
+                    (:create-time "createTime")
+                    (t (string-capitalize (string-downcase (symbol-name key)))))
+                  response
+                  :test #'string=))))
+
+(defun parse-google-cache-duration-seconds (value)
+  "Returns VALUE parsed as a cache TTL in seconds when possible."
+  (typecase value
+    (null nil)
+    (integer value)
+    (real (truncate value))
+    (string
+     (let ((trimmed (string-trim '(#\Space #\Tab #\Return #\Linefeed) value)))
+       (cond
+         ((string= trimmed "") nil)
+         ((alexandria:ends-with-subseq "s" trimmed)
+          (truncate (read-from-string (subseq trimmed 0 (1- (length trimmed))))))
+         (t
+          (truncate (read-from-string trimmed))))))
+    (t nil)))
+
+(defun parse-rfc3339-universal-time (timestamp)
+  "Returns TIMESTAMP parsed from a basic RFC 3339 string, or NIL."
+  (when (and (stringp timestamp)
+             (>= (length timestamp) 20))
+    (let* ((fractional-start (position #\. timestamp :start 19))
+           (timezone-start (or (position #\Z timestamp :start 19)
+                               (position #\+ timestamp :start 19)
+                               (position #\- timestamp :start 19)))
+           (timezone-start (or timezone-start (length timestamp)))
+           (core (subseq timestamp 0 19))
+           (timezone-fragment
+             (subseq timestamp
+                     (or (and fractional-start
+                              (< fractional-start timezone-start)
+                              timezone-start)
+                         timezone-start))))
+      (flet ((segment (start end)
+               (parse-integer core :start start :end end)))
+        (let* ((year (segment 0 4))
+               (month (segment 5 7))
+               (day (segment 8 10))
+               (hour (segment 11 13))
+               (minute (segment 14 16))
+               (second (segment 17 19))
+               (timezone
+                 (cond
+                   ((or (string= timezone-fragment "")
+                        (string= timezone-fragment "Z"))
+                    0)
+                   ((>= (length timezone-fragment) 6)
+                    (let* ((sign (char timezone-fragment 0))
+                           (offset-hours (parse-integer timezone-fragment :start 1 :end 3))
+                           (offset-minutes (parse-integer timezone-fragment :start 4 :end 6))
+                           (offset (+ offset-hours (/ offset-minutes 60.0d0))))
+                      (case sign
+                        (#\+ (- offset))
+                        (#\- offset)
+                        (t 0))))
+                   (t 0))))
+          (encode-universal-time second minute hour day month year timezone))))))
+
+(defun google-content-cache-ttl-seconds (conversation metadata)
+  "Returns the configured or reported TTL in seconds for CONVERSATION's cached content."
+  (or (parse-google-cache-duration-seconds
+       (cached-content-response-field metadata :ttl))
+      (chatbot-content-cache-ttl-seconds (conversation-chatbot conversation))
+      *default-content-cache-ttl-seconds*))
+
+(defun google-content-cache-stale-threshold-seconds (conversation metadata)
+  "Returns the remaining-lifetime threshold under which cached content should refresh."
+  (let ((ttl-seconds (google-content-cache-ttl-seconds conversation metadata)))
+    (max *google-content-cache-stale-refresh-min-remaining-seconds*
+         (floor (* ttl-seconds *google-content-cache-stale-refresh-fraction*)))))
+
+(defun google-content-cache-somewhat-stale-p (conversation metadata)
+  "Returns true when METADATA says CONVERSATION's cache is approaching expiry."
+  (let ((expire-time (parse-rfc3339-universal-time
+                      (cached-content-response-field metadata :expire-time))))
+    (when expire-time
+      (<= (- expire-time (get-universal-time))
+          (google-content-cache-stale-threshold-seconds conversation metadata)))))
 
 (defun create-google-content-cache (conversation &key effective-model)
   "Creates one explicit Gemini cachedContents resource for CONVERSATION."
@@ -193,20 +320,27 @@
   (let* ((descriptor (google-cacheable-prefix-descriptor conversation
                                                          :effective-model effective-model))
          (existing-name (conversation-cached-content-name conversation))
-         (existing-key (conversation-cached-content-key conversation)))
+         (existing-key (conversation-cached-content-key conversation))
+         (existing-metadata (conversation-cached-content-metadata conversation)))
     (when descriptor
       (if (and existing-name
-               existing-key
-               (string= existing-key (getf descriptor :fingerprint)))
-          existing-name
-          (let* ((response (create-google-content-cache conversation
-                                                        :effective-model effective-model))
-                 (name (cached-content-response-name response)))
-            (setf (conversation-cached-content-name conversation) name)
-            (setf (conversation-cached-content-key conversation)
-                  (getf descriptor :fingerprint))
-            (setf (conversation-cached-content-metadata conversation) response)
-            (log-message :info "Created explicit Gemini content cache"
-                         :context `(("name" . ,name)
-                                    ("estimated-prefix-tokens" . ,(princ-to-string (getf descriptor :estimated-tokens)))))
-            name)))))
+              existing-key
+              (string= existing-key (getf descriptor :fingerprint))
+              (not (google-content-cache-somewhat-stale-p conversation existing-metadata)))
+         existing-name
+         (let* ((response (create-google-content-cache conversation
+                                                       :effective-model effective-model))
+                (name (cached-content-response-name response)))
+           (setf (conversation-cached-content-name conversation) name)
+           (setf (conversation-cached-content-key conversation)
+                 (getf descriptor :fingerprint))
+           (setf (conversation-cached-content-metadata conversation) response)
+           (log-message :info
+                        (if (and existing-name
+                                 existing-key
+                                 (string= existing-key (getf descriptor :fingerprint)))
+                            "Refreshed explicit Gemini content cache"
+                            "Created explicit Gemini content cache")
+                        :context `(("name" . ,name)
+                                   ("estimated-prefix-tokens" . ,(princ-to-string (getf descriptor :estimated-tokens)))))
+           name)))))

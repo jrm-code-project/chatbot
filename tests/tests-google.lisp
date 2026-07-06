@@ -295,6 +295,8 @@
       (fiveam:is (= 3 (length captured-urls)))
       (fiveam:is (= 1 (count-if (lambda (url) (search "/cachedContents" url)) captured-urls)))
       (fiveam:is (string= "cachedContents/cache-1" (conversation-cached-content-name conv)))
+      (fiveam:is (string= "cachedContents/cache-1"
+                         (cached-content-response-name (conversation-cached-content-metadata conv))))
       (let* ((first-cache-payload (decode-test-json (third captured-payloads)))
              (first-turn-payload (decode-test-json (second captured-payloads)))
              (second-turn-payload (decode-test-json (first captured-payloads)))
@@ -311,6 +313,47 @@
         (assert-google-message-texts (first second-turn-contents) "user" '("First live turn"))
         (assert-google-message-texts (second second-turn-contents) "model" '("Hello from Google non-streaming"))
         (assert-google-message-texts (third second-turn-contents) "user" '("Second live turn"))))))
+
+(fiveam:test test-google-chat-rebuilds-explicit-content-cache-when-somewhat-stale
+  (let ((captured-urls nil)
+        (captured-payloads nil))
+    (flet ((utc-rfc3339 (universal-time)
+             (multiple-value-bind (second minute hour day month year)
+                 (decode-universal-time universal-time 0)
+               (format nil "~4,'0D-~2,'0D-~2,'0DT~2,'0D:~2,'0D:~2,'0DZ"
+                       year month day hour minute second))))
+      (let* ((*gemini-base-url* "https://example.test/gemini")
+             (context
+               (make-runtime-context
+                :gemini-api-key-function (lambda () "mocked-google-api-key")
+                :http-post-function
+                (lambda (url &rest args)
+                  (push url captured-urls)
+                  (push (getf args :content) captured-payloads)
+                  (if (search "/cachedContents" url)
+                      (values "{\"name\":\"cachedContents/cache-2\",\"ttl\":\"3600s\",\"expireTime\":\"2030-01-01T00:00:00Z\"}" 200)
+                      (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}" 200))))
+             (conv (new-chat :backend :google
+                             :system-instruction "Be concise"
+                             :content-cache-policy :auto
+                             :content-cache-min-tokens 1
+                             :runtime-context context)))
+        (setf (conversation-persona-memory conv) "Stored persona memory.")
+        (let ((descriptor (google-cacheable-prefix-descriptor conv)))
+          (setf (conversation-cached-content-name conv) "cachedContents/cache-1")
+          (setf (conversation-cached-content-key conv) (getf descriptor :fingerprint))
+          (setf (conversation-cached-content-metadata conv)
+                `(("name" . "cachedContents/cache-1")
+                  ("ttl" . "3600s")
+                  ("expireTime" . ,(utc-rfc3339 (+ (get-universal-time) 120)))))))
+        (fiveam:is (string= "Hello from Google non-streaming"
+                           (chat "First live turn" :conversation conv)))
+        (fiveam:is (= 2 (length captured-urls)))
+        (fiveam:is (= 1 (count-if (lambda (url) (search "/cachedContents" url)) captured-urls)))
+        (fiveam:is (string= "cachedContents/cache-2" (conversation-cached-content-name conv)))
+        (assert-json-value= (decode-test-json (first captured-payloads))
+                            "cachedContent"
+                            "cachedContents/cache-2")))))
 
 (fiveam:test test-google-chat-moves-tools-into-cached-content
   (let* ((tool '((:name . "lookup_time")
@@ -352,6 +395,53 @@
                           (google-tool-names (google-tool-declarations cache-tools))))
         (fiveam:is-false request-tools)
         (assert-json-value= turn-payload "cachedContent" "cachedContents/cache-1")))))
+
+(fiveam:test test-google-chat-reuses-cache-despite-tool-order-churn
+  (let ((captured-urls nil)
+        (captured-payloads nil)
+        (tool-call-count 0))
+    (let* ((*gemini-base-url* "https://example.test/gemini")
+           (*get-all-mcp-tools-function*
+             (lambda (ignored-bot)
+               (declare (ignore ignored-bot))
+               (incf tool-call-count)
+               (let ((alpha '((:name . "alpha_tool")
+                              (:description . "Alpha tool")
+                              (:input-schema . ((:type . "object")
+                                                (:properties . nil)))))
+                     (beta '((:name . "beta_tool")
+                             (:description . "Beta tool")
+                             (:input-schema . ((:type . "object")
+                                               (:properties . nil))))))
+                 (if (oddp tool-call-count)
+                     (list (cons nil beta) (cons nil alpha))
+                     (list (cons nil alpha) (cons nil beta)))))
+           (context
+             (make-runtime-context
+              :gemini-api-key-function (lambda () "mocked-google-api-key")
+              :http-post-function
+              (lambda (url &rest args)
+                (push url captured-urls)
+                (push (getf args :content) captured-payloads)
+                (if (search "/cachedContents" url)
+                    (values "{\"name\":\"cachedContents/cache-1\",\"ttl\":\"3600s\"}" 200)
+                    (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}" 200))))
+           (conv (new-chat :backend :google
+                           :system-instruction "Be concise"
+                           :content-cache-policy :auto
+                           :content-cache-min-tokens 1
+                           :runtime-context context)))
+      (setf (conversation-persona-memory conv) "Stored persona memory.")
+      (fiveam:is (string= "Hello from Google non-streaming"
+                         (chat "First live turn" :conversation conv)))
+      (fiveam:is (string= "Hello from Google non-streaming"
+                         (chat "Second live turn" :conversation conv)))
+      (fiveam:is (= 1 (count-if (lambda (url) (search "/cachedContents" url)) captured-urls)))
+      (fiveam:is (string= "cachedContents/cache-1" (conversation-cached-content-name conv)))
+      (let* ((cache-payload (decode-test-json (third captured-payloads)))
+             (cache-tools (google-payload-tools cache-payload)))
+        (fiveam:is (equal '("alpha_tool" "beta_tool")
+                          (google-tool-names (google-tool-declarations cache-tools)))))))
 
 (fiveam:test test-google-chat-includes-transient-file-attachments-without-persisting-them
   (let* ((temp-dir (uiop:default-temporary-directory))

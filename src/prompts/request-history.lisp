@@ -102,11 +102,28 @@ Accepted signatures:
   "Returns RESULT's target conversation."
   (getf result :conversation))
 
+(defun chat-turn-result-provider-conversation (result)
+  "Returns RESULT's backend-owned working conversation, when present."
+  (getf result :provider-conversation))
+
+(defun sync-chat-turn-provider-state (source target)
+  "Copies provider-owned state from SOURCE to TARGET when both conversations exist."
+  (when (and source target)
+    (setf (conversation-cached-content-name target)
+          (conversation-cached-content-name source))
+    (setf (conversation-cached-content-key target)
+          (conversation-cached-content-key source))
+    (setf (conversation-cached-content-metadata target)
+          (conversation-cached-content-metadata source))))
+
 (defun apply-chat-turn-result (result &optional conversation)
   "Applies RESULT to CONVERSATION, defaulting to RESULT's target conversation."
   (let ((target (or conversation
                     (chat-turn-result-conversation result))))
     (when target
+      (sync-chat-turn-provider-state
+       (chat-turn-result-provider-conversation result)
+       target)
       (setf (conversation-messages target)
             (chat-turn-result-messages result))
       (setf (conversation-interaction-id target)
