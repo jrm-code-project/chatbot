@@ -44,13 +44,14 @@
 
 (defun generate-content-message-text-token-count (message)
   "Returns an estimated token count for one generateContent-format MESSAGE."
-  (loop for part in (let ((parts (cdr (assoc "parts" message :test #'string=))))
-                      (if (vectorp parts)
-                          (coerce parts 'list)
-                          parts))
-        for text = (cdr (assoc "text" part :test #'string=))
-        when (and text (stringp text))
-          sum (estimate-text-token-count text)))
+  (or (loop for part in (let ((parts (cdr (assoc "parts" message :test #'string=))))
+                          (if (vectorp parts)
+                              (coerce parts 'list)
+                              parts))
+            for text = (cdr (assoc "text" part :test #'string=))
+            when (and text (stringp text))
+              sum (estimate-text-token-count text))
+      0))
 
 (defun google-cacheable-prefix-contents (conversation)
   "Returns the reusable generateContent prefix contents for CONVERSATION."
@@ -67,9 +68,11 @@
            (estimate-optional-text-token-count
             (system-instruction-text (chatbot-system-instruction bot))))
          (content-tokens
-           (loop for message in (google-cacheable-prefix-contents conversation)
-                 sum (generate-content-message-text-token-count message))))
-    (+ system-instruction-tokens content-tokens)))
+           (or (loop for message in (google-cacheable-prefix-contents conversation)
+                     sum (generate-content-message-text-token-count message))
+               0)))
+    (+ (or system-instruction-tokens 0)
+       content-tokens)))
 
 (defun google-cacheable-prefix-descriptor (conversation &key effective-model)
   "Returns the explicit-cache descriptor for CONVERSATION, or NIL when caching should be skipped."

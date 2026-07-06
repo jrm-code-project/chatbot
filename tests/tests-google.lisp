@@ -169,6 +169,32 @@
         (fiveam:is (string= "Stored persona memory."
                            (conversation-persona-memory conv)))))))
 
+(fiveam:test test-google-chat-auto-cache-skips-empty-prefix-without-error
+  (let ((captured-payload nil)
+        (captured-urls nil))
+    (let* ((*gemini-base-url* "https://example.test/gemini")
+           (context
+             (make-runtime-context
+              :gemini-api-key-function (lambda () "mocked-google-api-key")
+              :http-post-function
+              (lambda (url &rest args)
+                (push url captured-urls)
+                (setf captured-payload (getf args :content))
+                (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}" 200))))
+           (conv (new-chat :backend :google
+                           :content-cache-policy :auto
+                           :content-cache-min-tokens 1
+                           :runtime-context context)))
+      (fiveam:is (string= "Hello from Google non-streaming"
+                         (chat "First live turn" :conversation conv)))
+      (fiveam:is (= 1 (length captured-urls)))
+      (fiveam:is-false (search "/cachedContents" (first captured-urls)))
+      (let ((payload (decode-test-json captured-payload)))
+        (fiveam:is-false (test-json-value-any payload '("cachedContent" :cached-content)))
+        (assert-google-message-texts (first (google-payload-contents payload))
+                                    "user"
+                                    '("First live turn"))))))
+
 (fiveam:test test-google-content-cache-bindings-use-shared-http-seams
   (let ((create-url nil)
         (create-payload nil)
