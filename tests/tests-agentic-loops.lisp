@@ -181,6 +181,47 @@ blind polling alone under heavier full-suite load."
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))
 
+(fiveam:test test-resume-worker-tool-resumes-autonomous-worker
+  (let* ((context (make-runtime-context
+                  :eval-approval-function
+                  (lambda (&rest ignored)
+                    (declare (ignore ignored))
+                    (error "Loop runtime context should override eval approval."))))
+         (conversation (new-chat :backend :openai
+                                :enable-eval-p t
+                                :runtime-context context))
+         (bot (conversation-chatbot conversation))
+         (calls 0)
+         (*agentic-loop-chat-function*
+          (lambda (prompt &key conversation callback file files temperature top-p)
+           (declare (ignore prompt callback file files temperature top-p))
+           (incf calls)
+           (approve-chatbot-eval-expression
+            (conversation-chatbot conversation)
+            "(+ 1 2)"
+            "eval")
+           (test-agentic-loop-response "final" "eval complete via worker tool"))))
+    (unwind-protect
+         (let* ((loop (start-agentic-loop conversation "Run eval with worker resume" :max-iterations 2))
+               (worker-id (format nil "loop:~A" (agentic-loop-id loop))))
+           (fiveam:is (eq :awaiting-approval
+                         (wait-for-agentic-loop-status loop '(:awaiting-approval :completed :failed))))
+           (let ((resume-payload (parse-json-or-error
+                                 (execute-chatbot-tool-by-name bot
+                                                               "resumeWorker"
+                                                               `(("workerId" . ,worker-id)
+                                                                 ("approve" . t)))
+                                 :context "resumeWorker result")))
+            (assert-json-field= resume-payload :workerId worker-id)
+            (assert-json-field= resume-payload :kind "autonomous"))
+           (fiveam:is (eq :completed
+                         (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
+           (fiveam:is (= 1 calls))
+           (fiveam:is (string= "eval complete via worker tool"
+                              (agentic-loop-result-summary loop))))
+      (abort-agentic-loops :force t)
+      (clear-agentic-loops))))
+
 (fiveam:test test-abort-agentic-loop-interrupts-in-flight-step-cooperatively
   (let* ((entered-step-p nil)
          (release-step-p nil)
@@ -357,6 +398,12 @@ blind polling alone under heavier full-suite load."
                       (execution-profile (json-object-field payload :execution-profile)))
                  (fiveam:is (typep loop 'agentic-loop))
                  (fiveam:is (string= "Tool-launched goal" (agentic-loop-goal loop)))
+                 (assert-json-field= payload :workerId (format nil "loop:~A" loop-id))
+                 (let ((entry (find-runtime-worker-entry
+                               (format nil "loop:~A" loop-id)
+                               (chatbot-runtime-context (conversation-chatbot conversation)))))
+                   (fiveam:is (not (null entry)))
+                   (fiveam:is (eq :loop (runtime-worker-entry-kind entry))))
                  (fiveam:is (eq :openai (getf (agentic-loop-execution-profile loop) :backend)))
                  (fiveam:is (string= "gpt-4o" (getf (agentic-loop-execution-profile loop) :model)))
                  (assert-json-field= execution-profile :backend "openai")
@@ -390,6 +437,7 @@ blind polling alone under heavier full-suite load."
                       (loop (find-agentic-loop loop-id))
                       (execution-profile (json-object-field payload :execution-profile)))
                  (fiveam:is (typep loop 'agentic-loop))
+                 (assert-json-field= payload :workerId (format nil "loop:~A" loop-id))
                  (fiveam:is (eq :openai (getf (agentic-loop-execution-profile loop) :backend)))
                  (fiveam:is (string= "gpt-4.1-mini" (getf (agentic-loop-execution-profile loop) :model)))
                  (assert-json-field= execution-profile :backend "openai")
@@ -441,6 +489,117 @@ blind polling alone under heavier full-suite load."
               (setf (current-active-conversation context) previous-active-conversation)))
        (abort-agentic-loops :force t)
        (clear-agentic-loops)))))
+
+(fiveam:test test-read-agentic-loop-tool-uses-worker-shape
+  (let ((*agentic-loop-chat-function*
+         (lambda (prompt &key conversation callback file files temperature top-p)
+           (declare (ignore prompt conversation callback file files temperature top-p))
+           (test-agentic-loop-response "final" "legacy read worker shape"))))
+    (let ((conversation (new-chat :backend :openai)))
+      (unwind-protect
+          (let* ((context (chatbot-runtime-context (conversation-chatbot conversation)))
+                 (previous-active-conversation (current-active-conversation context)))
+            (unwind-protect
+                 (let* ((spawn-json (progn
+                                      (setf (current-active-conversation context) conversation)
+                                      (default-execute-builtin-chatbot-tool
+                                       (conversation-chatbot conversation)
+                                       "startAgenticLoop"
+                                       '(("goal" . "Legacy read goal")
+                                         ("maxIterations" . 2)))))
+                        (spawn-payload (parse-json-or-error
+                                        spawn-json
+                                        :context "startAgenticLoop result"))
+                        (loop-id (mcp-val :id spawn-payload))
+                        (read-payload (parse-json-or-error
+                                       (default-execute-builtin-chatbot-tool
+                                        (conversation-chatbot conversation)
+                                        "readAgenticLoop"
+                                        `(("loopId" . ,loop-id)))
+                                       :context "readAgenticLoop result")))
+                   (assert-json-field= read-payload :workerId (format nil "loop:~A" loop-id))
+                   (assert-json-field= read-payload :kind "autonomous"))
+              (setf (current-active-conversation context) previous-active-conversation)))
+        (abort-agentic-loops :force t)
+        (clear-agentic-loops)))))
+
+(fiveam:test test-list-agentic-loops-tool-uses-worker-shape
+  (let ((*agentic-loop-chat-function*
+         (lambda (prompt &key conversation callback file files temperature top-p)
+           (declare (ignore prompt conversation callback file files temperature top-p))
+           (test-agentic-loop-response "final" "legacy list worker shape"))))
+    (let ((conversation (new-chat :backend :openai)))
+      (unwind-protect
+          (let* ((context (chatbot-runtime-context (conversation-chatbot conversation)))
+                 (previous-active-conversation (current-active-conversation context)))
+            (unwind-protect
+                 (let* ((spawn-json (progn
+                                      (setf (current-active-conversation context) conversation)
+                                      (default-execute-builtin-chatbot-tool
+                                       (conversation-chatbot conversation)
+                                       "startAgenticLoop"
+                                       '(("goal" . "Legacy list goal")
+                                         ("maxIterations" . 2)))))
+                        (spawn-payload (parse-json-or-error spawn-json :context "startAgenticLoop result"))
+                        (loop-id (mcp-val :id spawn-payload))
+                        (list-payload (parse-json-or-error
+                                       (default-execute-builtin-chatbot-tool
+                                        (conversation-chatbot conversation)
+                                        "listAgenticLoops"
+                                        '())
+                                       :context "listAgenticLoops result"))
+                        (loops (json-object-field list-payload "loops")))
+                   (fiveam:is (find (format nil "loop:~A" loop-id)
+                                    loops
+                                    :key (lambda (loop-entry) (json-object-field loop-entry "workerId"))
+                                    :test #'string=)))
+              (setf (current-active-conversation context) previous-active-conversation)))
+        (abort-agentic-loops :force t)
+        (clear-agentic-loops)))))
+
+(fiveam:test test-spawn-worker-tool-exposes-autonomous-worker-shape
+  (let ((*agentic-loop-chat-function*
+         (lambda (prompt &key conversation callback file files temperature top-p)
+           (declare (ignore prompt conversation callback file files temperature top-p))
+           (test-agentic-loop-response "final" "worker launched"))))
+    (let ((conversation (new-chat :backend :openai)))
+      (unwind-protect
+          (let* ((context (chatbot-runtime-context (conversation-chatbot conversation)))
+                 (previous-active-conversation (current-active-conversation context)))
+            (unwind-protect
+                 (let* ((spawn-json (progn
+                                      (setf (current-active-conversation context) conversation)
+                                      (default-execute-builtin-chatbot-tool
+                                       (conversation-chatbot conversation)
+                                       "spawnWorker"
+                                       '(("mode" . "autonomous")
+                                         ("goal" . "Unified worker goal")
+                                         ("maxIterations" . 2)))))
+                        (spawn-payload (parse-json-or-error spawn-json :context "spawnWorker result"))
+                        (worker-id (json-object-field spawn-payload "workerId"))
+                        (read-payload (parse-json-or-error
+                                       (default-execute-builtin-chatbot-tool
+                                        (conversation-chatbot conversation)
+                                        "readWorker"
+                                        `(("workerId" . ,worker-id)))
+                                       :context "readWorker result"))
+                        (list-payload (parse-json-or-error
+                                       (default-execute-builtin-chatbot-tool
+                                        (conversation-chatbot conversation)
+                                        "listWorkers"
+                                        '())
+                                       :context "listWorkers result"))
+                        (workers (json-object-field list-payload "workers")))
+                   (fiveam:is (string= "loop:" (subseq worker-id 0 5)))
+                   (assert-json-field= spawn-payload :kind "autonomous")
+                   (assert-json-field= read-payload :workerId worker-id)
+                   (assert-json-field= read-payload :kind "autonomous")
+                   (fiveam:is (find worker-id workers
+                                    :key (lambda (worker) (json-object-field worker "workerId"))
+                                    :test #'string=)))
+              (setf (current-active-conversation context) previous-active-conversation)))
+        (abort-agentic-loops :force t)
+        (clear-agentic-loops)))))
 
 
 (fiveam:test test-monitor-restarts-failed-agentic-loop-within-budget
@@ -620,9 +779,31 @@ blind polling alone under heavier full-suite load."
       (clear-agentic-loops context-a)
       (clear-agentic-loops context-b))))
 
+(fiveam:test test-context-agentic-loop-lookup-prefers-worker-registry
+  (let* ((context (make-runtime-context))
+        (conversation (new-chat :backend :openai :runtime-context context))
+        (*agentic-loop-chat-function*
+         (lambda (prompt &key conversation callback file files temperature top-p)
+           (declare (ignore prompt conversation callback file files temperature top-p))
+           (test-agentic-loop-response "final" "ok"))))
+    (unwind-protect
+        (let* ((loop (start-agentic-loop conversation "Registry-backed loop" :max-iterations 2))
+               (loop-id (agentic-loop-id loop))
+               (lock (runtime-context-agentic-loop-registry-lock context))
+               (registry (runtime-context-agentic-loop-registry context)))
+          (sb-thread:with-mutex (lock)
+            (clrhash registry))
+          (fiveam:is (typep (find-agentic-loop loop-id context) 'agentic-loop))
+          (fiveam:is (find loop-id
+                           (list-agentic-loops context)
+                           :key #'agentic-loop-id
+                           :test #'=)))
+      (abort-agentic-loops :force t :context context)
+      (clear-agentic-loops context))))
+
 (fiveam:test test-active-thread-reaper-garbage-collection
   (let* ((context (make-runtime-context))
-         (conv (new-chat :backend :openai :runtime-context context))
+        (conv (new-chat :backend :openai :runtime-context context))
          (loop-id 9999)
          (loop (make-instance 'agentic-loop
                               :id loop-id

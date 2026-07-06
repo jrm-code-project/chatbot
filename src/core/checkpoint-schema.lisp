@@ -79,6 +79,41 @@
       (append history (list (recovery-handshake-message)))
       history))
 
+(defun conversation-persistence-worker-kind (conversation)
+  "Returns CONVERSATION's persisted worker kind string, or NIL."
+  (let ((bot (conversation-chatbot conversation)))
+    (cond
+      ((chatbot-planner-p bot)
+       "planner")
+      ((chatbot-parent-name bot)
+       "delegated")
+      (t
+       nil))))
+
+(defun persisted-worker-kind-keyword (kind)
+  "Returns KIND decoded to one canonical worker kind keyword, or NIL."
+  (cond
+    ((null kind) nil)
+    ((keywordp kind)
+     (case kind
+       (:subordinate :delegated)
+       (:autonomous :loop)
+       ((:delegated :planner :loop) kind)
+       (t nil)))
+    ((symbolp kind)
+     (persisted-worker-kind-keyword (symbol-name kind)))
+    ((stringp kind)
+     (let ((normalized (string-downcase kind)))
+       (cond
+         ((string= normalized "subordinate") :delegated)
+         ((string= normalized "delegated") :delegated)
+         ((string= normalized "planner") :planner)
+         ((string= normalized "autonomous") :loop)
+         ((string= normalized "loop") :loop)
+         (t nil))))
+    (t
+     nil)))
+
 (defun conversation-persistence-state (conversation &key name)
   "Returns CONVERSATION serialized to the shared persisted-state schema."
   (let ((bot (conversation-chatbot conversation)))
@@ -96,6 +131,7 @@
                                  (namestring (chatbot-scoped-directory bot)))
           :system-instruction (persisted-system-instruction-value
                                (chatbot-system-instruction bot))
+          :worker-kind (conversation-persistence-worker-kind conversation)
           :adaptive-context-pruning-max-tokens
           (conversation-adaptive-context-pruning-max-tokens conversation)
           :interaction-id (or (conversation-interaction-id conversation) "")
@@ -131,6 +167,9 @@
           :system-instruction
           (normalize-persisted-system-instruction
            (get-string-plist-value state "systemInstruction"))
+          :worker-kind
+          (persisted-worker-kind-keyword
+           (get-string-plist-value state "workerKind"))
           :adaptive-context-pruning-max-tokens
           (get-string-plist-value state "adaptiveContextPruningMaxTokens")
           :interaction-id (let ((interaction-id (get-string-plist-value state "interactionId")))

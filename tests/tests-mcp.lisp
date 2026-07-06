@@ -1473,6 +1473,8 @@
                   (parsed (cl-json:decode-json-from-string list-res)))
              (fiveam:is (= 1 (length parsed)))
              (fiveam:is (string-equal "Bello" (cdr (assoc :name (first parsed)))))
+             (fiveam:is (string-equal "delegated:Bello" (cdr (assoc :worker-id (first parsed)))))
+             (fiveam:is (string-equal "delegated" (cdr (assoc :kind (first parsed)))))
              (fiveam:is (string-equal "openai" (cdr (assoc :backend (first parsed)))))
              (fiveam:is (string-equal "gpt-4o" (cdr (assoc :model (first parsed))))))
            ;; 4. Prompt the minion Bello
@@ -1522,6 +1524,140 @@
       (fiveam:is (search +agentic-operational-directive+ instruction))
       (fiveam:is (search "Do NOT request delegation or child spawns." instruction))
       (fiveam:is (search "{\"reply\":\"plain text for the parent shell\",\"spawn\":null}" instruction)))))
+
+(fiveam:test test-worker-tools-wrap-minion-lifecycle
+  (let* ((bot (conversation-chatbot (new-chat :backend :gemini)))
+         (*openai-api-key* "mocked-openai-key")
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore args))
+             (if (search "api.openai.com" url)
+                 (values
+                  (make-string-input-stream
+                   (test-openai-subordinate-stream "Worker Bello here."))
+                  200)
+                 (values
+                  (make-string-input-stream
+                   (test-gemini-subordinate-stream "Worker Bello here." :model "gpt-4o"))
+                  200)))))
+    (let* ((spawn-payload (parse-json-or-error
+                           (execute-chatbot-tool-by-name bot "spawnWorker"
+                                                         '(("mode" . "delegated")
+                                                           ("name" . "Bello")
+                                                           ("backend" . "openai")
+                                                           ("model" . "gpt-4o")
+                                                           ("systemInstruction" . "You are Bello")))
+                           :context "spawnWorker delegated result"))
+           (worker-id (json-object-field spawn-payload "workerId"))
+           (read-payload (parse-json-or-error
+                          (execute-chatbot-tool-by-name bot "readWorker"
+                                                        `(("workerId" . ,worker-id)))
+                          :context "readWorker delegated result"))
+           (list-payload (parse-json-or-error
+                          (execute-chatbot-tool-by-name bot "listWorkers" '())
+                          :context "listWorkers delegated result"))
+           (workers (json-object-field list-payload "workers")))
+      (assert-json-field= spawn-payload :workerId "delegated:Bello")
+      (assert-json-field= spawn-payload :kind "delegated")
+      (assert-json-field= read-payload :name "Bello")
+      (fiveam:is (find worker-id workers
+                       :key (lambda (worker) (json-object-field worker "workerId"))
+                       :test #'string=))
+      (let ((entry (find-runtime-worker-entry worker-id (chatbot-runtime-context bot))))
+        (fiveam:is (not (null entry)))
+        (fiveam:is (eq :delegated (runtime-worker-entry-kind entry)))
+        (fiveam:is (eq bot (runtime-worker-entry-owner-bot entry))))
+      (fiveam:is (string= "Worker Bello here."
+                          (execute-chatbot-tool-by-name bot "promptWorker"
+                                                        `(("workerId" . ,worker-id)
+                                                          ("prompt" . "Hi Bello")))))
+      (let ((abort-payload (parse-json-or-error
+                            (execute-chatbot-tool-by-name bot "abortWorker"
+                                                          `(("workerId" . ,worker-id)))
+                            :context "abortWorker delegated result")))
+        (assert-json-field= abort-payload :workerId worker-id)
+        (assert-json-field= abort-payload :status "dismissed")))))
+
+(fiveam:test test-runtime-worker-kind-normalization
+  (let ((delegated-entry (make-runtime-worker-entry :worker-id "delegated:Alias"
+                                                    :kind :subordinate))
+        (loop-entry (make-runtime-worker-entry :worker-id "loop:42"
+                                               :kind "autonomous")))
+    (fiveam:is (eq :delegated (runtime-worker-entry-kind delegated-entry)))
+    (fiveam:is (eq :loop (runtime-worker-entry-kind loop-entry)))
+    (fiveam:is (string= "delegated"
+                        (runtime-worker-kind-public-name
+                         (runtime-worker-entry-kind delegated-entry))))
+    (fiveam:is (string= "autonomous"
+                        (runtime-worker-kind-public-name
+                         (runtime-worker-entry-kind loop-entry))))))
+
+(fiveam:test test-spawn-worker-tool-planner-mode
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-worker-planner-mode/" temp-dir))
+         (parent-conv (new-chat :backend :google))
+         (bot (conversation-chatbot parent-conv))
+         (context (chatbot-runtime-context bot))
+         (original-active-conversation (current-active-conversation context))
+         (original-active-planner (current-active-planner context))
+         (original-parent-conversation (current-active-planner-parent-conversation context)))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (setf (current-active-planner context) nil)
+          (setf (current-active-planner-parent-conversation context) nil)
+          (setf (current-active-conversation context) parent-conv)
+          (let* ((payload (parse-json-or-error
+                           (execute-chatbot-tool-by-name bot "spawnWorker"
+                                                         '(("mode" . "planner")
+                                                           ("goal" . "Develop schema for leaders.")))
+                           :context "spawnWorker planner result"))
+                 (planner-conv (current-active-planner context)))
+            (fiveam:is-true (typep planner-conv 'conversation))
+            (assert-json-field= payload :kind "planner")
+            (assert-json-field= payload :name "Planner")
+            (assert-json-field= payload :workerId "planner:Planner")
+            (fiveam:is (eq parent-conv (current-active-planner-parent-conversation context)))))
+      (setf (current-active-conversation context) original-active-conversation)
+      (setf (current-active-planner context) original-active-planner)
+      (setf (current-active-planner-parent-conversation context) original-parent-conversation)
+      (when (uiop:directory-exists-p mock-home)
+        (uiop:delete-directory-tree mock-home :validate t)))))
+
+(fiveam:test test-abort-worker-tool-dismisses-planner-and-clears-active-state
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-worker-planner-abort/" temp-dir))
+         (parent-conv (new-chat :backend :google))
+         (bot (conversation-chatbot parent-conv))
+         (context (chatbot-runtime-context bot))
+         (original-active-conversation (current-active-conversation context))
+         (original-active-planner (current-active-planner context))
+         (original-parent-conversation (current-active-planner-parent-conversation context)))
+    (unwind-protect
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+          (setf (current-active-planner context) nil)
+          (setf (current-active-planner-parent-conversation context) nil)
+          (setf (current-active-conversation context) parent-conv)
+          (let* ((spawn-payload (parse-json-or-error
+                                (execute-chatbot-tool-by-name bot "spawnWorker"
+                                                              '(("mode" . "planner")
+                                                                ("goal" . "Prepare a plan.")))
+                                :context "spawnWorker planner result"))
+                (worker-id (json-object-field spawn-payload "workerId"))
+                (abort-payload (parse-json-or-error
+                                (execute-chatbot-tool-by-name bot "abortWorker"
+                                                              `(("workerId" . ,worker-id)))
+                                :context "abortWorker planner result")))
+            (assert-json-field= abort-payload :workerId worker-id)
+            (assert-json-field= abort-payload :status "dismissed")
+            (fiveam:is-false (current-active-planner context))
+            (fiveam:is-false (current-active-planner-parent-conversation context))
+            (fiveam:is-false (find-runtime-worker-entry worker-id context))
+            (fiveam:is (= 0 (length (chatbot-subordinates bot))))))
+      (setf (current-active-conversation context) original-active-conversation)
+      (setf (current-active-planner context) original-active-planner)
+      (setf (current-active-planner-parent-conversation context) original-parent-conversation)
+      (when (uiop:directory-exists-p mock-home)
+        (uiop:delete-directory-tree mock-home :validate t)))))
 
 (fiveam:test test-recursive-minions-lifecycle
   (let* ((temp-dir (uiop:default-temporary-directory))
@@ -1653,7 +1789,7 @@
       (fiveam:is (string= "Minion 'Bello' spawned successfully." first-result))
       (fiveam:is (string= first-result second-result))
       (fiveam:is (= 1 (length (chatbot-subordinates bot))))
-      (fiveam:is (= 250 (chatbot-spent-tokens bot)))))
+      (fiveam:is (= 250 (chatbot-spent-tokens bot))))))
 
 (fiveam:test test-prompt-subordinate-tool-is-idempotent-for-identical-input
   (let* ((temp-dir (uiop:default-temporary-directory))
@@ -1673,7 +1809,7 @@
                       "I need to delegate."
                       :spawn '(("name" . "Minion-L3")
                                ("budget" . 400))))
-                    200)))))
+                    200))))
            (let ((spawn-res (execute-chatbot-tool-by-name bot "spawnMinion"
                                                           '(("name" . "Minion-L2")
                                                             ("budget" . 1000)))))
@@ -1777,6 +1913,46 @@
                        (fiveam:is (search "Recovered from unexpected shutdown" (cdr (assoc "content" last-msg :test #'string=))))))))))))
       (when (uiop:directory-exists-p mock-home)
         (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-planner-checkpoint-and-recovery
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-planner-recovery/" temp-dir))
+         (mock-minions-dir (merge-pathnames "data/minions/" mock-home))
+         (parent-conv (new-chat :backend :gemini :persona-name "Top-Boss"))
+         (bot (conversation-chatbot parent-conv))
+         (*minions-data-directory* mock-minions-dir))
+    (ensure-directories-exist mock-minions-dir)
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+           (let* ((planner-payload (parse-json-or-error
+                                    (execute-chatbot-tool-by-name bot
+                                                                  "spawnWorker"
+                                                                  '(("mode" . "planner")
+                                                                    ("goal" . "Recover planner mode")))
+                                    :context "spawnWorker planner result"))
+                  (planner-file (merge-pathnames "Planner.json" mock-minions-dir)))
+             (assert-json-field= planner-payload :workerId "planner:Planner")
+             (fiveam:is (not (null (probe-file planner-file))))
+             (let* ((fresh-parent-conv (new-chat :backend :gemini :persona-name "Top-Boss"))
+                    (fresh-bot (conversation-chatbot fresh-parent-conv))
+                    (fresh-context (chatbot-runtime-context fresh-bot)))
+               (setf (current-active-conversation fresh-context) fresh-parent-conv)
+               (restore-minions fresh-bot)
+               (let* ((subs (chatbot-subordinates fresh-bot))
+                      (restored-planner (first subs))
+                      (restored-planner-bot (and restored-planner
+                                                 (conversation-chatbot restored-planner)))
+                      (entry (find-runtime-worker-entry "planner:Planner" fresh-context)))
+                 (fiveam:is (= 1 (length subs)))
+                 (fiveam:is-true (chatbot-planner-p restored-planner-bot))
+                 (fiveam:is (string= "Planner" (chatbot-persona-name restored-planner-bot)))
+                 (fiveam:is (eq restored-planner (current-active-planner fresh-context)))
+                 (fiveam:is (eq fresh-parent-conv
+                                (current-active-planner-parent-conversation fresh-context)))
+                 (fiveam:is (not (null entry)))
+                 (fiveam:is (eq :planner (runtime-worker-entry-kind entry)))))))
+      (when (uiop:directory-exists-p mock-home)
+        (uiop:delete-directory-tree mock-home :validate t)))))
 
 (fiveam:test test-minion-web-tools-inheritance
   (let* ((bot-with (conversation-chatbot (new-chat :backend :gemini :web-tools-p t)))
@@ -1921,7 +2097,9 @@
       (setf (current-active-planner-parent-conversation context) original-parent-conversation))))
 
 (fiveam:test test-invoke-planner-tool
-  (let* ((parent-conv (new-chat :backend :google))
+  (let* ((temp-dir (uiop:default-temporary-directory))
+        (mock-home (merge-pathnames "mock-home-invoke-planner/" temp-dir))
+        (parent-conv (new-chat :backend :google))
         (bot (conversation-chatbot parent-conv))
         (context (chatbot-runtime-context bot))
         (original-active-conversation (current-active-conversation context))
@@ -1929,7 +2107,7 @@
         (original-parent-conversation (current-active-planner-parent-conversation context))
         (res-text nil))
     (unwind-protect
-        (progn
+        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
           (setf (current-active-planner context) nil)
           (setf (current-active-planner-parent-conversation context) nil)
           (setf (current-active-conversation context) parent-conv)
@@ -1974,7 +2152,9 @@
             (fiveam:is-false (member "spawnMinion" tool-names :test #'string=))))
       (setf (current-active-conversation context) original-active-conversation)
       (setf (current-active-planner context) original-active-planner)
-      (setf (current-active-planner-parent-conversation context) original-parent-conversation))))
+      (setf (current-active-planner-parent-conversation context) original-parent-conversation)
+      (when (uiop:directory-exists-p mock-home)
+        (uiop:delete-directory-tree mock-home :validate t)))))
 
 (fiveam:test test-load-plan-to-system-instructions
   (let* ((bot (conversation-chatbot (new-chat :backend :google :system-instruction "Base instruction.")))

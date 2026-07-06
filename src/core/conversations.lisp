@@ -332,6 +332,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                    :depth (getf restoration :depth)
                    :token-budget (getf restoration :token-budget)
                    :spent-tokens (getf restoration :spent-tokens)
+                   :planner-p (eq (getf restoration :worker-kind) :planner)
                    :scoped-directory (getf restoration :scoped-directory)
                    :runtime-context (getf restoration :runtime-context)
                    :cached-content-name (getf restoration :cached-content-name)
@@ -362,6 +363,29 @@ Use NEW-CHAT instead when no persona should be loaded."
         (string= parent-name "")
         (string-equal parent-name (chatbot-persona-name root-bot)))))
 
+(defun restored-root-parent-conversation (root-bot)
+  "Returns the best available restored planner parent conversation for ROOT-BOT."
+  (let* ((context (chatbot-runtime-context root-bot))
+         (active (and context (current-active-conversation context)))
+         (default (and context (current-default-conversation context))))
+    (cond
+      ((and active
+           (eq (conversation-chatbot active) root-bot))
+       active)
+      ((and default
+           (eq (conversation-chatbot default) root-bot))
+       default)
+      (t
+       nil))))
+
+(defun activate-restored-planner (restoration sub-conv parent-conv)
+  "Restores planner runtime activation state for SUB-CONV when required."
+  (when (eq (getf restoration :worker-kind) :planner)
+    (let ((context (chatbot-runtime-context (conversation-chatbot sub-conv))))
+      (setf (current-active-planner context) sub-conv)
+      (setf (current-active-planner-parent-conversation context) parent-conv)))
+  sub-conv)
+
 (defun attach-restored-minion (root-bot restored-convs restoration sub-conv)
   "Attaches SUB-CONV according to RESTORATION using RESTORED-CONVS for parent lookup."
   (let ((name (getf restoration :name))
@@ -369,10 +393,16 @@ Use NEW-CHAT instead when no persona should be loaded."
     (when name
       (setf (gethash name restored-convs) sub-conv))
     (if (restoration-parent-is-root-p restoration root-bot)
-        (attach-subordinate-conversation root-bot sub-conv)
+        (progn
+         (attach-subordinate-conversation root-bot sub-conv)
+         (activate-restored-planner restoration
+                                    sub-conv
+                                    (restored-root-parent-conversation root-bot)))
         (let ((parent-conv (gethash parent-name restored-convs)))
          (if parent-conv
-             (attach-subordinate-conversation (conversation-chatbot parent-conv) sub-conv)
+             (progn
+               (attach-subordinate-conversation (conversation-chatbot parent-conv) sub-conv)
+               (activate-restored-planner restoration sub-conv parent-conv))
              (log-message :warn "Orphaned minion: parent not found"
                           :context `(("name" . ,name)
                                      ("parent" . ,parent-name))))))))

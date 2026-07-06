@@ -51,10 +51,54 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
   "Returns CONVERSATION's subordinate name."
   (chatbot-persona-name (conversation-chatbot conversation)))
 
+(defun subordinate-conversation-worker-kind (conversation)
+  "Returns CONVERSATION's unified worker kind keyword."
+  (if (chatbot-planner-p (conversation-chatbot conversation))
+      :planner
+      :delegated))
+
+(defun subordinate-conversation-worker-id (conversation)
+  "Returns CONVERSATION's unified worker identifier."
+  (format nil "~A:~A"
+          (runtime-worker-kind-public-name
+           (subordinate-conversation-worker-kind conversation))
+          (subordinate-conversation-name conversation)))
+
+(defun subordinate-conversation-worker-status (conversation)
+  "Returns CONVERSATION's unified worker status string."
+  (let* ((bot (conversation-chatbot conversation))
+         (context (chatbot-runtime-context bot)))
+    (cond
+      ((chatbot-planner-p bot)
+       (if (and context
+                (eq (current-active-planner context) conversation))
+           "running"
+           "idle"))
+      (t
+       "ready"))))
+
+(defun list-subordinate-conversations (bot)
+  "Returns BOT's registered delegated/planner conversations in compatibility order."
+  (let* ((entries (list-runtime-worker-entries (chatbot-runtime-context bot)))
+         (conversations
+           (loop for entry in entries
+                 for conversation = (runtime-worker-entry-conversation entry)
+                 when (and conversation
+                           (subordinate-runtime-worker-kind-p
+                            (runtime-worker-entry-kind entry))
+                           (eq (runtime-worker-entry-owner-bot entry) bot))
+                   collect conversation))
+         (compatibility-order (chatbot-subordinates bot)))
+    (sort conversations
+          #'<
+          :key (lambda (conversation)
+                 (or (position conversation compatibility-order :test #'eq)
+                     most-positive-fixnum)))))
+
 (defun find-subordinate-conversation (bot name)
   "Returns BOT's subordinate conversation named NAME, or NIL."
   (find name
-        (chatbot-subordinates bot)
+        (list-subordinate-conversations bot)
         :key #'subordinate-conversation-name
         :test #'string-equal))
 
@@ -130,7 +174,97 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
   "Attaches SUB-CONV beneath BOT and returns SUB-CONV."
   (setf (chatbot-subordinates bot)
         (append (chatbot-subordinates bot) (list sub-conv)))
+  (register-runtime-worker-entry
+   (make-runtime-worker-entry
+    :worker-id (subordinate-conversation-worker-id sub-conv)
+    :kind (subordinate-conversation-worker-kind sub-conv)
+    :conversation sub-conv
+    :owner-bot bot)
+   (chatbot-runtime-context bot))
   sub-conv)
+
+(defun clear-active-planner-conversation (conversation)
+  "Clears planner runtime state when CONVERSATION is the active planner."
+  (let* ((bot (conversation-chatbot conversation))
+        (context (chatbot-runtime-context bot)))
+   (when (and context
+              (eq (current-active-planner context) conversation))
+     (setf (current-active-planner context) nil)
+     (setf (current-active-planner-parent-conversation context) nil)))
+  conversation)
+
+(defun spawn-delegated-worker-conversation (bot name
+                                          &key persona-name backend-kw model
+                                            system-instruction requested-budget
+                                            web-tools-p tool-name)
+  "Creates, attaches, and returns one delegated worker conversation for BOT."
+  (when (find name (chatbot-subordinates bot)
+             :key #'subordinate-conversation-name
+             :test #'string-equal)
+    (error 'mcp-tool-execution-error
+           :tool-name tool-name
+           :reason (format nil "A minion or subordinate named '~A' already exists." name)))
+  (let ((parent-depth (chatbot-depth bot)))
+    (when (> (1+ parent-depth) *max-minion-depth*)
+      (error 'mcp-tool-execution-error
+             :tool-name tool-name
+             :reason (format nil "Spawn failed: Maximum nesting depth (~D) exceeded."
+                             *max-minion-depth*))))
+  (let ((parent-budget (chatbot-token-budget bot))
+        (parent-spent (chatbot-spent-tokens bot)))
+    (when (and parent-budget requested-budget)
+      (let ((remaining (- parent-budget parent-spent)))
+        (when (> requested-budget remaining)
+          (error 'mcp-tool-execution-error
+                 :tool-name tool-name
+                 :reason (format nil "Spawn failed: Requested budget (~A) exceeds parent's remaining budget (~A)."
+                                 requested-budget remaining)))))
+    (when requested-budget
+      (incf (chatbot-spent-tokens bot) requested-budget)))
+  (let* ((parent-dir (or (chatbot-scoped-directory bot)
+                         (chatbot-filesystem-root-directory bot)
+                         (uiop:default-temporary-directory)))
+         (child-dir (merge-pathnames (format nil "minion-sandbox-~A/" name) parent-dir)))
+    (ensure-directories-exist child-dir)
+    (let* ((child-depth (1+ (chatbot-depth bot)))
+           (sub-conv
+             (spawn-subordinate-conversation
+              bot
+              name
+              child-depth
+              child-dir
+              :persona-name persona-name
+              :backend-kw backend-kw
+              :model model
+              :system-instruction system-instruction
+              :requested-budget requested-budget
+              :web-tools-p web-tools-p)))
+      (attach-subordinate-conversation bot sub-conv)
+      sub-conv)))
+
+(defun spawn-planner-worker-conversation (bot context-summary &key tool-name)
+  "Creates, attaches, and activates one planner worker for BOT."
+  (declare (ignore tool-name))
+  (let* ((context (chatbot-runtime-context bot))
+         (parent-conv (or (current-active-conversation context)
+                          (make-instance 'conversation :chatbot bot)))
+         (planner-conv (new-chat :backend (chatbot-backend bot)
+                                 :model (chatbot-model bot)
+                                 :system-instruction +planner-system-instruction+
+                                 :parent-name (chatbot-persona-name bot)
+                                 :depth (1+ (chatbot-depth bot))
+                                 :planner-p t
+                                 :runtime-context context)))
+    (setf (chatbot-persona-name (conversation-chatbot planner-conv)) "Planner")
+    (attach-subordinate-conversation bot planner-conv)
+    (setf (current-active-planner context) planner-conv)
+    (setf (current-active-planner-parent-conversation context) parent-conv)
+    (append-conversation-user-message
+     planner-conv
+     (format nil "Planning Session Initiated.~%Context/Goal Summary: ~A"
+             context-summary))
+    (save-minion-state planner-conv)
+    planner-conv))
 
 (defun spawn-subordinate-conversation (bot name child-depth child-dir
                                       &key persona-name backend-kw model
@@ -167,9 +301,20 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
 (defun minion-public-info (conversation)
   "Returns CONVERSATION's public minion metadata as an alist."
   (let ((sub-bot (conversation-chatbot conversation)))
-    `((:name . ,(chatbot-persona-name sub-bot))
+    `((:worker-id . ,(subordinate-conversation-worker-id conversation))
+      (:kind . ,(runtime-worker-kind-public-name
+                 (subordinate-conversation-worker-kind conversation)))
+      (:status . ,(subordinate-conversation-worker-status conversation))
+      (:name . ,(chatbot-persona-name sub-bot))
+      (:parent-name . ,(or (chatbot-parent-name sub-bot) :null))
+      (:depth . ,(chatbot-depth sub-bot))
+      (:token-budget . ,(or (chatbot-token-budget sub-bot) :null))
+      (:spent-tokens . ,(chatbot-spent-tokens sub-bot))
+      (:planner . ,(if (chatbot-planner-p sub-bot) t :false))
       (:backend . ,(string-downcase (symbol-name (chatbot-backend sub-bot))))
-      (:model . ,(or (chatbot-model sub-bot) "default")))))
+      (:model . ,(or (chatbot-model sub-bot) "default"))
+      (:execution-profile . ((:backend . ,(string-downcase (symbol-name (chatbot-backend sub-bot))))
+                             (:model . ,(or (chatbot-model sub-bot) "default")))))))
 
 (defun parse-subordinate-control-response (response)
   "Parses one strict subordinate control RESPONSE JSON payload."
@@ -215,27 +360,16 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
          (format nil "~%[SYSTEM ERROR: Spawn failed: Requested budget (~D) exceeds remaining budget (~D).]"
                  budget (- (chatbot-token-budget bot) (chatbot-spent-tokens bot))))
         (t
-         (when (chatbot-token-budget bot)
-           (incf (chatbot-spent-tokens bot) budget))
-         (let* ((parent-dir (or (chatbot-scoped-directory bot)
-                                (chatbot-filesystem-root-directory bot)
-                                (uiop:default-temporary-directory)))
-                (child-dir (merge-pathnames (format nil "minion-sandbox-~A/" child-name) parent-dir)))
-           (ensure-directories-exist child-dir)
-           (let* ((child-depth (1+ (chatbot-depth bot)))
-                  (sub-conv
-                    (spawn-subordinate-conversation
-                     bot
-                     child-name
-                     child-depth
-                     child-dir
-                     :backend-kw (chatbot-backend bot)
-                     :model (chatbot-model bot)
-                     :requested-budget budget
-                     :web-tools-p (chatbot-web-tools-p bot))))
-             (attach-subordinate-conversation bot sub-conv)
-             (format nil "~%[SYSTEM INFO: Successfully spawned subordinate minion '~A' with budget ~D at depth ~D.]"
-                     child-name budget child-depth))))))))
+         (spawn-delegated-worker-conversation
+          bot
+          child-name
+          :backend-kw (chatbot-backend bot)
+          :model (chatbot-model bot)
+          :requested-budget budget
+          :web-tools-p (chatbot-web-tools-p bot)
+          :tool-name "promptSubordinate")
+         (format nil "~%[SYSTEM INFO: Successfully spawned subordinate minion '~A' with budget ~D at depth ~D.]"
+                 child-name budget (1+ (chatbot-depth bot))))))))
 
 (defun recursively-dismiss-conversation (conv)
   "Recursively dismisses all subordinate conversations of CONV."
@@ -243,9 +377,13 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
          (name (chatbot-persona-name bot)))
     (dolist (sub (chatbot-subordinates bot))
       (recursively-dismiss-conversation sub))
+    (clear-active-planner-conversation conv)
+    (remove-runtime-worker-entry
+     (subordinate-conversation-worker-id conv)
+     (chatbot-runtime-context bot))
     (when name
       (let* ((dir (minions-data-directory))
-             (file-path (merge-pathnames (format nil "~A.json" name) dir)))
+            (file-path (merge-pathnames (format nil "~A.json" name) dir)))
         (when (probe-file file-path)
           (delete-file file-path))))
     (setf (chatbot-subordinates bot) nil)))
@@ -337,54 +475,23 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
      bot
      task-key
      (lambda ()
-       (when (find name (chatbot-subordinates bot)
-                  :key #'subordinate-conversation-name
-                  :test #'string-equal)
-         (error 'mcp-tool-execution-error
-               :tool-name tool-name
-               :reason (format nil "A minion or subordinate named '~A' already exists." name)))
-       (let ((parent-depth (chatbot-depth bot)))
-         (when (>= (1+ parent-depth) *max-minion-depth*)
-          (error 'mcp-tool-execution-error
-                 :tool-name tool-name
-                 :reason (format nil "Spawn failed: Maximum nesting depth (~D) exceeded." *max-minion-depth*))))
-       (let ((parent-budget (chatbot-token-budget bot))
-            (parent-spent (chatbot-spent-tokens bot)))
-         (when (and parent-budget requested-budget)
-          (let ((remaining (- parent-budget parent-spent)))
-            (when (> requested-budget remaining)
-              (error 'mcp-tool-execution-error
-                     :tool-name tool-name
-                     :reason (format nil "Spawn failed: Requested budget (~A) exceeds parent's remaining budget (~A)."
-                                     requested-budget remaining)))))
-         (when requested-budget
-          (incf (chatbot-spent-tokens bot) requested-budget)))
-       (let* ((parent-dir (or (chatbot-scoped-directory bot)
-                             (chatbot-filesystem-root-directory bot)
-                             (uiop:default-temporary-directory)))
-             (child-dir (merge-pathnames (format nil "minion-sandbox-~A/" name) parent-dir)))
-         (ensure-directories-exist child-dir)
-         (let* ((child-depth (1+ (chatbot-depth bot)))
-               (sub-conv
-                 (spawn-subordinate-conversation
-                  bot
-                  name
-                  child-depth
-                  child-dir
-                  :persona-name persona-name
-                  :backend-kw backend-kw
-                  :model model
-                  :system-instruction system-instruction
-                  :requested-budget requested-budget
-                  :web-tools-p web-tools-p)))
-          (attach-subordinate-conversation bot sub-conv)
-          (format nil "Minion '~A' spawned successfully." name)))))))
+       (spawn-delegated-worker-conversation
+        bot
+        name
+        :persona-name persona-name
+        :backend-kw backend-kw
+        :model model
+        :system-instruction system-instruction
+        :requested-budget requested-budget
+        :web-tools-p web-tools-p
+        :tool-name tool-name)
+       (format nil "Minion '~A' spawned successfully." name)))))
 
 (defun execute-list-minions-tool (bot)
   "Runs the built-in listMinions tool."
   (cl-json:encode-json-to-string
    (coerce (mapcar #'minion-public-info
-                   (chatbot-subordinates bot))
+                  (list-subordinate-conversations bot))
            'vector)))
 
 (defun execute-dismiss-minion-tool (bot arguments tool-name)
@@ -404,6 +511,22 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
           (remove target (chatbot-subordinates bot) :test #'eq))
     (format nil "Minion '~A' and all of its subordinates dismissed successfully." name)))
 
+(defun dismiss-active-planner-conversation (bot)
+  "Dismisses BOT's active planner conversation and clears planner runtime state."
+  (let* ((context (chatbot-runtime-context bot))
+         (planner-conv (current-active-planner context))
+         (parent-conv (current-active-planner-parent-conversation context))
+         (parent-bot (and parent-conv (conversation-chatbot parent-conv))))
+    (when (and planner-conv
+               (chatbot-planner-p (conversation-chatbot planner-conv)))
+      (recursively-dismiss-conversation planner-conv)
+      (when parent-bot
+        (setf (chatbot-subordinates parent-bot)
+              (remove planner-conv (chatbot-subordinates parent-bot) :test #'eq))))
+    (setf (current-active-planner context) nil)
+    (setf (current-active-planner-parent-conversation context) nil)
+    planner-conv))
+
 (defun execute-submit-plan-tool (bot arguments tool-name)
   "Runs the built-in submitPlan tool."
   (let* ((plan-content (normalize-builtin-tool-string-argument
@@ -421,13 +544,13 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
                             :if-does-not-exist :create)
       (write-string plan-content stream))
     (format t "~&[PLAN SUBMITTED]~%Filename: ~A~%~%Content:~%~A~%" filename plan-content)
-    (setf (current-active-planner (chatbot-runtime-context bot)) nil)
     (let ((parent-conv (current-active-planner-parent-conversation (chatbot-runtime-context bot))))
       (when parent-conv
         (setf (conversation-messages parent-conv)
               (append (conversation-messages parent-conv)
                       (list (list (cons "role" "user")
                                   (cons "content" (format nil "[System: Plan saved to ~A]" filename))))))))
+    (dismiss-active-planner-conversation bot)
     (format nil "Plan saved successfully to ~A and exited Planner Mode." filename)))
 
 (defun execute-abort-plan-tool (bot arguments)
@@ -436,13 +559,13 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
                     (mcp-val :reason arguments)
                     "No reason provided.")))
     (format t "~&[PLAN ABORTED]~%Reason: ~A~%" reason)
-    (setf (current-active-planner (chatbot-runtime-context bot)) nil)
     (let ((parent-conv (current-active-planner-parent-conversation (chatbot-runtime-context bot))))
       (when parent-conv
         (setf (conversation-messages parent-conv)
               (append (conversation-messages parent-conv)
                       (list (list (cons "role" "user")
                                   (cons "content" "[System: Planner mode aborted.]")))))))
+    (dismiss-active-planner-conversation bot)
     (format nil "Planner mode aborted: ~A" reason)))
 
 (defun execute-invoke-planner-tool (bot arguments tool-name)
@@ -453,21 +576,6 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
                                (mcp-val :context-summary arguments)
                                (mcp-val :context_summary arguments))
                            "contextSummary"
-                           tool-name))
-         (parent-conv (or (current-active-conversation (chatbot-runtime-context bot))
-                          (make-instance 'conversation :chatbot bot)))
-         (planner-conv (new-chat :backend (chatbot-backend bot)
-                                 :model (chatbot-model bot)
-                                 :system-instruction +planner-system-instruction+
-                                 :parent-name (chatbot-persona-name bot)
-                                 :depth (1+ (chatbot-depth bot))
-                                 :planner-p t
-                                 :runtime-context (chatbot-runtime-context bot))))
-    (setf (chatbot-persona-name (conversation-chatbot planner-conv)) "Planner")
-    (setf (chatbot-subordinates bot)
-          (append (chatbot-subordinates bot) (list planner-conv)))
-    (setf (current-active-planner (chatbot-runtime-context bot)) planner-conv)
-    (setf (current-active-planner-parent-conversation (chatbot-runtime-context bot)) parent-conv)
-    (let ((initial-prompt (format nil "Planning Session Initiated.~%Context/Goal Summary: ~A" context-summary)))
-      (append-conversation-user-message planner-conv initial-prompt))
+                           tool-name)))
+    (spawn-planner-worker-conversation bot context-summary :tool-name tool-name)
     (format nil "Planner minion successfully spawned and Planner Mode activated with goal: ~A" context-summary)))

@@ -108,6 +108,16 @@
     :accessor runtime-context-agentic-loop-registry-lock
     :initform (sb-thread:make-mutex :name "agentic-loop-registry-lock")
     :documentation "Lock protecting agentic-loop-registry updates.")
+   (worker-registry
+    :initarg :worker-registry
+    :accessor runtime-context-worker-registry
+    :initform (make-hash-table :test 'equal)
+    :documentation "Unified worker registry keyed by workerId for delegated, planner, and autonomous workers.")
+   (worker-registry-lock
+    :initarg :worker-registry-lock
+    :accessor runtime-context-worker-registry-lock
+    :initform (sb-thread:make-mutex :name "worker-registry-lock")
+    :documentation "Lock protecting unified worker-registry updates.")
    (active-conversation
     :initarg :active-conversation
     :accessor runtime-context-active-conversation

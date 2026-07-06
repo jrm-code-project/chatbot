@@ -4,17 +4,17 @@
 (in-package "CHATBOT")
 
 (define-builtin-tool "promptSubordinate" (bot arguments)
-  (execute-prompt-subordinate-tool bot arguments tool-name))
+  (execute-prompt-subordinate-via-workers-tool bot arguments tool-name))
 
 (define-builtin-tool "spawnMinion" (bot arguments)
-  (execute-spawn-minion-tool bot arguments tool-name))
+  (execute-spawn-minion-via-workers-tool bot arguments tool-name))
 
 (define-builtin-tool "listMinions" (bot arguments)
   (declare (ignore arguments))
-  (execute-list-minions-tool bot))
+  (execute-list-minions-via-workers-tool bot))
 
 (define-builtin-tool "dismissMinion" (bot arguments)
-  (execute-dismiss-minion-tool bot arguments tool-name))
+  (execute-dismiss-minion-via-workers-tool bot arguments tool-name))
 
 (define-builtin-tool "webSearch" (bot arguments)
   (execute-web-search-tool bot arguments tool-name))
@@ -50,6 +50,25 @@
 (define-builtin-tool "resumeAgenticLoop" (bot arguments)
   (declare (ignore bot))
   (execute-resume-agentic-loop-tool arguments tool-name))
+
+(define-builtin-tool "spawnWorker" (bot arguments)
+  (execute-spawn-worker-tool bot arguments tool-name))
+
+(define-builtin-tool "listWorkers" (bot arguments)
+  (declare (ignore arguments))
+  (execute-list-workers-tool bot))
+
+(define-builtin-tool "readWorker" (bot arguments)
+  (execute-read-worker-tool bot arguments tool-name))
+
+(define-builtin-tool "promptWorker" (bot arguments)
+  (execute-prompt-worker-tool bot arguments tool-name))
+
+(define-builtin-tool "abortWorker" (bot arguments)
+  (execute-abort-worker-tool bot arguments tool-name))
+
+(define-builtin-tool "resumeWorker" (bot arguments)
+  (execute-resume-worker-tool arguments tool-name))
 
 (define-builtin-tool "setSamplingParameters" (bot arguments)
   (execute-set-sampling-parameters-tool bot arguments tool-name))
@@ -93,4 +112,4 @@
   (execute-abort-plan-tool bot arguments))
 
 (define-builtin-tool "invokePlanner" (bot arguments)
-  (execute-invoke-planner-tool bot arguments tool-name))
+  (execute-invoke-planner-via-workers-tool bot arguments tool-name))

@@ -185,53 +185,73 @@
       (setf (gethash (agentic-loop-id loop) registry) loop))
     (sb-thread:with-mutex (*agentic-loop-registry-lock*)
       (setf (gethash (agentic-loop-id loop) *agentic-loop-registry*) loop))
+    (register-runtime-worker-entry
+     (make-runtime-worker-entry
+      :worker-id (format nil "loop:~A" (agentic-loop-id loop))
+      :kind :loop
+      :loop loop)
+     context)
     loop))
+
+(defun runtime-context-agentic-worker-loops (context)
+  "Returns autonomous loops registered in CONTEXT's unified worker registry."
+  (loop for entry in (list-runtime-worker-entries context)
+       when (eq (runtime-worker-entry-kind entry) :loop)
+         collect (runtime-worker-entry-loop entry)))
 
 (defun find-agentic-loop (loop-id &optional context)
   "Returns the autonomous loop identified by LOOP-ID, or NIL."
   (if context
-      (let* ((resolved-context (resolve-runtime-context context))
-             (registry (runtime-context-agentic-loop-registry resolved-context))
-             (lock (runtime-context-agentic-loop-registry-lock resolved-context)))
-        (sb-thread:with-mutex (lock)
-          (gethash loop-id registry)))
-      (sb-thread:with-mutex (*agentic-loop-registry-lock*)
-        (gethash loop-id *agentic-loop-registry*))))
+     (let* ((resolved-context (resolve-runtime-context context))
+            (entry (find-runtime-worker-entry
+                    (format nil "loop:~A" loop-id)
+                    resolved-context)))
+       (or (and entry
+                (eq (runtime-worker-entry-kind entry) :loop)
+                (runtime-worker-entry-loop entry))
+           (let ((registry (runtime-context-agentic-loop-registry resolved-context))
+                 (lock (runtime-context-agentic-loop-registry-lock resolved-context)))
+             (sb-thread:with-mutex (lock)
+               (gethash loop-id registry)))))
+     (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+       (gethash loop-id *agentic-loop-registry*))))
 
 (defun list-agentic-loops (&optional context)
   "Returns all registered autonomous loops ordered by id."
   (let ((loops
-          (if context
-              (let* ((resolved-context (resolve-runtime-context context))
-                     (registry (runtime-context-agentic-loop-registry resolved-context))
-                     (lock (runtime-context-agentic-loop-registry-lock resolved-context)))
-                (sb-thread:with-mutex (lock)
-                  (loop for loop being the hash-values of registry
-                        collect loop)))
-              (sb-thread:with-mutex (*agentic-loop-registry-lock*)
-                (loop for loop being the hash-values of *agentic-loop-registry*
-                      collect loop)))))
+         (if context
+             (runtime-context-agentic-worker-loops context)
+             (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+               (loop for loop being the hash-values of *agentic-loop-registry*
+                     collect loop)))))
     (sort loops #'< :key #'agentic-loop-id)))
 
 (defun clear-agentic-loops (&optional context)
   "Clears the autonomous loop registry."
   (if context
-      (let* ((resolved-context (resolve-runtime-context context))
-             (registry (runtime-context-agentic-loop-registry resolved-context))
-             (lock (runtime-context-agentic-loop-registry-lock resolved-context))
-             (loop-ids nil))
-        (sb-thread:with-mutex (lock)
-          (setf loop-ids
-                (loop for loop being the hash-values of registry
-                      collect (agentic-loop-id loop)))
-          (clrhash registry))
-        (sb-thread:with-mutex (*agentic-loop-registry-lock*)
-          (dolist (loop-id loop-ids)
-            (remhash loop-id *agentic-loop-registry*)))
+     (let* ((resolved-context (resolve-runtime-context context))
+            (loops (runtime-context-agentic-worker-loops resolved-context))
+            (loop-ids (mapcar #'agentic-loop-id loops))
+            (registry (runtime-context-agentic-loop-registry resolved-context))
+            (lock (runtime-context-agentic-loop-registry-lock resolved-context)))
+       (sb-thread:with-mutex (lock)
+         (clrhash registry))
+       (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+         (dolist (loop-id loop-ids)
+            (remhash loop-id *agentic-loop-registry*)
+            (remove-runtime-worker-entry (format nil "loop:~A" loop-id)
+                                         resolved-context)))
         t)
       (progn
-        (sb-thread:with-mutex (*agentic-loop-registry-lock*)
-          (clrhash *agentic-loop-registry*))
+        (let ((loops nil))
+         (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+           (setf loops (loop for loop being the hash-values of *agentic-loop-registry*
+                             collect loop))
+           (clrhash *agentic-loop-registry*))
+         (dolist (loop loops)
+           (remove-runtime-worker-entry
+            (format nil "loop:~A" (agentic-loop-id loop))
+            (agentic-loop-runtime-context loop))))
         t)))
 
 (defun agentic-loop-thread-alive-p (loop)
@@ -466,15 +486,24 @@
 
 (defun agentic-loop-public-alist (loop)
   "Returns LOOP state as a JSON-encodable alist."
-  (let ((backend-name (string-downcase
+  (let* ((conversation (agentic-loop-conversation loop))
+        (bot (conversation-chatbot conversation))
+        (backend-name (string-downcase
                        (string (or (getf (agentic-loop-execution-profile loop) :backend)
-                                   (chatbot-backend (conversation-chatbot (agentic-loop-conversation loop)))))))
+                                   (chatbot-backend bot)))))
         (model-name (or (getf (agentic-loop-execution-profile loop) :model)
-                        (chatbot-model (conversation-chatbot (agentic-loop-conversation loop)))
+                        (chatbot-model bot)
                         :null)))
     `(("id" . ,(agentic-loop-id loop))
+      ("workerId" . ,(format nil "loop:~A" (agentic-loop-id loop)))
+      ("kind" . ,(runtime-worker-kind-public-name :loop))
+      ("name" . ,(format nil "Loop ~A" (agentic-loop-id loop)))
       ("goal" . ,(agentic-loop-goal loop))
       ("status" . ,(string-downcase (string (agentic-loop-status loop))))
+      ("parentName" . ,(or (chatbot-parent-name bot) :null))
+      ("depth" . ,(chatbot-depth bot))
+      ("tokenBudget" . ,(or (chatbot-token-budget bot) :null))
+      ("spentTokens" . ,(chatbot-spent-tokens bot))
       ("executionProfile" . (("backend" . ,backend-name)
                              ("model" . ,model-name)))
       ("maxIterations" . ,(agentic-loop-max-iterations loop))
@@ -736,49 +765,51 @@ queued, and :EXHAUSTED when LOOP has no restart budget left."
     (start-agentic-loop-monitor)
     loop))
 
+(defun interrupt-agentic-loop-instance (loop &key force)
+  "Interrupts LOOP in place."
+  (declare (ignore force))
+  (sb-thread:with-mutex ((agentic-loop-lock loop))
+    (setf (agentic-loop-last-error loop) "Interrupted.")
+    (setf (agentic-loop-result-summary loop) "Interrupted.")
+    (unless (member (agentic-loop-status loop) '(:completed :failed :limit-reached))
+     (setf (agentic-loop-status loop) :interrupted))
+    (setf (agentic-loop-pending-approval-decision loop) :deny)
+    (sb-thread:condition-broadcast (agentic-loop-approval-waitqueue loop)))
+  (unless (agentic-loop-thread-alive-p loop)
+    (setf (agentic-loop-finished-at loop) (get-high-precision-timestamp))
+    (setf (agentic-loop-thread loop) nil))
+  (agentic-loop-log :warn loop "interrupted")
+  loop)
+
 (defun abort-agentic-loop (loop-id &key force context)
   "Interrupts the autonomous loop identified by LOOP-ID."
-  (declare (ignore force))
-  (let ((loop (or (find-agentic-loop loop-id context)
-                  (error "Unknown agentic loop id: ~A" loop-id))))
-    (sb-thread:with-mutex ((agentic-loop-lock loop))
-      (setf (agentic-loop-last-error loop) "Interrupted.")
-      (setf (agentic-loop-result-summary loop) "Interrupted.")
-      (unless (member (agentic-loop-status loop) '(:completed :failed :limit-reached))
-        (setf (agentic-loop-status loop) :interrupted))
-      (setf (agentic-loop-pending-approval-decision loop) :deny)
-      (sb-thread:condition-broadcast (agentic-loop-approval-waitqueue loop)))
-    (unless (agentic-loop-thread-alive-p loop)
-      (setf (agentic-loop-finished-at loop) (get-high-precision-timestamp))
-      (setf (agentic-loop-thread loop) nil))
-    (agentic-loop-log :warn loop "interrupted")
-    loop))
+  (interrupt-agentic-loop-instance
+   (or (find-agentic-loop loop-id context)
+      (error "Unknown agentic loop id: ~A" loop-id))
+   :force force))
 
 (defun abort-agentic-loops (&key force context)
   "Interrupts all registered autonomous loops."
   (dolist (loop (list-agentic-loops context) t)
     (abort-agentic-loop (agentic-loop-id loop) :force force :context context)))
 
-(defun resume-agentic-loop (loop-id &key approve context)
-  "Resumes a paused autonomous loop after an explicit approval decision."
-  (let ((loop (or (find-agentic-loop loop-id context)
-                  (error "Unknown agentic loop id: ~A" loop-id))))
+(defun resume-agentic-loop-instance (loop &key approve)
+  "Resumes paused LOOP after an explicit approval decision."
+  (let ((loop-id (agentic-loop-id loop)))
     (unless (eq (agentic-loop-status loop) :awaiting-approval)
       (error "Agentic loop ~A is not awaiting approval." loop-id))
     (unless (agentic-loop-pending-approval loop)
       (error "Agentic loop ~A has no pending approval." loop-id))
+    (unless (agentic-loop-thread-alive-p loop)
+      (error "Agentic loop ~A is paused but has no live worker thread." loop-id))
     (if approve
         (progn
-          (unless (agentic-loop-thread-alive-p loop)
-            (error "Agentic loop ~A is paused but has no live worker thread." loop-id))
           (setf (agentic-loop-finished-at loop) nil)
           (sb-thread:with-mutex ((agentic-loop-lock loop))
             (setf (agentic-loop-pending-approval-decision loop) t)
             (setf (agentic-loop-status loop) :running)
             (sb-thread:condition-broadcast (agentic-loop-approval-waitqueue loop))))
         (progn
-          (unless (agentic-loop-thread-alive-p loop)
-            (error "Agentic loop ~A is paused but has no live worker thread." loop-id))
           (setf (agentic-loop-last-error loop) "Approval denied by user.")
           (setf (agentic-loop-result-summary loop) "Approval denied by user.")
           (setf (agentic-loop-finished-at loop) (get-high-precision-timestamp))
@@ -787,6 +818,13 @@ queued, and :EXHAUSTED when LOOP has no restart budget left."
             (setf (agentic-loop-status loop) :interrupted)
             (sb-thread:condition-broadcast (agentic-loop-approval-waitqueue loop)))))
     loop))
+
+(defun resume-agentic-loop (loop-id &key approve context)
+  "Resumes a paused autonomous loop after an explicit approval decision."
+  (resume-agentic-loop-instance
+   (or (find-agentic-loop loop-id context)
+       (error "Unknown agentic loop id: ~A" loop-id))
+   :approve approve))
 
 
 
@@ -858,37 +896,43 @@ queued, and :EXHAUSTED when LOOP has no restart budget left."
 (defun reap-orphaned-threads-and-sockets ()
   "Garbage-collects terminal loops from the registry and terminates orphaned background threads."
   (let ((all-threads (sb-thread:list-all-threads)))
-    ;; 1. Reap terminal agentic loops from global registry to free memory
     (sb-thread:with-mutex (*agentic-loop-registry-lock*)
       (let ((ids-to-remove nil))
         (maphash (lambda (id loop)
                    (let ((status (agentic-loop-status loop))
                          (finished (agentic-loop-finished-at loop)))
-                     ;; If the loop is finished (terminal status) and has been finished for more than 5 minutes
                      (when (and (member status '(:completed :failed :limit-reached :interrupted))
                                 finished
                                 (> (- (get-high-precision-timestamp) finished) 300))
                        (push id ids-to-remove))))
                  *agentic-loop-registry*)
         (dolist (id ids-to-remove)
-          (log-message :info (format nil "Reaper: Pruning completed loop ~A from registry." id))
-          (remhash id *agentic-loop-registry*))))
-    
-    ;; 2. Detect and terminate orphaned/hung worker threads
+          (let ((loop (gethash id *agentic-loop-registry*)))
+            (log-message :info
+                         (format nil "Reaper: Pruning completed loop ~A from registry." id))
+            (when loop
+              (remove-runtime-worker-entry
+               (format nil "loop:~A" id)
+               (agentic-loop-runtime-context loop)))
+            (remhash id *agentic-loop-registry*)))))
     (dolist (thread all-threads)
       (let ((name (sb-thread:thread-name thread)))
-        (when (and name (alexandria:starts-with-subseq "Agentic-Loop-Worker-" name))
+        (when (and name
+                   (alexandria:starts-with-subseq "Agentic-Loop-Worker-" name))
           (let* ((id-str (subseq name (length "Agentic-Loop-Worker-")))
-                 (id (parse-integer id-str :junk-allowed t)))
-            (when id
-              ;; Look up in registry. If the loop is not registered, or is in terminal state, terminate!
-              (let ((loop (sb-thread:with-mutex (*agentic-loop-registry-lock*)
-                            (gethash id *agentic-loop-registry*))))
-                (when (or (null loop)
-                         (agentic-loop-terminal-status-p (agentic-loop-status loop)))
-                  (log-message :warn (format nil "Reaper: Terminating orphaned worker thread: ~A" name))
-                  (handler-case (sb-thread:terminate-thread thread)
-                    (error () nil)))))))))))
+                 (id (parse-integer id-str :junk-allowed t))
+                 (loop (and id
+                            (sb-thread:with-mutex (*agentic-loop-registry-lock*)
+                              (gethash id *agentic-loop-registry*)))))
+            (when (and id
+                       (or (null loop)
+                           (agentic-loop-terminal-status-p (agentic-loop-status loop))))
+              (log-message :warn
+                           (format nil "Reaper: Terminating orphaned worker thread: ~A" name))
+              (handler-case
+                  (sb-thread:terminate-thread thread)
+                (error ()
+                  nil)))))))))
 
 (defun run-agentic-loop-monitor ()
   "The execution loop for the background monitor."

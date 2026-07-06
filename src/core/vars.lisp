@@ -454,6 +454,97 @@ compatibility-only ambient special variables."
       (sync-default-conversation-from-legacy-global resolved))
     resolved))
 
+(defun normalize-runtime-worker-kind (kind)
+  "Returns KIND normalized to one canonical worker kind keyword."
+  (let ((normalized
+         (cond
+           ((keywordp kind) kind)
+           ((symbolp kind) (intern (string-upcase (symbol-name kind)) "KEYWORD"))
+           ((stringp kind) (intern (string-upcase kind) "KEYWORD"))
+           (t kind))))
+    (case normalized
+      (:subordinate :delegated)
+      (:autonomous :loop)
+      ((:delegated :planner :loop) normalized)
+      (t
+       (error "Unsupported runtime worker kind: ~A" kind)))))
+
+(defun runtime-worker-kind-public-name (kind)
+  "Returns the public API name for KIND."
+  (case (normalize-runtime-worker-kind kind)
+    (:loop "autonomous")
+    (t
+     (string-downcase
+      (symbol-name (normalize-runtime-worker-kind kind))))))
+
+(defun subordinate-runtime-worker-kind-p (kind)
+  "Returns true when KIND identifies a delegated or planner worker."
+  (member (normalize-runtime-worker-kind kind)
+         '(:delegated :planner)))
+
+(defun make-runtime-worker-entry (&key worker-id kind conversation loop owner-bot)
+  "Returns one unified runtime worker entry."
+  (list :worker-id worker-id
+       :kind (normalize-runtime-worker-kind kind)
+       :conversation conversation
+       :loop loop
+       :owner-bot owner-bot))
+
+(defun runtime-worker-entry-worker-id (entry)
+  "Returns ENTRY's worker id."
+  (getf entry :worker-id))
+
+(defun runtime-worker-entry-kind (entry)
+  "Returns ENTRY's worker kind."
+  (getf entry :kind))
+
+(defun runtime-worker-entry-conversation (entry)
+  "Returns ENTRY's subordinate/planner conversation, or NIL."
+  (getf entry :conversation))
+
+(defun runtime-worker-entry-loop (entry)
+  "Returns ENTRY's autonomous loop, or NIL."
+  (getf entry :loop))
+
+(defun runtime-worker-entry-owner-bot (entry)
+  "Returns ENTRY's owning chatbot, or NIL."
+  (getf entry :owner-bot))
+
+(defun register-runtime-worker-entry (entry &optional context)
+  "Stores ENTRY in CONTEXT's unified worker registry."
+  (let* ((resolved-context (resolve-runtime-context context))
+        (registry (runtime-context-worker-registry resolved-context))
+        (lock (runtime-context-worker-registry-lock resolved-context)))
+    (sb-thread:with-mutex (lock)
+     (setf (gethash (runtime-worker-entry-worker-id entry) registry) entry))
+    entry))
+
+(defun remove-runtime-worker-entry (worker-id &optional context)
+  "Removes WORKER-ID from CONTEXT's unified worker registry."
+  (let* ((resolved-context (resolve-runtime-context context))
+        (registry (runtime-context-worker-registry resolved-context))
+        (lock (runtime-context-worker-registry-lock resolved-context)))
+    (sb-thread:with-mutex (lock)
+     (remhash worker-id registry)))
+  worker-id)
+
+(defun find-runtime-worker-entry (worker-id &optional context)
+  "Returns the unified worker entry identified by WORKER-ID, or NIL."
+  (let* ((resolved-context (resolve-runtime-context context))
+        (registry (runtime-context-worker-registry resolved-context))
+        (lock (runtime-context-worker-registry-lock resolved-context)))
+    (sb-thread:with-mutex (lock)
+     (gethash worker-id registry))))
+
+(defun list-runtime-worker-entries (&optional context)
+  "Returns all unified worker entries in CONTEXT."
+  (let* ((resolved-context (resolve-runtime-context context))
+        (registry (runtime-context-worker-registry resolved-context))
+        (lock (runtime-context-worker-registry-lock resolved-context)))
+    (sb-thread:with-mutex (lock)
+     (loop for entry being the hash-values of registry
+           collect entry))))
+
 (defun runtime-context-function-seam-value (context accessor legacy-symbol)
   "Returns the function seam value for ACCESSOR and LEGACY-SYMBOL."
   (let ((resolved-context (and context
