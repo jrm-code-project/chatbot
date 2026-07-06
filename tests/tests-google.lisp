@@ -28,10 +28,23 @@
         (fiveam:is (string= "mocked-google-api-key" (cdr (assoc "x-goog-api-key" captured-headers :test #'string=))))
         (fiveam:is (string= "application/json" (cdr (assoc "Content-Type" captured-headers :test #'string=))))
         (let* ((payload (cl-json:decode-json-from-string captured-content))
-              (contents (mcp-val :contents payload)))
+              (contents (mcp-val :contents payload))
+              (safety-settings (google-payload-safety-settings payload)))
           (fiveam:is (= 1 (length contents)))
           (assert-google-message-texts (first contents) "user" '("Hi Google"))
-          (assert-google-system-instruction-texts payload '("Be concise")))))))
+          (assert-google-system-instruction-texts payload '("Be concise"))
+          (fiveam:is (= 4 (length safety-settings)))
+          (fiveam:is (equal '("HARM_CATEGORY_HARASSMENT"
+                              "HARM_CATEGORY_HATE_SPEECH"
+                              "HARM_CATEGORY_SEXUALLY_EXPLICIT"
+                              "HARM_CATEGORY_DANGEROUS_CONTENT")
+                            (mapcar (lambda (setting)
+                                      (test-json-value-any setting '("category" :category)))
+                                    safety-settings)))
+          (fiveam:is (every (lambda (setting)
+                              (string= "BLOCK_NONE"
+                                       (test-json-value-any setting '("threshold" :threshold))))
+                            safety-settings)))))))
 
 (fiveam:test test-google-chat-preserves-system-instruction-paragraph-vectors
   (let ((captured-content nil))

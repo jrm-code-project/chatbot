@@ -123,8 +123,11 @@
   "Returns the generateContent payload alist for BOT."
   (let* ((system-inst (chatbot-system-instruction bot))
          (gemini-tools (generate-content-request-tools bot))
-         (generation-config (google-generation-config-alist effective-generation-config)))
+         (generation-config (google-generation-config-alist effective-generation-config))
+         (safety-settings (generate-content-request-safety-settings)))
     (append (list (cons "contents" (coerce request-contents 'vector)))
+            (when safety-settings
+              (list (cons "safetySettings" safety-settings)))
             (when system-inst
               (list (cons "systemInstruction"
                          (list (cons "parts"

@@ -223,6 +223,10 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
   "Returns Google-format tool groups from PAYLOAD."
   (test-json-elements (test-json-value-any payload '(:tools "tools"))))
 
+(defun google-payload-safety-settings (payload)
+  "Returns Google-format safety settings from PAYLOAD."
+  (test-json-elements (test-json-value-any payload '(:safety-settings "safetySettings"))))
+
 (defun google-tool-parameters (tool)
   "Returns the parameters object from a Google tool declaration."
   (test-json-value-any tool '("parameters" :parameters)))
