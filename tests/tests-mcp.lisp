@@ -2113,6 +2113,9 @@
          (bot (conversation-chatbot (new-chat :backend :google
                                               :model "gemini-3.5-flash"
                                               :system-instruction "Sterile context."
+                                              :content-cache-policy :auto
+                                              :content-cache-ttl "1800s"
+                                              :content-cache-min-tokens 256
                                               :parent-name "Supervisor"
                                               :depth 4
                                               :token-budget 900
@@ -2122,6 +2125,10 @@
     (setf (chatbot-persona-name bot) "TestRestoreConv")
     (setf (conversation-adaptive-context-pruning-max-tokens conv) 84)
     (setf (conversation-interaction-id conv) "interaction-42")
+    (setf (conversation-cached-content-name conv) "cachedContents/abc123")
+    (setf (conversation-cached-content-key conv) "fingerprint-1")
+    (setf (conversation-cached-content-metadata conv)
+          '((:ttl . "1800s") (:display-name . "Test cache")))
     (setf (conversation-messages conv) (list (list (cons "role" "user") (cons "content" "Original Msg"))))
     (save-minion-state conv)
     (fiveam:is-true (probe-file checkpoint-file))
@@ -2132,6 +2139,9 @@
              (fiveam:is (eq :google (chatbot-backend r-bot)))
              (fiveam:is (string= "gemini-3.5-flash" (chatbot-model r-bot)))
              (fiveam:is (string= "Sterile context." (chatbot-system-instruction r-bot)))
+             (fiveam:is (eq :auto (chatbot-content-cache-policy r-bot)))
+             (fiveam:is (string= "1800s" (chatbot-content-cache-ttl r-bot)))
+             (fiveam:is (= 256 (chatbot-content-cache-min-tokens r-bot)))
              (fiveam:is (string= "Supervisor" (chatbot-parent-name r-bot)))
              (fiveam:is (= 4 (chatbot-depth r-bot)))
              (fiveam:is (= 900 (chatbot-token-budget r-bot)))
@@ -2139,6 +2149,10 @@
              (fiveam:is (equal scoped-directory (chatbot-scoped-directory r-bot)))
              (fiveam:is (= 84 (conversation-adaptive-context-pruning-max-tokens restored)))
              (fiveam:is (string= "interaction-42" (conversation-interaction-id restored)))
+             (fiveam:is (string= "cachedContents/abc123" (conversation-cached-content-name restored)))
+             (fiveam:is (string= "fingerprint-1" (conversation-cached-content-key restored)))
+             (fiveam:is (equal '((:ttl . "1800s") (:display-name . "Test cache"))
+                               (conversation-cached-content-metadata restored)))
              (fiveam:is (equal (list (list (cons "role" "user") (cons "content" "Original Msg")))
                                (conversation-messages restored)))))
       (when (probe-file checkpoint-file)

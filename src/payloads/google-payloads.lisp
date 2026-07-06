@@ -70,31 +70,41 @@
               (cons "parts" (coerce (nreverse parts) 'vector)))
         nil)))
 
-(defun build-generate-content-request-contents (messages input &key chatbot persona-memory persona-diary-entries file-attachments effective-model)
+(defun history-message->generate-content-message (message)
+  "Converts one stored provider-neutral MESSAGE into a generateContent message."
+  (let ((role (cdr (assoc "role" message :test #'string=)))
+        (content (cdr (assoc "content" message :test #'string=)))
+        (parts (cdr (assoc "parts" message :test #'string=))))
+    (cond
+      (parts
+       (list (cons "role" (generate-content-role-for-message role))
+             (cons "parts" (sanitize-generate-content-parts parts))))
+      (t
+       (list (cons "role" (generate-content-role-for-message role))
+             (cons "parts" (vector (list (cons "text" content)))))))))
+
+(defun generate-content-cacheable-prefix-contents (chatbot persona-memory persona-diary-entries)
+  "Returns the reusable generateContent prefix contents implied by CHATBOT preload."
+  (mapcar #'history-message->generate-content-message
+          (append (persona-memory-messages persona-memory)
+                  (persona-diary-messages persona-diary-entries))))
+
+(defun build-generate-content-request-contents (messages input &key chatbot persona-memory persona-diary-entries file-attachments effective-model omit-preloaded-history-p)
   "Builds the Google generateContent contents list for the current turn."
   (let ((history (build-request-history-messages messages
                                                  nil
                                                  :chatbot chatbot
-                                                 :persona-memory persona-memory
-                                                 :persona-diary-entries persona-diary-entries
+                                                 :persona-memory (unless omit-preloaded-history-p
+                                                                  persona-memory)
+                                                 :persona-diary-entries (unless omit-preloaded-history-p
+                                                                         persona-diary-entries)
                                                  :effective-model effective-model))
         (current-user-message (generate-content-live-user-message chatbot
                                                                  input
                                                                  file-attachments
                                                                  :effective-model effective-model)))
     (append
-     (mapcar (lambda (msg)
-               (let ((role (cdr (assoc "role" msg :test #'string=)))
-                     (content (cdr (assoc "content" msg :test #'string=)))
-                     (parts (cdr (assoc "parts" msg :test #'string=))))
-                 (cond
-                   (parts
-                    (list (cons "role" (generate-content-role-for-message role))
-                          (cons "parts" (sanitize-generate-content-parts parts))))
-                   (t
-                    (list (cons "role" (generate-content-role-for-message role))
-                          (cons "parts" (vector (list (cons "text" content)))))))))
-             history)
+     (mapcar #'history-message->generate-content-message history)
      (when current-user-message
        (list current-user-message)))))
 

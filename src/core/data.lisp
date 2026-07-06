@@ -58,6 +58,16 @@
     :accessor runtime-context-http-get-function
     :initform #'dexador:get
     :documentation "HTTP GET function for this runtime context.")
+   (http-patch-function
+    :initarg :http-patch-function
+    :accessor runtime-context-http-patch-function
+    :initform #'dexador:patch
+    :documentation "HTTP PATCH function for this runtime context.")
+   (http-delete-function
+    :initarg :http-delete-function
+    :accessor runtime-context-http-delete-function
+    :initform #'dexador:delete
+    :documentation "HTTP DELETE function for this runtime context.")
    (gemini-api-key-function
     :initarg :gemini-api-key-function
     :accessor runtime-context-gemini-api-key-function
@@ -158,6 +168,21 @@
     :accessor chatbot-top-p
     :initform nil
     :documentation "Optional default nucleus sampling top-p for this chatbot. NIL uses the provider default.")
+   (content-cache-policy
+    :initarg :content-cache-policy
+    :accessor chatbot-content-cache-policy
+    :initform :auto
+    :documentation "Content-caching policy for this chatbot (:auto or :off).")
+   (content-cache-ttl-seconds
+    :initarg :content-cache-ttl-seconds
+    :accessor chatbot-content-cache-ttl-seconds
+    :initform nil
+    :documentation "Optional TTL in seconds for newly created explicit content caches.")
+   (content-cache-min-tokens
+    :initarg :content-cache-min-tokens
+    :accessor chatbot-content-cache-min-tokens
+    :initform nil
+    :documentation "Optional minimum estimated token threshold before automatic cache creation is attempted.")
    (google-search-p
     :initarg :google-search-p
     :accessor chatbot-google-search-p
@@ -313,7 +338,22 @@
     :initarg :messages
     :accessor conversation-messages
     :initform nil
-    :documentation "Accumulated conversation messages for stateless backends (like OpenAI).")))
+    :documentation "Accumulated conversation messages for stateless backends (like OpenAI).")
+   (cached-content-name
+    :initarg :cached-content-name
+    :accessor conversation-cached-content-name
+    :initform nil
+    :documentation "Active explicit Gemini cached-content resource name currently associated with this conversation.")
+   (cached-content-key
+    :initarg :cached-content-key
+    :accessor conversation-cached-content-key
+    :initform nil
+    :documentation "Stable fingerprint for the explicit cached-content context currently associated with this conversation.")
+   (cached-content-metadata
+    :initarg :cached-content-metadata
+    :accessor conversation-cached-content-metadata
+    :initform nil
+    :documentation "Optional raw cached-content metadata retained for observability and later reuse decisions.")))
 
 (defclass round-robin-participant ()
   ((name

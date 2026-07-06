@@ -15,6 +15,8 @@
                   *log-stream*
                   *http-connect-timeout*
                   *http-read-timeout*
+                  *http-patch-function*
+                  *http-delete-function*
                   *default-conversation*
                   *agentic-loop-default-backend*
                   *agentic-loop-default-model*
@@ -202,6 +204,15 @@ Unknown backends fall back to the Gemini default."
 (defparameter *lm-studio-http-read-timeout* 600
   "Minimum HTTP response timeout in seconds for the LM Studio backend.")
 
+(defparameter +default-content-cache-policy+ :auto
+  "Default content-caching policy for chatbots.")
+
+(defparameter *default-content-cache-ttl-seconds* 3600
+  "Default TTL in seconds for newly created explicit Gemini content caches.")
+
+(defparameter *default-content-cache-min-tokens* 2048
+  "Default estimated token threshold before automatic explicit cache creation is attempted.")
+
 (defun lm-studio-api-key ()
   "Returns the LM Studio API key. First checks *lm-studio-api-key*, then the LM_API_TOKEN environment variable."
   (or *lm-studio-api-key*
@@ -214,6 +225,43 @@ Unknown backends fall back to the Gemini default."
     (if (eq backend :lm-studio)
         (max default-timeout *lm-studio-http-read-timeout*)
         default-timeout)))
+
+(defun normalize-content-cache-policy (policy &key allow-nil-p)
+  "Returns POLICY normalized to a supported content-caching keyword."
+  (when (null policy)
+    (if allow-nil-p
+        (return-from normalize-content-cache-policy nil)
+        (error "Content cache policy is required.")))
+  (let ((normalized
+          (typecase policy
+            (keyword policy)
+            (string (intern (string-upcase policy) "KEYWORD"))
+            (t nil))))
+    (unless (member normalized '(:auto :off))
+      (error "Unsupported content cache policy: ~S" policy))
+    normalized))
+
+(defun normalize-content-cache-ttl-seconds (ttl-seconds &key allow-nil-p)
+  "Returns TTL-SECONDS validated as a positive integer or NIL."
+  (when (null ttl-seconds)
+    (if allow-nil-p
+        (return-from normalize-content-cache-ttl-seconds nil)
+        (error "Content cache TTL must not be NIL.")))
+  (unless (and (integerp ttl-seconds)
+               (> ttl-seconds 0))
+    (error "Content cache TTL must be a positive integer number of seconds: ~S" ttl-seconds))
+  ttl-seconds)
+
+(defun normalize-content-cache-min-tokens (min-tokens &key allow-nil-p)
+  "Returns MIN-TOKENS validated as a positive integer or NIL."
+  (when (null min-tokens)
+    (if allow-nil-p
+        (return-from normalize-content-cache-min-tokens nil)
+        (error "Content cache minimum token threshold must not be NIL.")))
+  (unless (and (integerp min-tokens)
+               (> min-tokens 0))
+    (error "Content cache minimum token threshold must be a positive integer: ~S" min-tokens))
+  min-tokens)
 
 (defun gemini-api-key ()
   "Returns the Gemini API key using the current runtime seam."
@@ -231,6 +279,12 @@ Unknown backends fall back to the Gemini default."
 
 (defparameter *http-get-function* #'dexador:get
   "Function used to perform HTTP GET requests.")
+
+(defparameter *http-patch-function* #'dexador:patch
+  "Function used to perform HTTP PATCH requests.")
+
+(defparameter *http-delete-function* #'dexador:delete
+  "Function used to perform HTTP DELETE requests.")
 
 (defun eager-mcp-startup-enabled-p ()
   "Returns true when eager shared MCP startup is enabled via environment."
@@ -678,6 +732,18 @@ Only the canonical default runtime context still requires this compatibility she
   "Returns the current HTTP GET function for CONTEXT."
   "Sets the current HTTP GET function for CONTEXT.")
 
+(define-runtime-context-function-seam-helper current-http-patch-function
+  runtime-context-http-patch-function
+  *http-patch-function*
+  "Returns the current HTTP PATCH function for CONTEXT."
+  "Sets the current HTTP PATCH function for CONTEXT.")
+
+(define-runtime-context-function-seam-helper current-http-delete-function
+  runtime-context-http-delete-function
+  *http-delete-function*
+  "Returns the current HTTP DELETE function for CONTEXT."
+  "Sets the current HTTP DELETE function for CONTEXT.")
+
 (define-runtime-context-function-seam-helper current-gemini-api-key-function
   runtime-context-gemini-api-key-function
   *gemini-api-key-function*
@@ -747,6 +813,8 @@ default-context compatibility is still desired."
                      (setf (runtime-context-getenv-function resolved-context) *getenv-function*)
                      (setf (runtime-context-http-post-function resolved-context) *http-post-function*)
                      (setf (runtime-context-http-get-function resolved-context) *http-get-function*)
+                     (setf (runtime-context-http-patch-function resolved-context) *http-patch-function*)
+                     (setf (runtime-context-http-delete-function resolved-context) *http-delete-function*)
                      (setf (runtime-context-gemini-api-key-function resolved-context) *gemini-api-key-function*)
                      (setf (runtime-context-filesystem-access-approval-function resolved-context)
                            *filesystem-access-approval-function*)

@@ -66,7 +66,7 @@
       (format nil "~{~A~^~%~%~}" texts))))
 
 (defun retry-on-google-gemini-pro-latest (bot input conversation callback
-                                            &key file-attachments request-contents history-messages
+                                            &key file-attachments request-contents history-messages cached-content-name
                                               effective-generation-config
                                               return-turn-result-p
                                               (recursion-depth 0))
@@ -77,6 +77,7 @@
                conversation
                callback
                :file-attachments file-attachments
+               :cached-content-name cached-content-name
                :effective-model +google-gemini-model-override-model+
                :effective-generation-config effective-generation-config
                :malformed-response-fallback-attempted-p t
@@ -84,16 +85,21 @@
                :recursion-depth recursion-depth))
 
 (defun google-request-state (bot input conversation file-attachments effective-model effective-generation-config
-                              &key request-contents history-messages malformed-response-fallback-attempted-p)
+                              &key request-contents history-messages malformed-response-fallback-attempted-p cached-content-name)
   "Builds the provider-runner state for a Google generateContent turn."
   (let* ((current-messages (conversation-messages conversation))
          (persona-memory (conversation-persona-memory conversation))
-         (persona-diary-entries (conversation-persona-diary-entries conversation)))
+         (persona-diary-entries (conversation-persona-diary-entries conversation))
+         (resolved-cached-content-name
+           (or cached-content-name
+               (ensure-google-conversation-content-cache conversation
+                                                        :effective-model effective-model))))
     (list :input input
           :file-attachments file-attachments
           :effective-model effective-model
           :effective-generation-config effective-generation-config
           :malformed-response-fallback-attempted-p malformed-response-fallback-attempted-p
+          :cached-content-name resolved-cached-content-name
           :history-messages (or history-messages
                               (stateless-history-messages current-messages input))
           :request-contents (or request-contents
@@ -103,7 +109,8 @@
                                                                         :persona-memory persona-memory
                                                                         :persona-diary-entries persona-diary-entries
                                                                         :file-attachments file-attachments
-                                                                        :effective-model effective-model)))))
+                                                                        :effective-model effective-model
+                                                                        :omit-preloaded-history-p (and resolved-cached-content-name t))))))
 
 (defun google-model-override-active-p (bot effective-model)
   "Returns true when the malformed-response fallback override model is already active."
@@ -119,13 +126,16 @@
                 (when (getf effective-generation-config :top-p)
                   (cons "topP" (getf effective-generation-config :top-p))))))
 
-(defun google-request-payload-alist (bot request-contents effective-generation-config)
+(defun google-request-payload-alist (bot request-contents effective-generation-config &key cached-content-name)
   "Returns the generateContent payload alist for BOT."
   (let* ((system-inst (chatbot-system-instruction bot))
          (gemini-tools (generate-content-request-tools bot))
          (generation-config (google-generation-config-alist effective-generation-config)))
     (append (list (cons "contents" (coerce request-contents 'vector)))
-            (when system-inst
+            (when cached-content-name
+              (list (cons "cachedContent" cached-content-name)))
+            (when (and system-inst
+                       (null cached-content-name))
               (list (cons "systemInstruction"
                          (list (cons "parts"
                                      (system-instruction-text-parts system-inst))))))
@@ -196,6 +206,7 @@
      :file-attachments (getf state :file-attachments)
      :effective-model (getf state :effective-model)
      :effective-generation-config (getf state :effective-generation-config)
+     :cached-content-name (getf state :cached-content-name)
      :malformed-response-fallback-attempted-p
      (getf state :malformed-response-fallback-attempted-p))))
 
@@ -256,6 +267,7 @@
    :request-contents (append (getf outcome :request-contents)
                             recursion-messages)
    :history-messages recursive-history
+   :cached-content-name (getf outcome :cached-content-name)
    :malformed-response-fallback-attempted-p
    (getf outcome :malformed-response-fallback-attempted-p)))
 
@@ -318,7 +330,8 @@
       (t
        (make-provider-turn-final-outcome final-text
                                         :usage usage
-                                        :thought-text thought-text)))))
+                                        :thought-text thought-text
+                                        :cached-content-name (getf state :cached-content-name))))))
 
 (defun google-api-key-or-error ()
   "Returns the configured Google API key or signals when it is missing."
@@ -332,7 +345,8 @@
   (cl-json:encode-json-to-string
    (google-request-payload-alist bot
                                  (getf state :request-contents)
-                                 (getf state :effective-generation-config))))
+                                 (getf state :effective-generation-config)
+                                 :cached-content-name (getf state :cached-content-name))))
 
 (defun google-turn-request-details (bot state)
   "Returns the request details plist for one Google generateContent turn."
@@ -398,6 +412,7 @@
               :file-attachments (getf state :file-attachments)
               :request-contents (getf state :request-contents)
               :history-messages (getf state :history-messages)
+              :cached-content-name (getf state :cached-content-name)
               :effective-generation-config (getf state :effective-generation-config)
               :return-turn-result-p t
               :recursion-depth current-depth))

@@ -169,6 +169,123 @@
         (fiveam:is (string= "Stored persona memory."
                            (conversation-persona-memory conv)))))))
 
+(fiveam:test test-google-content-cache-bindings-use-shared-http-seams
+  (let ((create-url nil)
+        (create-payload nil)
+        (get-url nil)
+        (list-url nil)
+        (patch-url nil)
+        (patch-payload nil)
+        (delete-url nil))
+    (let* ((*gemini-base-url* "https://example.test/gemini")
+           (context
+             (make-runtime-context
+              :gemini-api-key-function (lambda () "mocked-google-api-key")
+              :http-post-function
+              (lambda (url &rest args)
+                (setf create-url url
+                      create-payload (getf args :content))
+                (values "{\"name\":\"cachedContents/cache-1\",\"ttl\":\"3600s\"}" 200))
+              :http-get-function
+              (lambda (url &rest args)
+                (declare (ignore args))
+                (cond
+                  ((search "pageSize=10&pageToken=next-page" url)
+                   (setf list-url url)
+                   (values "{\"cachedContents\":[{\"name\":\"cachedContents/cache-1\"}]}" 200))
+                  (t
+                   (setf get-url url)
+                   (values "{\"name\":\"cachedContents/cache-1\",\"ttl\":\"3600s\"}" 200))))
+              :http-patch-function
+              (lambda (url headers content)
+                (declare (ignore headers))
+                (setf patch-url url
+                      patch-payload content)
+                (values "{\"name\":\"cachedContents/cache-1\",\"ttl\":\"1800s\"}" 200))
+              :http-delete-function
+              (lambda (url &rest args)
+                (declare (ignore args))
+                (setf delete-url url)
+                (values "" 204))))
+           (conv (new-chat :backend :google
+                           :system-instruction "Cache this stable prefix."
+                           :content-cache-policy :auto
+                           :content-cache-min-tokens 1
+                           :runtime-context context)))
+      (setf (conversation-persona-memory conv) "Stored persona memory.")
+      (call-with-runtime-context
+       context
+       (lambda ()
+         (let ((created (create-google-content-cache conv))
+               (fetched (get-google-content-cache "cachedContents/cache-1"))
+               (listed (list-google-content-caches :page-size 10 :page-token "next-page"))
+               (updated (update-google-content-cache-ttl "cachedContents/cache-1" 1800))
+               (deleted (delete-google-content-cache "cachedContents/cache-1")))
+           (fiveam:is (string= "cachedContents/cache-1" (cached-content-response-name created)))
+           (fiveam:is (string= "cachedContents/cache-1" (cached-content-response-name fetched)))
+           (fiveam:is (string=
+                       "cachedContents/cache-1"
+                       (cached-content-response-name
+                        (first (test-json-elements
+                                (test-json-value-any listed '("cachedContents" :cached-contents)))))))
+           (fiveam:is (string= "1800s" (test-json-value-any updated '("ttl" :ttl))))
+           (fiveam:is-true deleted))))
+      (fiveam:is (string= "https://example.test/gemini/cachedContents" create-url))
+      (fiveam:is (string= "https://example.test/gemini/cachedContents/cache-1" get-url))
+      (fiveam:is (string= "https://example.test/gemini/cachedContents?pageSize=10&pageToken=next-page" list-url))
+      (fiveam:is (string= "https://example.test/gemini/cachedContents/cache-1?updateMask=ttl" patch-url))
+      (fiveam:is (string= "https://example.test/gemini/cachedContents/cache-1" delete-url))
+      (let ((create-json (decode-test-json create-payload))
+            (patch-json (decode-test-json patch-payload)))
+        (assert-json-value= create-json "ttl" "3600s")
+        (fiveam:is (equal '("Cache this stable prefix.")
+                          (message-part-texts (test-json-value-any create-json '("systemInstruction" :system-instruction)))))
+        (assert-json-value= patch-json "ttl" "1800s")))))
+
+(fiveam:test test-google-chat-auto-creates-and-reuses-explicit-content-cache
+  (let ((captured-urls nil)
+        (captured-payloads nil))
+    (let* ((*gemini-base-url* "https://example.test/gemini")
+           (context
+             (make-runtime-context
+              :gemini-api-key-function (lambda () "mocked-google-api-key")
+              :http-post-function
+              (lambda (url &rest args)
+                (push url captured-urls)
+                (push (getf args :content) captured-payloads)
+                (if (search "/cachedContents" url)
+                    (values "{\"name\":\"cachedContents/cache-1\",\"ttl\":\"3600s\"}" 200)
+                    (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}" 200))))
+           (conv (new-chat :backend :google
+                           :system-instruction "Be concise"
+                           :content-cache-policy :auto
+                           :content-cache-min-tokens 1
+                           :runtime-context context)))
+      (setf (conversation-persona-memory conv) "Stored persona memory.")
+      (fiveam:is (string= "Hello from Google non-streaming"
+                         (chat "First live turn" :conversation conv)))
+      (fiveam:is (string= "Hello from Google non-streaming"
+                         (chat "Second live turn" :conversation conv)))
+      (fiveam:is (= 3 (length captured-urls)))
+      (fiveam:is (= 1 (count-if (lambda (url) (search "/cachedContents" url)) captured-urls)))
+      (fiveam:is (string= "cachedContents/cache-1" (conversation-cached-content-name conv)))
+      (let* ((first-cache-payload (decode-test-json (third captured-payloads)))
+             (first-turn-payload (decode-test-json (second captured-payloads)))
+             (second-turn-payload (decode-test-json (first captured-payloads)))
+             (first-turn-contents (google-payload-contents first-turn-payload))
+             (second-turn-contents (google-payload-contents second-turn-payload)))
+        (assert-json-value= first-turn-payload "cachedContent" "cachedContents/cache-1")
+        (fiveam:is-false (test-json-value-any first-turn-payload '("systemInstruction" :system-instruction)))
+        (fiveam:is (= 1 (length first-turn-contents)))
+        (assert-google-message-texts (first first-turn-contents) "user" '("First live turn"))
+        (fiveam:is (equal '("Be concise")
+                          (message-part-texts (test-json-value-any first-cache-payload '("systemInstruction" :system-instruction)))))
+        (assert-json-value= second-turn-payload "cachedContent" "cachedContents/cache-1")
+        (fiveam:is-false (test-json-value-any second-turn-payload '("systemInstruction" :system-instruction)))
+        (assert-google-message-texts (first second-turn-contents) "user" '("First live turn"))
+        (assert-google-message-texts (second second-turn-contents) "model" '("Hello from Google non-streaming"))
+        (assert-google-message-texts (third second-turn-contents) "user" '("Second live turn"))))))
+
 (fiveam:test test-google-chat-includes-transient-file-attachments-without-persisting-them
   (let* ((temp-dir (uiop:default-temporary-directory))
         (root (merge-pathnames "google-chat-files/" temp-dir))

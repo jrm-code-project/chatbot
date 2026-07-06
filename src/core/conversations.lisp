@@ -97,7 +97,7 @@
         :legacy-function-seam-compatibility-p nil)
        base-context)))
 
-(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p)
+(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p (content-cache-policy +default-content-cache-policy+) (content-cache-ttl-seconds *default-content-cache-ttl-seconds*) (content-cache-min-tokens *default-content-cache-min-tokens*) google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p cached-content-name cached-content-key cached-content-metadata)
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
@@ -118,6 +118,9 @@ configuration, instructions, or preloaded memory."
                                  :system-instruction-storage-kind system-instruction-storage-kind
                                  :temperature (normalize-chatbot-temperature temperature :allow-nil-p t)
                                  :top-p (normalize-chatbot-top-p top-p :allow-nil-p t)
+                                 :content-cache-policy (normalize-content-cache-policy content-cache-policy)
+                                 :content-cache-ttl-seconds (normalize-content-cache-ttl-seconds content-cache-ttl-seconds :allow-nil-p t)
+                                 :content-cache-min-tokens (normalize-content-cache-min-tokens content-cache-min-tokens :allow-nil-p t)
                                  :google-search-p google-search-p
                                  :gemini-fallback-to-google-p gemini-fallback-to-google-p
                                  :web-tools-p web-tools-p
@@ -143,7 +146,11 @@ configuration, instructions, or preloaded memory."
                 (startup-chatbot-mcp-servers resolved-context))
           (setf (chatbot-mcp-startup-status bot)
                 (startup-chatbot-mcp-status resolved-context)))
-        (make-instance 'conversation :chatbot bot)))
+        (make-instance 'conversation
+                       :chatbot bot
+                       :cached-content-name cached-content-name
+                       :cached-content-key cached-content-key
+                       :cached-content-metadata cached-content-metadata)))
      :default-conversation-compatibility-p nil
      :legacy-function-seam-compatibility-p nil)))
 
@@ -315,12 +322,21 @@ Use NEW-CHAT instead when no persona should be loaded."
           (new-chat :backend (getf restoration :backend)
                    :model (getf restoration :model)
                    :system-instruction (getf restoration :system-instruction)
+                   :content-cache-policy (or (getf restoration :content-cache-policy)
+                                             +default-content-cache-policy+)
+                   :content-cache-ttl-seconds (or (getf restoration :content-cache-ttl-seconds)
+                                                  *default-content-cache-ttl-seconds*)
+                   :content-cache-min-tokens (or (getf restoration :content-cache-min-tokens)
+                                                 *default-content-cache-min-tokens*)
                    :parent-name (getf restoration :parent-name)
                    :depth (getf restoration :depth)
                    :token-budget (getf restoration :token-budget)
                    :spent-tokens (getf restoration :spent-tokens)
                    :scoped-directory (getf restoration :scoped-directory)
-                   :runtime-context (getf restoration :runtime-context))))
+                   :runtime-context (getf restoration :runtime-context)
+                   :cached-content-name (getf restoration :cached-content-name)
+                   :cached-content-key (getf restoration :cached-content-key)
+                   :cached-content-metadata (getf restoration :cached-content-metadata))))
     (setf (conversation-interaction-id restored-conv)
           (getf restoration :interaction-id))
     (setf (conversation-adaptive-context-pruning-max-tokens restored-conv)

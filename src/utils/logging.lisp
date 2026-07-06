@@ -142,6 +142,13 @@
                                        :total-thought-tokens
                                        :total--thought--tokens
                                        :total_thought_tokens))))
+         (cached (normalize-token-count
+                  (usage-token-count usage
+                                     '(:cached-content-token-count
+                                       :total-cached-tokens
+                                       :total--cached--tokens
+                                       :cached_content_token_count
+                                       :total_cached_tokens))))
          (explicit-total (normalize-token-count
                           (usage-token-count usage
                                             '(:total-token-count
@@ -155,6 +162,7 @@
     (list :prompt prompt
           :completion completion
           :thought thought
+          :cached cached
           :total (or explicit-total derived-total))))
 
 (defun current-global-token-grand-totals ()
@@ -165,6 +173,7 @@
               (list :prompt 0
                     :completion 0
                     :thought 0
+                    :cached 0
                     :total 0)))))
 
 (defun reset-global-token-grand-totals ()
@@ -174,6 +183,7 @@
           (list :prompt 0
                 :completion 0
                 :thought 0
+                :cached 0
                 :total 0))))
 
 (defun accumulate-global-token-grand-totals (usage)
@@ -185,10 +195,12 @@
                               (list :prompt 0
                                     :completion 0
                                     :thought 0
+                                    :cached 0
                                     :total 0)))))
         (incf (getf totals :prompt) (or (getf canonical :prompt) 0))
         (incf (getf totals :completion) (or (getf canonical :completion) 0))
         (incf (getf totals :thought) (or (getf canonical :thought) 0))
+        (incf (getf totals :cached) (or (getf canonical :cached) 0))
         (incf (getf totals :total) (or (getf canonical :total) 0))
         totals))))
 
@@ -216,6 +228,9 @@
          (context (maybe-log-context-entry context
                                            "thought-tokens"
                                            (getf token-totals :thought)))
+         (context (maybe-log-context-entry context
+                                           "cached-tokens"
+                                           (getf token-totals :cached)))
          (context (maybe-log-context-entry context
                                            "total-tokens"
                                            (getf token-totals :total))))
@@ -271,20 +286,23 @@
         (prompt (getf turn-totals :prompt))
         (completion (getf turn-totals :completion))
         (thought (getf turn-totals :thought))
+        (cached (getf turn-totals :cached))
         (total (getf turn-totals :total))
         (thought-text (or (normalize-thought-text thought-text)
                           (usage-thought-text usage))))
-    (when (or prompt completion thought total)
+    (when (or prompt completion thought cached total)
      (let ((grand-totals (accumulate-global-token-grand-totals usage)))
-       (format stream "[Tokens] prompt: ~A completion: ~A thought: ~A total: ~A~%"
+       (format stream "[Tokens] prompt: ~A completion: ~A thought: ~A cached: ~A total: ~A~%"
                (or prompt "-")
                (or completion "-")
                (or thought "-")
+               (or cached "-")
                (or total "-"))
-       (format stream "[Tokens Total] prompt: ~A completion: ~A thought: ~A total: ~A~%"
+       (format stream "[Tokens Total] prompt: ~A completion: ~A thought: ~A cached: ~A total: ~A~%"
                (getf grand-totals :prompt)
                (getf grand-totals :completion)
                (getf grand-totals :thought)
+               (getf grand-totals :cached)
                (getf grand-totals :total))
        (when (and thought
                   (< thought 16)

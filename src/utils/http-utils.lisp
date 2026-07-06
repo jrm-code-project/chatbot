@@ -100,3 +100,34 @@
                      :headers headers
                      :connect-timeout connect-timeout
                      :read-timeout read-timeout))))))
+
+(defun patch-web-request (url headers content &key connect-timeout read-timeout)
+  "Logs and sends an outbound HTTP PATCH request."
+  (let ((connect-timeout (or connect-timeout
+                            (current-http-connect-timeout)))
+        (read-timeout (or read-timeout
+                         (current-http-read-timeout))))
+    (log-message :info "HTTP PATCH request"
+                :context `(("url" . ,(sanitize-url-for-log url))))
+    (let ((http-patch-function (current-http-patch-function)))
+      (with-exponential-backoff-retry (:max-retries 3 :base-delay-ms 100)
+        (funcall http-patch-function url
+                :headers headers
+                :content content
+                :connect-timeout connect-timeout
+                :read-timeout read-timeout)))))
+
+(defun delete-web-request (url &key headers connect-timeout read-timeout)
+  "Logs and sends an outbound HTTP DELETE request."
+  (let ((connect-timeout (or connect-timeout
+                            (current-http-connect-timeout)))
+        (read-timeout (or read-timeout
+                         (current-http-read-timeout))))
+    (log-message :info "HTTP DELETE request"
+                :context `(("url" . ,(sanitize-url-for-log url))))
+    (let ((http-delete-function (current-http-delete-function)))
+      (with-exponential-backoff-retry (:max-retries 3 :base-delay-ms 100)
+        (funcall http-delete-function url
+                :headers headers
+                :connect-timeout connect-timeout
+                :read-timeout read-timeout)))))

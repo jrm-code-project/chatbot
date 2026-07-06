@@ -46,6 +46,16 @@
     ((listp raw-system-instruction) (coerce raw-system-instruction 'vector))
     (t nil)))
 
+(defun normalize-persisted-content-cache-policy (raw-policy)
+  "Returns RAW-POLICY normalized for NEW-CHAT content-cache policy."
+  (cond
+    ((or (null raw-policy)
+        (empty-string-p raw-policy))
+    nil)
+    ((string-equal raw-policy "auto") :auto)
+    ((string-equal raw-policy "off") :off)
+    (t nil)))
+
 (defun normalize-persisted-message (msg)
   "Returns MSG normalized to the internal role/content alist shape."
   (list (cons "role" (persisted-message-field msg :role "role"))
@@ -79,6 +89,9 @@
           :depth (chatbot-depth bot)
           :token-budget (chatbot-token-budget bot)
           :spent-tokens (chatbot-spent-tokens bot)
+          :content-cache-policy (string-downcase (symbol-name (chatbot-content-cache-policy bot)))
+          :content-cache-ttl-seconds (chatbot-content-cache-ttl-seconds bot)
+          :content-cache-min-tokens (chatbot-content-cache-min-tokens bot)
           :scoped-directory (and (chatbot-scoped-directory bot)
                                  (namestring (chatbot-scoped-directory bot)))
           :system-instruction (persisted-system-instruction-value
@@ -86,6 +99,9 @@
           :adaptive-context-pruning-max-tokens
           (conversation-adaptive-context-pruning-max-tokens conversation)
           :interaction-id (or (conversation-interaction-id conversation) "")
+          :cached-content-name (or (conversation-cached-content-name conversation) "")
+          :cached-content-key (or (conversation-cached-content-key conversation) "")
+          :cached-content-metadata (or (conversation-cached-content-metadata conversation) nil)
           :messages (conversation-messages conversation))))
 
 (defun decode-persisted-conversation-state (state &key runtime-context append-recovery-handshake-p)
@@ -105,6 +121,10 @@
           :depth (or (get-string-plist-value state "depth") 1)
           :token-budget (get-string-plist-value state "tokenBudget")
           :spent-tokens (or spent-tokens 0)
+          :content-cache-policy (normalize-persisted-content-cache-policy
+                                 (get-string-plist-value state "contentCachePolicy"))
+          :content-cache-ttl-seconds (get-string-plist-value state "contentCacheTtlSeconds")
+          :content-cache-min-tokens (get-string-plist-value state "contentCacheMinTokens")
           :scoped-directory (and scoped-dir-str
                                  (not (empty-string-p scoped-dir-str))
                                  (uiop:ensure-directory-pathname scoped-dir-str))
@@ -117,5 +137,14 @@
                             (if (empty-string-p interaction-id)
                                 nil
                                 interaction-id))
+          :cached-content-name (let ((name (get-string-plist-value state "cachedContentName")))
+                                 (if (empty-string-p name)
+                                     nil
+                                     name))
+          :cached-content-key (let ((key (get-string-plist-value state "cachedContentKey")))
+                                (if (empty-string-p key)
+                                    nil
+                                    key))
+          :cached-content-metadata (get-string-plist-value state "cachedContentMetadata")
           :history (maybe-append-recovery-handshake history append-recovery-handshake-p)
           :runtime-context runtime-context)))
