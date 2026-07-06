@@ -1462,6 +1462,12 @@
                                                             ("model" . "gpt-4o")
                                                             ("systemInstruction" . "You are Bello")))))
              (fiveam:is (string= "Minion 'Bello' spawned successfully." spawn-res)))
+           (let* ((bello-conv (first (chatbot-subordinates bot)))
+                  (bello-inst (system-instruction-text
+                               (chatbot-system-instruction
+                                (conversation-chatbot bello-conv)))))
+             (fiveam:is (search "You are Bello" bello-inst))
+             (fiveam:is (search +agentic-operational-directive+ bello-inst)))
            ;; 3. List minions again (expect 1)
            (let* ((list-res (execute-chatbot-tool-by-name bot "listMinions" '()))
                   (parsed (cl-json:decode-json-from-string list-res)))
@@ -1479,6 +1485,16 @@
                                                           '(("name" . "Jerry")
                                                             ("personaName" . "test-minion-persona")))))
              (fiveam:is (string= "Minion 'Jerry' spawned successfully." spawn-res)))
+           (let* ((jerry-conv (find "Jerry"
+                                    (chatbot-subordinates bot)
+                                    :key (lambda (conversation)
+                                           (chatbot-persona-name
+                                            (conversation-chatbot conversation)))
+                                    :test #'string-equal))
+                  (jerry-inst (system-instruction-text
+                               (chatbot-system-instruction
+                                (conversation-chatbot jerry-conv)))))
+             (fiveam:is (search +agentic-operational-directive+ jerry-inst)))
            ;; 6. List minions again (expect Jerry and Bello, total 2)
            (let* ((list-res (execute-chatbot-tool-by-name bot "listMinions" '()))
                   (parsed (cl-json:decode-json-from-string list-res)))
@@ -1497,6 +1513,15 @@
            (let ((list-res (execute-chatbot-tool-by-name bot "listMinions" '())))
              (fiveam:is (string= "[]" list-res))))
       (uiop:delete-directory-tree mock-home :validate t))))
+
+(fiveam:test test-qwen-minion-instructions-include-operational-directive
+  (let* ((bot (conversation-chatbot (new-chat :backend :openai
+                                             :model "qwen2.5-coder"))))
+    (append-delegation-instructions bot "QwenWorker" 2 256)
+    (let ((instruction (system-instruction-text (chatbot-system-instruction bot))))
+      (fiveam:is (search +agentic-operational-directive+ instruction))
+      (fiveam:is (search "Do NOT request delegation or child spawns." instruction))
+      (fiveam:is (search "{\"reply\":\"plain text for the parent shell\",\"spawn\":null}" instruction)))))
 
 (fiveam:test test-recursive-minions-lifecycle
   (let* ((temp-dir (uiop:default-temporary-directory))
@@ -1925,6 +1950,8 @@
             (fiveam:is-true (chatbot-planner-p planner-bot))
             (fiveam:is (string= "Planner" (chatbot-persona-name planner-bot)))
             (fiveam:is (string= +planner-system-instruction+ (chatbot-system-instruction planner-bot)))
+            (fiveam:is (search +agentic-operational-directive+
+                               (chatbot-system-instruction planner-bot)))
             (fiveam:is (= 1 (length history)))
             (let ((msg (first history)))
               (fiveam:is (string= "user" (cdr (assoc "role" msg :test #'string=))))

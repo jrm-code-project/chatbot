@@ -109,7 +109,17 @@ blind polling alone under heavier full-suite load."
       (fiveam:is (string= *isolated-agentic-loop-start-system-instruction*
                           (system-instruction-text
                            (chatbot-system-instruction
-                            (conversation-chatbot cloned))))))))
+                            (conversation-chatbot cloned)))))
+      (fiveam:is (search +agentic-operational-directive+
+                         (system-instruction-text
+                          (chatbot-system-instruction
+                           (conversation-chatbot cloned))))))))
+
+(fiveam:test test-agentic-loop-startup-instructions-include-operational-directive
+  (fiveam:is (search +agentic-operational-directive+
+                     *agentic-loop-start-system-instruction*))
+  (fiveam:is (search +agentic-operational-directive+
+                     *isolated-agentic-loop-start-system-instruction*)))
 
 (fiveam:test test-start-agentic-loop-completes-and-records-result
   (let ((*agentic-loop-chat-function*
@@ -123,7 +133,12 @@ blind polling alone under heavier full-suite load."
                           (wait-for-agentic-loop-status loop '(:completed :failed :limit-reached))))
            (fiveam:is (= 1 (agentic-loop-current-iteration loop)))
            (fiveam:is (string= "loop finished" (agentic-loop-result-summary loop)))
-           (fiveam:is (= 1 (length (agentic-loop-step-history loop)))))
+           (fiveam:is (= 1 (length (agentic-loop-step-history loop))))
+           (fiveam:is (search +agentic-operational-directive+
+                              (system-instruction-text
+                               (chatbot-system-instruction
+                                (conversation-chatbot
+                                 (agentic-loop-conversation loop)))))))
       (abort-agentic-loops :force t)
       (clear-agentic-loops))))
 

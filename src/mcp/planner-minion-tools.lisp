@@ -4,7 +4,9 @@
 (in-package "CHATBOT")
 
 (defun format-delegation-instruction (name depth remaining-budget)
-  (format nil "~&[DELEGATION CAPABILITIES]
+  (format nil "~A
+
+[DELEGATION CAPABILITIES]
 You are a minion named '~A' at hierarchical depth ~D.
 You have been allocated a token budget of ~A.
 You are capable of delegating tasks to your own subordinate minions if needed.
@@ -16,6 +18,7 @@ The reply field must always be a non-empty string.
 The spawn field must be either null or an object with exactly the string field name and integer field budget.
 If you request a spawn, child_name must be unique and budget must be within your remaining budget of ~A.
 Do not add commentary before or after the JSON. Do not wrap it in Markdown."
+          +agentic-operational-directive+
           name
           depth
           (or remaining-budget "unbounded")
@@ -26,12 +29,13 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
          (is-qwen (and (stringp model) (search "qwen" model :test #'char-equal)))
          (inst (if is-qwen
                    (format nil (concatenate 'string
-                                            "~&[CRITICAL OPERATION DIRECTIVE]~%"
+                                            "~A~%~%[CRITICAL OPERATION DIRECTIVE]~%"
                                             "You are a worker minion named '~A'.~%"
                                             "You must DIRECTLY write Lisp code and execute tasks yourself.~%"
                                             "Do NOT request delegation or child spawns.~%"
                                             "You MUST respond with ONLY strict JSON in this exact schema: {\"reply\":\"plain text for the parent shell\",\"spawn\":null}.~%"
                                             "Do not add commentary before or after the JSON.")
+                               +agentic-operational-directive+
                                name)
                    (format-delegation-instruction name depth remaining-budget)))
          (curr (chatbot-system-instruction bot)))
