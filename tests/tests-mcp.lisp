@@ -1952,6 +1952,8 @@
             (fiveam:is (string= +planner-system-instruction+ (chatbot-system-instruction planner-bot)))
             (fiveam:is (search +agentic-operational-directive+
                                (chatbot-system-instruction planner-bot)))
+            (fiveam:is (search "TOOL EXECUTION MANDATE (NO HALLUCINATIONS)"
+                               (chatbot-system-instruction planner-bot)))
             (fiveam:is (= 1 (length history)))
             (let ((msg (first history)))
               (fiveam:is (string= "user" (cdr (assoc "role" msg :test #'string=))))

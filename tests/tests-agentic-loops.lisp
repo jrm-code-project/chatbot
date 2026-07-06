@@ -119,6 +119,10 @@ blind polling alone under heavier full-suite load."
   (fiveam:is (search +agentic-operational-directive+
                      *agentic-loop-start-system-instruction*))
   (fiveam:is (search +agentic-operational-directive+
+                     *isolated-agentic-loop-start-system-instruction*))
+  (fiveam:is (search "TOOL EXECUTION MANDATE (NO HALLUCINATIONS)"
+                     *agentic-loop-start-system-instruction*))
+  (fiveam:is (search "{\"status\":\"continue\"}"
                      *isolated-agentic-loop-start-system-instruction*)))
 
 (fiveam:test test-start-agentic-loop-completes-and-records-result
