@@ -2100,6 +2100,23 @@ After fence.")
     (fiveam:is (equal '(:prompt 17 :completion 9 :thought 4 :cached 7 :total 30)
                       (current-global-token-grand-totals)))))
 
+(fiveam:test test-write-turn-token-summary-upgrades-legacy-grand-total-state
+  (let ((*global-token-grand-totals* (list :prompt 12
+                                           :completion 7
+                                           :thought 3
+                                           :total 22)))
+    (let ((output (with-output-to-string (s)
+                    (write-turn-token-summary
+                     '(("total_input_tokens" . 5)
+                       ("total_cached_tokens" . 2)
+                       ("total_output_tokens" . 2)
+                       ("total_thought_tokens" . 1))
+                     :stream s))))
+      (fiveam:is (search "[Tokens] prompt: 5 completion: 2 thought: 1 cached: 2 total: 8" output))
+      (fiveam:is (search "[Tokens Total] prompt: 17 completion: 9 thought: 4 cached: 2 total: 30" output))
+      (fiveam:is (equal '(:prompt 17 :completion 9 :thought 4 :cached 2 :total 30)
+                        (current-global-token-grand-totals))))))
+
 (fiveam:test test-accumulate-global-token-grand-totals-is-thread-safe
   (reset-global-token-grand-totals)
   (let* ((thread-count 8)
