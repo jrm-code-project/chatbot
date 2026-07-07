@@ -904,6 +904,8 @@
             default-context
             (lambda ()
               (fiveam:is (eq :context-approval
+                             (funcall (current-filesystem-access-approval-function))))
+              (fiveam:is (eq :context-approval
                              (funcall (current-filesystem-access-approval-function
                                        default-context))))))))
       (setf *filesystem-access-approval-function* original-approval-function)
@@ -930,16 +932,18 @@
            default-context
            (lambda ()
              (fiveam:is (eq :context-approval
+                            (funcall (current-eval-approval-function))))
+             (fiveam:is (eq :context-approval
                             (funcall (current-eval-approval-function
                                       default-context))))))))
       (setf *eval-approval-function* original-approval-function)
       (setf (runtime-context-eval-approval-function default-context)
           original-default-approval))))
 
-(fiveam:test test-default-runtime-context-no-arg-function-seam-keeps-legacy-override
+(fiveam:test test-default-runtime-context-no-arg-function-seam-no-longer-falls-back-to-legacy
   (let* ((default-context *default-runtime-context*)
-         (original-getenv-function *getenv-function*)
-         (original-default-getenv (runtime-context-getenv-function default-context)))
+        (original-getenv-function *getenv-function*)
+        (original-default-getenv (runtime-context-getenv-function default-context)))
     (unwind-protect
         (progn
           (setf (runtime-context-getenv-function default-context)
@@ -957,7 +961,7 @@
            (call-with-runtime-context
             default-context
             (lambda ()
-              (fiveam:is (string= "legacy-env-key"
+              (fiveam:is (string= "context-env-key"
                                   (funcall (current-getenv-function)
                                            "OPENAI_API_KEY")))))))
       (setf *getenv-function* original-getenv-function)

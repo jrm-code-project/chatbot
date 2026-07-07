@@ -552,33 +552,17 @@ compatibility-only ambient special variables."
 
 (defun runtime-context-function-seam-value (context accessor legacy-symbol)
   "Returns the function seam value for ACCESSOR and LEGACY-SYMBOL."
-  (let ((resolved-context (and context
-                              (resolve-runtime-context context))))
-    (cond
-      ((and (null context)
-            *active-runtime-context*
-            (not (default-runtime-context-p *active-runtime-context*)))
-       (runtime-context-accessor-value *active-runtime-context* accessor))
-      (resolved-context
-       (runtime-context-accessor-value resolved-context accessor))
-      (t
-       (legacy-global-value legacy-symbol)))))
+  (declare (ignore legacy-symbol))
+  (let ((resolved-context (resolve-runtime-context context)))
+    (and resolved-context
+         (runtime-context-accessor-value resolved-context accessor))))
 
 (defun set-runtime-context-function-seam-value (value context accessor legacy-symbol)
   "Stores VALUE through the function seam bridge for ACCESSOR and LEGACY-SYMBOL."
-  (let ((resolved-context (and context
-                              (resolve-runtime-context context))))
-    (cond
-      ((and (null context)
-            *active-runtime-context*
-            (not (default-runtime-context-p *active-runtime-context*)))
-       (set-runtime-context-accessor-value *active-runtime-context* accessor value))
-      (resolved-context
-       (set-runtime-context-accessor-value resolved-context accessor value))
-      (t
-       (setf (symbol-value legacy-symbol) value)
-       (when (default-runtime-context-p *default-runtime-context*)
-         (set-runtime-context-accessor-value *default-runtime-context* accessor value)))))
+  (declare (ignore legacy-symbol))
+  (let ((resolved-context (resolve-runtime-context context)))
+    (when resolved-context
+      (set-runtime-context-accessor-value resolved-context accessor value)))
   value)
 
 (defmacro define-runtime-context-function-seam-helper (name accessor legacy-symbol getter-doc setter-doc)
@@ -597,33 +581,17 @@ compatibility-only ambient special variables."
 
 (defun runtime-context-approval-function-value (context accessor legacy-symbol)
   "Returns the approval function seam value for ACCESSOR and LEGACY-SYMBOL."
-  (let ((resolved-context (and context
-                              (resolve-runtime-context context))))
-    (cond
-      ((and (null context)
-            *active-runtime-context*
-            (not (default-runtime-context-p *active-runtime-context*)))
-       (runtime-context-accessor-value *active-runtime-context* accessor))
-      (resolved-context
-       (runtime-context-accessor-value resolved-context accessor))
-      (t
-       (legacy-global-value legacy-symbol)))))
+  (declare (ignore legacy-symbol))
+  (let ((resolved-context (resolve-runtime-context context)))
+    (and resolved-context
+         (runtime-context-accessor-value resolved-context accessor))))
 
 (defun set-runtime-context-approval-function-value (value context accessor legacy-symbol)
   "Stores approval VALUE through the runtime-context bridge."
-  (let ((resolved-context (and context
-                              (resolve-runtime-context context))))
-    (cond
-      ((and (null context)
-            *active-runtime-context*
-            (not (default-runtime-context-p *active-runtime-context*)))
-       (set-runtime-context-accessor-value *active-runtime-context* accessor value))
-      (resolved-context
-       (set-runtime-context-accessor-value resolved-context accessor value))
-      (t
-       (setf (symbol-value legacy-symbol) value)
-       (when (default-runtime-context-p *default-runtime-context*)
-         (set-runtime-context-accessor-value *default-runtime-context* accessor value)))))
+  (declare (ignore legacy-symbol))
+  (let ((resolved-context (resolve-runtime-context context)))
+    (when resolved-context
+      (set-runtime-context-accessor-value resolved-context accessor value)))
   value)
 
 (defmacro define-runtime-context-approval-function-helper (name accessor legacy-symbol getter-doc setter-doc)
