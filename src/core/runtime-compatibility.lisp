@@ -54,14 +54,3 @@ Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
   "Deprecated compatibility alias for the agentic-loop default model.
 Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
 :AGENTIC-LOOP-DEFAULT-MODEL.")
-
-(defun sync-legacy-default-conversation-from-runtime-context (context)
-  "Copies CONTEXT's default conversation back into the legacy compatibility global."
-  (setf *default-conversation* (runtime-context-default-conversation context))
-  context)
-
-(defun maybe-sync-legacy-globals-from-default-runtime-context (context)
-  "Copies CONTEXT back to legacy globals when it is the default runtime context."
-  (when (default-runtime-context-p context)
-    (sync-legacy-default-conversation-from-runtime-context context))
-  context)

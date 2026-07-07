@@ -1007,7 +1007,7 @@
            (fiveam:is (eq legacy-conversation *default-conversation*)))
       (setf *default-conversation* original-legacy-conversation))))
 
-(fiveam:test test-call-with-runtime-context-default-context-still-rebinds-legacy-default-conversation
+(fiveam:test test-call-with-runtime-context-default-context-does-not-rebind-legacy-default-conversation
   (let* ((default-context *default-runtime-context*)
          (legacy-conversation (new-chat))
          (context-conversation (new-chat))
@@ -1020,9 +1020,10 @@
            (call-with-runtime-context
             default-context
             (lambda ()
-              (fiveam:is (eq context-conversation *default-conversation*))
+              (fiveam:is (eq legacy-conversation *default-conversation*))
+              (fiveam:is (eq context-conversation (current-default-conversation)))
               (setf *default-conversation* legacy-conversation)))
-           (fiveam:is (eq legacy-conversation
+           (fiveam:is (eq context-conversation
                         (runtime-context-default-conversation default-context)))
            (fiveam:is (eq legacy-conversation *default-conversation*)))
       (setf *default-conversation* original-legacy-conversation)

@@ -726,19 +726,9 @@ the canonical default runtime context."
         (setf *default-conversation* value))))
   value)
 
-(defun call-with-default-conversation-compatibility (context thunk)
-  "Calls THUNK with CONTEXT's default conversation mirrored through the legacy special.
-Only the canonical default runtime context still requires this compatibility shell."
-  (let ((*default-conversation*
-         (runtime-context-default-conversation context)))
-    (unwind-protect
-         (funcall thunk)
-      (setf (runtime-context-default-conversation context)
-           *default-conversation*))))
-
 (define-context-owned-runtime-context-helper current-mcp-config-path
-  runtime-context-mcp-config-path
-  *mcp-config-path*
+ runtime-context-mcp-config-path
+ *mcp-config-path*
   "Returns the ambient MCP configuration override path for CONTEXT."
   "Sets the ambient MCP configuration override path for CONTEXT.")
 
@@ -863,19 +853,18 @@ Only the canonical default runtime context still requires this compatibility she
   "Sets the transient planner parent conversation for CONTEXT.")
 
 (defun call-with-runtime-context (context thunk
-                                 &key
-                                   (default-conversation-compatibility-p t)
-                                   (legacy-function-seam-compatibility-p t))
+                                &key
+                                  (default-conversation-compatibility-p t)
+                                  (legacy-function-seam-compatibility-p t))
   "Calls THUNK with the resolved runtime context active.
-Only the canonical default runtime context still requires *DEFAULT-CONVERSATION*
-legacy rebinding. Function seams now resolve through the active runtime context
-directly. Legacy function-seam synchronization only runs when that
-default-context compatibility is still desired; approval seams now remain
-owned by the runtime context even under the default-context shell."
+Function seams now resolve through the active runtime context directly.
+DEFAULT-CONVERSATION-COMPATIBILITY-P is retained for compatibility but no longer
+rebinds or mirrors *DEFAULT-CONVERSATION*. Legacy function-seam synchronization
+only runs when that default-context compatibility flag is enabled; approval
+seams remain owned by the runtime context."
+  (declare (ignore default-conversation-compatibility-p))
   (let* ((resolved-context (resolve-runtime-context context))
          (default-context-p (default-runtime-context-p resolved-context))
-         (default-conversation-compatibility-active-p
-           (and default-context-p default-conversation-compatibility-p))
          (legacy-function-seam-compatibility-active-p
           (and default-context-p legacy-function-seam-compatibility-p)))
     (cond
@@ -887,9 +876,7 @@ owned by the runtime context even under the default-context shell."
        (let ((result
                (let ((*active-runtime-context* resolved-context))
                  (unwind-protect
-                      (if default-conversation-compatibility-active-p
-                          (call-with-default-conversation-compatibility resolved-context thunk)
-                          (funcall thunk))
+                     (funcall thunk)
                    (when legacy-function-seam-compatibility-active-p
                      (setf (runtime-context-getenv-function resolved-context) *getenv-function*)
                      (setf (runtime-context-http-post-function resolved-context) *http-post-function*)
@@ -898,8 +885,6 @@ owned by the runtime context even under the default-context shell."
                      (setf (runtime-context-http-delete-function resolved-context) *http-delete-function*)
                      (setf (runtime-context-gemini-api-key-function resolved-context)
                            *gemini-api-key-function*))))))
-         (when default-conversation-compatibility-active-p
-           (maybe-sync-legacy-globals-from-default-runtime-context resolved-context))
          result)))))
 
 (setf *default-runtime-context* (make-runtime-context))
