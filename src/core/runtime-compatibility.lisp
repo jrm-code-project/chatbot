@@ -10,36 +10,38 @@ Runtime contexts no longer consult this special; use MAKE-RUNTIME-CONTEXT with
 
 (defvar *startup-chatbot* nil
   "Deprecated compatibility alias for the shared startup chatbot.
-Runtime contexts own startup MCP state; use INITIALIZE-STARTUP-CHATBOT and
-explicit runtime contexts instead of mutating this special directly.")
+Runtime code no longer consults or mirrors this special; use
+INITIALIZE-STARTUP-CHATBOT and explicit runtime contexts instead.")
 
 (defparameter *auto-initialize-startup-mcp-servers-p* (eager-mcp-startup-enabled-p)
   "Deprecated compatibility alias for eager shared MCP startup.
-Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
-:AUTO-INITIALIZE-STARTUP-MCP-SERVERS-P instead.")
+Runtime code no longer consults or mirrors this special; use
+MAKE-RUNTIME-CONTEXT with :AUTO-INITIALIZE-STARTUP-MCP-SERVERS-P instead.")
 
 (defparameter *logging-enabled-p* t
   "Deprecated compatibility alias controlling Chatbot logging.
-Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
-:LOGGING-ENABLED-P.")
+Runtime code no longer consults or mirrors this special; use
+MAKE-RUNTIME-CONTEXT with :LOGGING-ENABLED-P.")
 
 (defparameter *log-level* :info
   "Deprecated compatibility alias for the Chatbot minimum log level.
-Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with :LOG-LEVEL.")
+Runtime code no longer consults or mirrors this special; use
+MAKE-RUNTIME-CONTEXT with :LOG-LEVEL.")
 
 (defparameter *log-stream* *error-output*
   "Deprecated compatibility alias for the Chatbot log output stream.
-Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with :LOG-STREAM.")
+Runtime code no longer consults or mirrors this special; use
+MAKE-RUNTIME-CONTEXT with :LOG-STREAM.")
 
 (defparameter *http-connect-timeout* 15
   "Deprecated compatibility alias for the HTTP connection timeout.
-Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
-:HTTP-CONNECT-TIMEOUT.")
+Runtime code no longer consults or mirrors this special; use
+MAKE-RUNTIME-CONTEXT with :HTTP-CONNECT-TIMEOUT.")
 
 (defparameter *http-read-timeout* 120
   "Deprecated compatibility alias for the HTTP response timeout.
-Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
-:HTTP-READ-TIMEOUT.")
+Runtime code no longer consults or mirrors this special; use
+MAKE-RUNTIME-CONTEXT with :HTTP-READ-TIMEOUT.")
 
 (defvar *default-conversation* nil
   "Deprecated compatibility alias for the old ambient default conversation.
@@ -48,10 +50,10 @@ CURRENT-DEFAULT-CONVERSATION or an explicit runtime context instead.")
 
 (defparameter *agentic-loop-default-backend* nil
   "Deprecated compatibility alias for the agentic-loop default backend.
-Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
-:AGENTIC-LOOP-DEFAULT-BACKEND.")
+Runtime code no longer consults or mirrors this special; use
+MAKE-RUNTIME-CONTEXT with :AGENTIC-LOOP-DEFAULT-BACKEND.")
 
 (defparameter *agentic-loop-default-model* nil
   "Deprecated compatibility alias for the agentic-loop default model.
-Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
-:AGENTIC-LOOP-DEFAULT-MODEL.")
+Runtime code no longer consults or mirrors this special; use
+MAKE-RUNTIME-CONTEXT with :AGENTIC-LOOP-DEFAULT-MODEL.")

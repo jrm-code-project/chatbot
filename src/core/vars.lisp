@@ -646,14 +646,13 @@ compatibility-only ambient special variables."
 
 (defun set-runtime-context-owned-value (value context accessor legacy-symbol)
   "Stores VALUE through ACCESSOR on the resolved runtime context.
-When the canonical default runtime context is updated, keep LEGACY-SYMBOL in sync
-as a compatibility alias."
+LEGACY-SYMBOL is retained only for compatibility helper definitions and is no
+longer mirrored."
+  (declare (ignore legacy-symbol))
   (let ((resolved-context (or (resolve-runtime-context context)
                              *default-runtime-context*)))
     (when resolved-context
-      (set-runtime-context-accessor-value resolved-context accessor value)
-      (when (default-runtime-context-p resolved-context)
-       (setf (symbol-value legacy-symbol) value))))
+      (set-runtime-context-accessor-value resolved-context accessor value)))
   value)
 
 (defmacro define-context-owned-runtime-context-helper (name accessor legacy-symbol getter-doc setter-doc)
