@@ -5,9 +5,6 @@
 ;;; Variables for the Chatbot framework
 
 (declaim (special *mcp-config-path*
-                  *warn-on-legacy-runtime-globals-p*
-                  *legacy-runtime-global-warnings-issued*
-                  *legacy-runtime-global-replacements*
                   *startup-chatbot*
                   *auto-initialize-startup-mcp-servers-p*
                   *logging-enabled-p*
@@ -454,15 +451,11 @@ compatibility-only ambient special variables."
   "Returns SYMBOL's current ambient legacy-global value."
   (symbol-value symbol))
 
-(defun resolve-runtime-context (context &key sync-from-globals-p)
+(defun resolve-runtime-context (context)
   "Returns CONTEXT, otherwise the active context, otherwise the canonical default context."
-  (let ((resolved (or context
-                     *active-runtime-context*
-                     *default-runtime-context*)))
-    (when (and sync-from-globals-p
-               (default-runtime-context-p resolved))
-      (sync-default-conversation-from-legacy-global resolved))
-    resolved))
+  (or context
+      *active-runtime-context*
+      *default-runtime-context*))
 
 (defun normalize-runtime-worker-kind (kind)
   "Returns KIND normalized to one canonical worker kind keyword."
@@ -720,9 +713,6 @@ the canonical default runtime context."
     (cond
       ((null resolved-context)
        *default-conversation*)
-      ((default-runtime-context-p resolved-context)
-       (sync-default-conversation-from-legacy-global resolved-context)
-       (runtime-context-default-conversation resolved-context))
       (t
        (runtime-context-default-conversation resolved-context)))))
 
@@ -882,9 +872,7 @@ legacy rebinding. Function seams now resolve through the active runtime context
 directly. Legacy function-seam synchronization only runs when that
 default-context compatibility is still desired; approval seams now remain
 owned by the runtime context even under the default-context shell."
-  (let* ((resolved-context (resolve-runtime-context
-                           context
-                           :sync-from-globals-p default-conversation-compatibility-p))
+  (let* ((resolved-context (resolve-runtime-context context))
          (default-context-p (default-runtime-context-p resolved-context))
          (default-conversation-compatibility-active-p
            (and default-context-p default-conversation-compatibility-p))

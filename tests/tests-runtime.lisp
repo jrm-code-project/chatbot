@@ -18,7 +18,7 @@
               (values (make-string-input-stream "") 200)))
       (unwind-protect
            (progn
-             (setf *default-conversation* conv)
+             (setf (current-default-conversation) conv)
              (chat "Hello")
              (fiveam:is-true called)
              (fiveam:is (eq conv (runtime-context-default-conversation *default-runtime-context*))))
@@ -44,7 +44,7 @@
       (setf *default-conversation* original-legacy-conversation)
       (setf (runtime-context-default-conversation default-context) original-default-conversation))))
 
-(fiveam:test test-chat-with-ambient-default-conversation-uses-conversation-runtime-context
+(fiveam:test test-chat-with-canonical-default-conversation-uses-conversation-runtime-context
   (let* ((custom-context (make-runtime-context))
          (conv (new-chat :backend :google :runtime-context custom-context))
          (legacy-http-called-p nil)
@@ -68,7 +68,7 @@
            (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from ambient context\"}], \"role\": \"model\"}}]}" 200)))
     (unwind-protect
         (progn
-          (setf *default-conversation* conv)
+          (setf (current-default-conversation) conv)
           (setf *gemini-api-key-function*
                 (lambda ()
                   (error "ambient legacy gemini key function should not be used")))
@@ -149,7 +149,7 @@
       (setf *default-conversation* original-legacy-conversation)
       (setf (runtime-context-default-conversation default-context) original-default-conversation))))
 
-(fiveam:test test-no-arg-current-default-conversation-syncs-through-default-runtime-context
+(fiveam:test test-no-arg-current-default-conversation-prefers-default-runtime-context
   (let* ((default-context *default-runtime-context*)
          (legacy-conversation (new-chat))
          (context-conversation (new-chat))
@@ -159,9 +159,10 @@
          (progn
            (setf *default-conversation* legacy-conversation)
            (setf (runtime-context-default-conversation default-context) context-conversation)
-           (fiveam:is (eq legacy-conversation (current-default-conversation)))
-           (fiveam:is (eq legacy-conversation
-                         (runtime-context-default-conversation default-context))))
+           (fiveam:is (eq context-conversation (current-default-conversation)))
+           (fiveam:is (eq context-conversation
+                         (runtime-context-default-conversation default-context)))
+           (fiveam:is (eq legacy-conversation *default-conversation*)))
       (setf *default-conversation* original-legacy-conversation)
       (setf (runtime-context-default-conversation default-context) original-default-conversation))))
 
@@ -1019,7 +1020,7 @@
            (call-with-runtime-context
             default-context
             (lambda ()
-              (fiveam:is (eq legacy-conversation *default-conversation*))
+              (fiveam:is (eq context-conversation *default-conversation*))
               (setf *default-conversation* legacy-conversation)))
            (fiveam:is (eq legacy-conversation
                         (runtime-context-default-conversation default-context)))
