@@ -352,8 +352,7 @@
 (defun startup-chatbot-ready-p (bot &optional strict-required-p)
   "Returns true when BOT already has initialized shared MCP startup state."
   (and bot
-       (or (chatbot-mcp-startup-status bot)
-           (chatbot-mcp-servers bot))
+       (chatbot-mcp-startup-status bot)
        (startup-chatbot-satisfies-strict-required-p bot strict-required-p)))
 
 (defun ensure-startup-chatbot-initialized (context strict-required-p)
