@@ -72,9 +72,50 @@
              (spawn-persona "Alpha" :backend :google :model "gemini-3.5-flash"))))
     (clear-personas)))
 
+(fiveam:test test-query-all-checkpoints-sandbox-personas-separately
+  (let* ((checkpoint-root (merge-pathnames "sandbox-persona-checkpoints/"
+                                          (uiop:default-temporary-directory)))
+        (*minions-data-directory* checkpoint-root))
+    (ensure-directories-exist checkpoint-root)
+    (unwind-protect
+        (progn
+          (clear-personas)
+          (let* ((alpha-context (make-runtime-context
+                                 :gemini-api-key-function (lambda () "mocked-google-api-key")
+                                 :http-post-function
+                                 (lambda (url &rest args)
+                                   (declare (ignore url args))
+                                   (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Alpha reply\"}], \"role\": \"model\"}}]}" 200))))
+                 (beta-context (make-runtime-context
+                                :gemini-api-key-function (lambda () "mocked-google-api-key")
+                                :http-post-function
+                                (lambda (url &rest args)
+                                  (declare (ignore url args))
+                                  (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Beta reply\"}], \"role\": \"model\"}}]}" 200))))
+                 (alpha (spawn-persona "Alpha" :backend :google :runtime-context alpha-context))
+                 (beta (spawn-persona "Beta" :backend :google :runtime-context beta-context))
+                 (alpha-checkpoint (merge-pathnames "Alpha.json" (minions-data-directory)))
+                 (beta-checkpoint (merge-pathnames "Beta.json" (minions-data-directory)))
+                 (default-checkpoint (merge-pathnames "DefaultConversation.json" (minions-data-directory))))
+            (when (probe-file alpha-checkpoint)
+              (delete-file alpha-checkpoint))
+            (when (probe-file beta-checkpoint)
+              (delete-file beta-checkpoint))
+            (when (probe-file default-checkpoint)
+              (delete-file default-checkpoint))
+            (query-all "Kickoff" :personas (list alpha beta))
+            (fiveam:is (string= "Alpha" (chatbot-persona-name (conversation-chatbot (persona-conversation alpha)))))
+            (fiveam:is (string= "Beta" (chatbot-persona-name (conversation-chatbot (persona-conversation beta)))))
+            (fiveam:is (probe-file alpha-checkpoint))
+            (fiveam:is (probe-file beta-checkpoint))
+            (fiveam:is-false (probe-file default-checkpoint))))
+     (clear-personas)
+     (when (probe-file checkpoint-root)
+       (uiop:delete-directory-tree checkpoint-root :validate t)))))
+
 (fiveam:test test-query-all-can_draw_default_personas_from_explicit_registry
   (let ((registry (make-persona-registry))
-       (alpha-payloads nil)
+      (alpha-payloads nil)
        (beta-payloads nil))
     (unwind-protect
         (let* ((alpha-context (make-runtime-context

@@ -161,8 +161,9 @@
                                                                (when directives (cons :directives directives))
                                                                (when constraints (cons :constraints constraints))
                                                                (when context (cons :context context)))))))
-    (when generated-system-instruction
-      (let ((bot (conversation-chatbot conversation)))
+    (let ((bot (conversation-chatbot conversation)))
+      (setf (chatbot-persona-name bot) registry-name)
+      (when generated-system-instruction
         (setf (chatbot-system-instruction bot) generated-system-instruction)
         (setf (chatbot-system-instruction-path bot) nil)
         (setf (chatbot-system-instruction-storage-kind bot) :transient)))

@@ -304,19 +304,43 @@
         (error "Cached-content update responded with HTTP status ~A" status))
       (cl-json:decode-json-from-string response-body))))
 
+(defun google-content-cache-missing-text-p (text)
+  "Returns true when TEXT describes an already-absent cachedContents resource."
+  (let ((message (string-downcase (or text ""))))
+    (or (search "cachedcontent not found" message)
+       (search "cached content not found" message)
+       (search "\"message\": \"cachedcontent not found" message)
+       (and (search "permission_denied" message)
+            (search "not found" message))
+       (and (search "permission denied" message)
+            (search "not found" message)))))
+
+(defun google-content-cache-missing-condition-p (condition)
+  "Returns true when CONDITION represents an already-absent cachedContents resource."
+  (google-content-cache-missing-text-p (princ-to-string condition)))
+
 (defun delete-google-content-cache (cached-content-name &key missing-ok-p)
   "Deletes CACHED-CONTENT-NAME and returns true when the API succeeds.
-When MISSING-OK-P is true, HTTP 404 is treated as an already-absent cache."
+When MISSING-OK-P is true, already-absent cache responses are tolerated,
+including Google cachedContents DELETE replies that surface the miss as 404
+or as 403/PERMISSION_DENIED."
   (let ((api-key (google-content-cache-api-key-or-error)))
-    (multiple-value-bind (response-body status)
-        (delete-web-request (google-content-cache-url cached-content-name)
-                            :headers (google-content-cache-headers api-key))
-      (declare (ignore response-body))
-      (unless (or (member status '(200 204))
-                  (and missing-ok-p
-                       (= status 404)))
-        (error "Cached-content delete responded with HTTP status ~A" status))
-      t)))
+    (handler-case
+       (multiple-value-bind (response-body status)
+           (delete-web-request (google-content-cache-url cached-content-name)
+                               :headers (google-content-cache-headers api-key))
+         (unless (or (member status '(200 204))
+                     (and missing-ok-p
+                          (or (= status 404)
+                              (and (= status 403)
+                                   (google-content-cache-missing-text-p response-body)))))
+           (error "Cached-content delete responded with HTTP status ~A" status))
+         t)
+      (error (condition)
+       (if (and missing-ok-p
+                (google-content-cache-missing-condition-p condition))
+           t
+           (error condition))))))
 
 (defun clear-google-conversation-content-cache-state (conversation)
   "Clears CONVERSATION's remembered explicit cached-content state."

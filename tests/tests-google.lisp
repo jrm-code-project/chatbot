@@ -412,6 +412,49 @@
                           (:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent"))
                         (nreverse cache-events))))))
 
+(fiveam:test test-google-chat-rebuilds-explicit-content-cache-when-delete-signals-missing-403
+  (let ((cache-events nil))
+    (let* ((*gemini-base-url* "https://example.test/gemini")
+           (context
+             (make-runtime-context
+              :gemini-api-key-function (lambda () "mocked-google-api-key")
+              :http-post-function
+              (lambda (url &rest args)
+                (declare (ignore args))
+                (if (search "/cachedContents" url)
+                    (progn
+                      (push (list :create url) cache-events)
+                      (values "{\"name\":\"cachedContents/cache-2\",\"ttl\":\"3600s\",\"expireTime\":\"2030-01-01T00:00:00Z\"}" 200))
+                    (progn
+                      (push (list :chat url) cache-events)
+                      (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}" 200))))
+              :http-delete-function
+              (lambda (url &rest args)
+                (declare (ignore args))
+                (push (list :delete url) cache-events)
+                (error "An HTTP request to \"~A\" returned 403 forbidden.~%~%{\"error\":{\"code\":403,\"message\":\"CachedContent not found (or permission denied)\",\"status\":\"PERMISSION_DENIED\"}}"
+                       url))))
+           (conv (new-chat :backend :google
+                           :system-instruction "Be concise"
+                           :content-cache-policy :auto
+                           :content-cache-min-tokens 1
+                           :runtime-context context)))
+      (setf (conversation-persona-memory conv) "Stored persona memory.")
+      (let ((descriptor (google-cacheable-prefix-descriptor conv)))
+        (setf (conversation-cached-content-name conv) "cachedContents/cache-1")
+        (setf (conversation-cached-content-key conv) (getf descriptor :fingerprint))
+        (setf (conversation-cached-content-metadata conv)
+              '(("name" . "cachedContents/cache-1")
+                ("ttl" . "3600s")
+                ("expireTime" . "2000-01-01T00:00:00Z"))))
+      (fiveam:is (string= "Hello from Google non-streaming"
+                          (chat "First live turn" :conversation conv)))
+      (fiveam:is (string= "cachedContents/cache-2" (conversation-cached-content-name conv)))
+      (fiveam:is (equal `((:delete "https://example.test/gemini/cachedContents/cache-1")
+                          (:create "https://example.test/gemini/cachedContents")
+                          (:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent"))
+                        (nreverse cache-events))))))
+
 (fiveam:test test-google-chat-moves-tools-into-cached-content
   (let* ((tool '((:name . "lookup_time")
                  (:description . "Looks up the current time")
