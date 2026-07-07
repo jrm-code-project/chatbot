@@ -708,22 +708,18 @@ the canonical default runtime context."
        (set-transient-runtime-context-value value context ',accessor ',legacy-symbol))))
 
 (defun current-default-conversation (&optional context)
-  "Returns the ambient default conversation for CONTEXT."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((null resolved-context)
-       *default-conversation*)
-      (t
-       (runtime-context-default-conversation resolved-context)))))
+  "Returns CONTEXT's canonical default conversation."
+  (let ((resolved-context (or (resolve-runtime-context context)
+                              *default-runtime-context*)))
+    (and resolved-context
+         (runtime-context-default-conversation resolved-context))))
 
 (defun (setf current-default-conversation) (value &optional context)
-  "Sets the ambient default conversation for CONTEXT."
+  "Sets CONTEXT's canonical default conversation."
   (let ((resolved-context (or (resolve-runtime-context context)
                               *default-runtime-context*)))
     (when resolved-context
-      (setf (runtime-context-default-conversation resolved-context) value)
-      (when (default-runtime-context-p resolved-context)
-        (setf *default-conversation* value))))
+      (setf (runtime-context-default-conversation resolved-context) value)))
   value)
 
 (define-context-owned-runtime-context-helper current-mcp-config-path

@@ -7,7 +7,7 @@
   "Returns the effective conversation for CONTEXT or signals when none is available."
   (or conversation
       (current-default-conversation context)
-      (error "No conversation provided and the ambient default conversation is NIL. Please specify a conversation or set *default-conversation*.")))
+      (error "No conversation provided and the canonical default conversation is NIL. Please specify a conversation or set CURRENT-DEFAULT-CONVERSATION.")))
 
 (defun route-chat-turn-conversation (conversation input context)
   "Returns CONVERSATION or the active planner conversation for INPUT when planning mode is active."

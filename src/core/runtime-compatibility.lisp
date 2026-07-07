@@ -42,8 +42,9 @@ Runtime contexts own this setting; use MAKE-RUNTIME-CONTEXT with
 :HTTP-READ-TIMEOUT.")
 
 (defvar *default-conversation* nil
-  "Compatibility-only ambient default conversation used by CHAT when none is specified.
-Prefer passing :CONVERSATION explicitly or using a runtime context.")
+  "Deprecated compatibility alias for the old ambient default conversation.
+Runtime code no longer consults or mirrors this special; use
+CURRENT-DEFAULT-CONVERSATION or an explicit runtime context instead.")
 
 (defparameter *agentic-loop-default-backend* nil
   "Deprecated compatibility alias for the agentic-loop default backend.

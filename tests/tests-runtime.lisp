@@ -174,7 +174,7 @@
     (unwind-protect
          (progn
            (setf (current-default-conversation) conversation)
-           (fiveam:is (eq conversation *default-conversation*))
+           (fiveam:is (eq original-legacy-conversation *default-conversation*))
            (fiveam:is (eq conversation
                          (runtime-context-default-conversation default-context))))
       (setf *default-conversation* original-legacy-conversation)
