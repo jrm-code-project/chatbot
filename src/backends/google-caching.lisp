@@ -304,16 +304,26 @@
         (error "Cached-content update responded with HTTP status ~A" status))
       (cl-json:decode-json-from-string response-body))))
 
-(defun delete-google-content-cache (cached-content-name)
-  "Deletes CACHED-CONTENT-NAME and returns true when the API succeeds."
+(defun delete-google-content-cache (cached-content-name &key missing-ok-p)
+  "Deletes CACHED-CONTENT-NAME and returns true when the API succeeds.
+When MISSING-OK-P is true, HTTP 404 is treated as an already-absent cache."
   (let ((api-key (google-content-cache-api-key-or-error)))
     (multiple-value-bind (response-body status)
         (delete-web-request (google-content-cache-url cached-content-name)
                             :headers (google-content-cache-headers api-key))
       (declare (ignore response-body))
-      (unless (member status '(200 204))
+      (unless (or (member status '(200 204))
+                  (and missing-ok-p
+                       (= status 404)))
         (error "Cached-content delete responded with HTTP status ~A" status))
       t)))
+
+(defun clear-google-conversation-content-cache-state (conversation)
+  "Clears CONVERSATION's remembered explicit cached-content state."
+  (setf (conversation-cached-content-name conversation) nil)
+  (setf (conversation-cached-content-key conversation) nil)
+  (setf (conversation-cached-content-metadata conversation) nil)
+  conversation)
 
 (defun ensure-google-conversation-content-cache (conversation &key effective-model)
   "Returns CONVERSATION's explicit cached-content name, creating it when policy requires."
@@ -328,19 +338,21 @@
               (string= existing-key (getf descriptor :fingerprint))
               (not (google-content-cache-somewhat-stale-p conversation existing-metadata)))
          existing-name
-         (let* ((response (create-google-content-cache conversation
-                                                       :effective-model effective-model))
-                (name (cached-content-response-name response)))
-           (setf (conversation-cached-content-name conversation) name)
-           (setf (conversation-cached-content-key conversation)
-                 (getf descriptor :fingerprint))
-           (setf (conversation-cached-content-metadata conversation) response)
-           (log-message :info
-                        (if (and existing-name
-                                 existing-key
-                                 (string= existing-key (getf descriptor :fingerprint)))
-                            "Refreshed explicit Gemini content cache"
-                            "Created explicit Gemini content cache")
-                        :context `(("name" . ,name)
-                                   ("estimated-prefix-tokens" . ,(princ-to-string (getf descriptor :estimated-tokens)))))
-           name)))))
+         (let ((replacement-p (and existing-name t)))
+           (when existing-name
+             (delete-google-content-cache existing-name :missing-ok-p t)
+             (clear-google-conversation-content-cache-state conversation))
+           (let* ((response (create-google-content-cache conversation
+                                                         :effective-model effective-model))
+                  (name (cached-content-response-name response)))
+             (setf (conversation-cached-content-name conversation) name)
+             (setf (conversation-cached-content-key conversation)
+                   (getf descriptor :fingerprint))
+             (setf (conversation-cached-content-metadata conversation) response)
+             (log-message :info
+                          (if replacement-p
+                              "Replaced explicit Gemini content cache"
+                              "Created explicit Gemini content cache")
+                          :context `(("name" . ,name)
+                                     ("estimated-prefix-tokens" . ,(princ-to-string (getf descriptor :estimated-tokens)))))
+             name))))))

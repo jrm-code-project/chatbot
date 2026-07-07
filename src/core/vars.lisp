@@ -328,6 +328,8 @@ Unknown backends fall back to the Gemini default."
                                   (getenv-function nil getenv-function-p)
                                   (http-post-function nil http-post-function-p)
                                   (http-get-function nil http-get-function-p)
+                                  (http-patch-function nil http-patch-function-p)
+                                  (http-delete-function nil http-delete-function-p)
                                   (gemini-api-key-function nil gemini-api-key-function-p)
                                   (filesystem-access-approval-function nil filesystem-access-approval-function-p)
                                   (eval-approval-function nil eval-approval-function-p)
@@ -392,6 +394,14 @@ compatibility-only ambient special variables."
                                                  http-get-function
                                                  #'runtime-context-http-get-function
                                                  *http-get-function*)
+                     :http-patch-function (inherit http-patch-function-p
+                                                   http-patch-function
+                                                   #'runtime-context-http-patch-function
+                                                   *http-patch-function*)
+                     :http-delete-function (inherit http-delete-function-p
+                                                    http-delete-function
+                                                    #'runtime-context-http-delete-function
+                                                    *http-delete-function*)
                      :gemini-api-key-function (inherit gemini-api-key-function-p
                                                        gemini-api-key-function
                                                        #'runtime-context-gemini-api-key-function
