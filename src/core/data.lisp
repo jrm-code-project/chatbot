@@ -143,6 +143,11 @@
     :accessor chatbot-persona-name
     :initform nil
     :documentation "Optional name of the persona associated with this chatbot.")
+   (persona-source-name
+   :initarg :persona-source-name
+   :accessor chatbot-persona-source-name
+   :initform nil
+   :documentation "Optional source persona identity used to construct this chatbot when its runtime worker name differs.")
    (checkpoint-name
    :initarg :checkpoint-name
    :accessor chatbot-checkpoint-name

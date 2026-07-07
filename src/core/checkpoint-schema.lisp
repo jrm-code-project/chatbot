@@ -120,6 +120,8 @@
     (list :name (or name
                     (chatbot-checkpoint-name bot)
                     (chatbot-persona-name bot))
+          :persona-name (or (chatbot-persona-name bot) "")
+          :persona-source-name (or (chatbot-persona-source-name bot) "")
           :backend (string-downcase (symbol-name (chatbot-backend bot)))
           :model (or (chatbot-model bot) "")
           :parent-name (chatbot-parent-name bot)
@@ -145,6 +147,8 @@
 (defun decode-persisted-conversation-state (state &key runtime-context append-recovery-handshake-p)
   "Returns STATE decoded from the shared persisted-state schema."
   (let* ((name (get-string-plist-value state "name"))
+         (persona-name (get-string-plist-value state "personaName"))
+         (persona-source-name (get-string-plist-value state "personaSourceName"))
          (backend-str (get-string-plist-value state "backend"))
          (model (get-string-plist-value state "model"))
          (parent-name (get-string-plist-value state "parentName"))
@@ -154,6 +158,8 @@
                    (get-string-plist-value state "messages"))))
     (list :name (if (empty-string-p name) nil name)
           :checkpoint-name (if (empty-string-p name) nil name)
+          :persona-name (if (empty-string-p persona-name) nil persona-name)
+          :persona-source-name (if (empty-string-p persona-source-name) nil persona-source-name)
           :backend (persisted-backend-keyword backend-str)
           :model (if (empty-string-p model) nil model)
           :parent-name (if (empty-string-p parent-name) nil parent-name)

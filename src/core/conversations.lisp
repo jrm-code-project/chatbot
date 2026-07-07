@@ -97,7 +97,7 @@
         :legacy-function-seam-compatibility-p nil)
        base-context)))
 
-(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p (content-cache-policy +default-content-cache-policy+) (content-cache-ttl-seconds *default-content-cache-ttl-seconds*) (content-cache-min-tokens *default-content-cache-min-tokens*) google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name checkpoint-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p cached-content-name cached-content-key cached-content-metadata)
+(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p (content-cache-policy +default-content-cache-policy+) (content-cache-ttl-seconds *default-content-cache-ttl-seconds*) (content-cache-min-tokens *default-content-cache-min-tokens*) google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name persona-source-name checkpoint-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p cached-content-name cached-content-key cached-content-metadata)
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
@@ -111,6 +111,7 @@ configuration, instructions, or preloaded memory."
                                (backend-default-model backend)))
              (bot (make-instance 'chatbot
                                  :persona-name persona-name
+                                 :persona-source-name persona-source-name
                                  :checkpoint-name (or checkpoint-name persona-name)
                                  :model chosen-model
                                  :backend backend
@@ -155,7 +156,7 @@ configuration, instructions, or preloaded memory."
      :default-conversation-compatibility-p nil
      :legacy-function-seam-compatibility-p nil)))
 
-(defun new-chat-persona (persona-name &key runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory (web-tools-p nil web-tools-supplied-p) (enable-git-tools-p nil enable-git-tools-supplied-p) (filesystem-tools-p nil filesystem-tools-supplied-p) (filesystem-read-only-p nil filesystem-read-only-supplied-p) (planner-p nil planner-supplied-p))
+(defun new-chat-persona (persona-name &key runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory (web-tools-p nil web-tools-supplied-p) (enable-git-tools-p nil enable-git-tools-supplied-p) (filesystem-tools-p nil filesystem-tools-supplied-p) (filesystem-read-only-p nil filesystem-read-only-supplied-p) (planner-p nil planner-supplied-p) (load-configured-subordinates-p t))
   "Creates a new chat session for a given chatbot persona.
 The persona's configuration is read from ~/.Personas/<persona-name>/config.lisp
 and the system instructions are loaded from the persona's system-instruction file set.
@@ -166,6 +167,7 @@ Use NEW-CHAT instead when no persona should be loaded."
          (log-message :warn "Skipping restore for missing persona"
                       :context `(("persona" . ,(princ-to-string persona-name))))
          (new-chat :runtime-context runtime-context
+                   :persona-source-name persona-name
                    :checkpoint-name persona-name
                    :parent-name parent-name
                    :depth depth
@@ -217,9 +219,11 @@ Use NEW-CHAT instead when no persona should be loaded."
                                :filesystem-allowed-directories (persona-filesystem-allowlist-directories persona-dir)
                                :filesystem-allowlist-path (persona-filesystem-allowlist-path persona-dir)
                                :runtime-context persona-runtime-context
-                               :subordinates (loop for sub-persona in (safe-getf config :subordinates)
-                                                   collect (new-chat-persona sub-persona :runtime-context runtime-context))
+                               :subordinates (and load-configured-subordinates-p
+                                                  (loop for sub-persona in (safe-getf config :subordinates)
+                                                        collect (new-chat-persona sub-persona :runtime-context runtime-context)))
                                :persona-name persona-name
+                               :persona-source-name persona-name
                                :parent-name parent-name
                                :depth depth
                                :token-budget token-budget
@@ -322,31 +326,54 @@ Use NEW-CHAT instead when no persona should be loaded."
 
 (defun instantiate-conversation-from-restored-state (restoration)
   "Returns one restored conversation from normalized RESTORATION."
-  (let ((restored-conv
-          (new-chat :backend (getf restoration :backend)
-                   :model (getf restoration :model)
-                   :system-instruction (getf restoration :system-instruction)
-                   :checkpoint-name (getf restoration :checkpoint-name)
-                   :content-cache-policy (or (getf restoration :content-cache-policy)
-                                             +default-content-cache-policy+)
-                   :content-cache-ttl-seconds (or (getf restoration :content-cache-ttl-seconds)
-                                                  *default-content-cache-ttl-seconds*)
-                   :content-cache-min-tokens (or (getf restoration :content-cache-min-tokens)
-                                                 *default-content-cache-min-tokens*)
-                   :parent-name (getf restoration :parent-name)
-                   :depth (getf restoration :depth)
-                   :token-budget (getf restoration :token-budget)
-                   :spent-tokens (getf restoration :spent-tokens)
-                   :planner-p (eq (getf restoration :worker-kind) :planner)
-                   :scoped-directory (getf restoration :scoped-directory)
-                   :runtime-context (getf restoration :runtime-context)
-                   :cached-content-name (getf restoration :cached-content-name)
-                   :cached-content-key (getf restoration :cached-content-key)
-                   :cached-content-metadata (getf restoration :cached-content-metadata))))
+  (let* ((persona-source-name (getf restoration :persona-source-name))
+         (restored-conv
+           (if persona-source-name
+               (new-chat-persona persona-source-name
+                                 :runtime-context (getf restoration :runtime-context)
+                                 :parent-name (getf restoration :parent-name)
+                                 :depth (getf restoration :depth)
+                                 :token-budget (getf restoration :token-budget)
+                                 :spent-tokens (getf restoration :spent-tokens)
+                                 :scoped-directory (getf restoration :scoped-directory)
+                                 :planner-p (eq (getf restoration :worker-kind) :planner)
+                                 :load-configured-subordinates-p nil)
+               (new-chat :backend (getf restoration :backend)
+                         :model (getf restoration :model)
+                         :system-instruction (getf restoration :system-instruction)
+                         :checkpoint-name (getf restoration :checkpoint-name)
+                         :content-cache-policy (or (getf restoration :content-cache-policy)
+                                                   +default-content-cache-policy+)
+                         :content-cache-ttl-seconds (or (getf restoration :content-cache-ttl-seconds)
+                                                        *default-content-cache-ttl-seconds*)
+                         :content-cache-min-tokens (or (getf restoration :content-cache-min-tokens)
+                                                       *default-content-cache-min-tokens*)
+                         :parent-name (getf restoration :parent-name)
+                         :depth (getf restoration :depth)
+                         :token-budget (getf restoration :token-budget)
+                         :spent-tokens (getf restoration :spent-tokens)
+                         :planner-p (eq (getf restoration :worker-kind) :planner)
+                         :scoped-directory (getf restoration :scoped-directory)
+                         :runtime-context (getf restoration :runtime-context)
+                         :cached-content-name (getf restoration :cached-content-name)
+                         :cached-content-key (getf restoration :cached-content-key)
+                         :cached-content-metadata (getf restoration :cached-content-metadata)))))
+    (setf (chatbot-checkpoint-name (conversation-chatbot restored-conv))
+          (getf restoration :checkpoint-name))
+    (setf (chatbot-persona-name (conversation-chatbot restored-conv))
+          (getf restoration :persona-name))
+    (setf (chatbot-persona-source-name (conversation-chatbot restored-conv))
+          persona-source-name)
     (setf (conversation-interaction-id restored-conv)
           (getf restoration :interaction-id))
     (setf (conversation-adaptive-context-pruning-max-tokens restored-conv)
           (getf restoration :adaptive-context-pruning-max-tokens))
+    (setf (conversation-cached-content-name restored-conv)
+          (getf restoration :cached-content-name))
+    (setf (conversation-cached-content-key restored-conv)
+          (getf restoration :cached-content-key))
+    (setf (conversation-cached-content-metadata restored-conv)
+          (getf restoration :cached-content-metadata))
     (setf (conversation-messages restored-conv)
           (getf restoration :history))
     restored-conv))
@@ -359,7 +386,9 @@ Use NEW-CHAT instead when no persona should be loaded."
     (when name
       (terminate-active-threads-by-name name)
       (setf (chatbot-checkpoint-name sub-bot) name)
-      (setf (chatbot-persona-name sub-bot) name))
+      (setf (chatbot-persona-name sub-bot)
+           (or (getf restoration :persona-name)
+               name)))
     sub-conv))
 
 (defun restoration-parent-is-root-p (restoration root-bot)

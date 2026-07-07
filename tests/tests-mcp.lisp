@@ -2328,6 +2328,7 @@
              (fiveam:is (= 321 (chatbot-spent-tokens r-bot)))
              (fiveam:is (string= "TestRestoreConv" (chatbot-checkpoint-name r-bot)))
              (fiveam:is-false (chatbot-persona-name r-bot))
+             (fiveam:is-false (chatbot-persona-source-name r-bot))
              (fiveam:is (equal scoped-directory (chatbot-scoped-directory r-bot)))
              (fiveam:is (= 84 (conversation-adaptive-context-pruning-max-tokens restored)))
              (fiveam:is (string= "interaction-42" (conversation-interaction-id restored)))
@@ -2339,3 +2340,65 @@
                                (conversation-messages restored)))))
       (when (probe-file checkpoint-file)
         (delete-file checkpoint-file)))))
+
+(fiveam:test test-restore-persona-backed-minion-preserves-source-persona-metadata
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-restore-persona-minion/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (worker-persona-dir (merge-pathnames "restore-worker-persona/" personas-dir))
+         (helper-persona-dir (merge-pathnames "restore-helper-persona/" personas-dir))
+         (mock-minions-dir (merge-pathnames "data/minions/" mock-home))
+         (outside-dir (merge-pathnames "restore-allowlisted/" temp-dir))
+         (allowlist-path (merge-pathnames "filesystem-allowlist.lisp" worker-persona-dir))
+         (worker-system-instruction-path (merge-pathnames "system-instruction.md" worker-persona-dir))
+         (*minions-data-directory* mock-minions-dir))
+    (ensure-directories-exist worker-persona-dir)
+    (ensure-directories-exist helper-persona-dir)
+    (ensure-directories-exist outside-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" worker-persona-dir)
+                     :direction :output
+                     :if-exists :supersede)
+      (write-line "(:model \"persona-model\" :enable-filesystem-tools t :subordinates (\"restore-helper-persona\"))" s))
+    (with-open-file (s worker-system-instruction-path
+                     :direction :output
+                     :if-exists :supersede)
+      (write-line "Worker persona instructions." s))
+    (with-open-file (s allowlist-path
+                     :direction :output
+                     :if-exists :supersede)
+      (prin1 (list (namestring outside-dir)) s))
+    (with-open-file (s (merge-pathnames "config.lisp" helper-persona-dir)
+                     :direction :output
+                     :if-exists :supersede)
+      (write-line "(:model \"helper-model\")" s))
+    (ensure-directories-exist mock-minions-dir)
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+           (let* ((parent-conv (new-chat :backend :gemini :persona-name "Top-Boss"))
+                  (bot (conversation-chatbot parent-conv)))
+             (execute-chatbot-tool-by-name bot
+                                           "spawnMinion"
+                                           '(("name" . "Jerry")
+                                             ("personaName" . "restore-worker-persona")))
+             (let* ((fresh-parent-conv (new-chat :backend :gemini :persona-name "Top-Boss"))
+                    (fresh-bot (conversation-chatbot fresh-parent-conv)))
+               (restore-minions fresh-bot)
+               (let* ((restored-jerry (first (chatbot-subordinates fresh-bot)))
+                      (restored-jerry-bot (and restored-jerry
+                                               (conversation-chatbot restored-jerry))))
+                 (fiveam:is (not (null restored-jerry-bot)))
+                 (fiveam:is (string= "Jerry" (chatbot-persona-name restored-jerry-bot)))
+                 (fiveam:is (string= "Jerry" (chatbot-checkpoint-name restored-jerry-bot)))
+                 (fiveam:is (string= "restore-worker-persona"
+                                     (chatbot-persona-source-name restored-jerry-bot)))
+                 (fiveam:is (equal (persona-filesystem-allowlist-path worker-persona-dir)
+                                   (chatbot-filesystem-allowlist-path restored-jerry-bot)))
+                 (fiveam:is (equal (list (uiop:ensure-directory-pathname (truename outside-dir)))
+                                   (chatbot-filesystem-allowed-directories restored-jerry-bot)))
+                 (fiveam:is (equal worker-system-instruction-path
+                                   (chatbot-system-instruction-path restored-jerry-bot)))
+                 (fiveam:is (null (chatbot-subordinates restored-jerry-bot)))))))
+      (when (uiop:directory-exists-p outside-dir)
+        (uiop:delete-directory-tree outside-dir :validate t))
+      (when (uiop:directory-exists-p mock-home)
+        (uiop:delete-directory-tree mock-home :validate t)))))
