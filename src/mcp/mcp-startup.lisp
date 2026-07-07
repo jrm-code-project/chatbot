@@ -310,26 +310,60 @@
   "Returns true when the shared startup chatbot has been created."
   (not (null (current-startup-chatbot context))))
 
+(defun clear-chatbot-mcp-startup-state (bot)
+  "Clears BOT's MCP server and startup-status state."
+  (setf (chatbot-mcp-servers bot) nil
+        (chatbot-mcp-startup-status bot) nil)
+  bot)
+
+(defun cleanup-failed-startup-chatbot-initialization (bot &optional context)
+  "Stops partially started shared-startup servers on BOT and clears shared startup state."
+  (shutdown-chatbot-owned-mcp-servers bot nil)
+  (when (and context
+             (eq (current-startup-chatbot context) bot))
+    (setf (current-startup-chatbot context) nil))
+  (clear-chatbot-mcp-startup-state bot))
+
+(defun initialize-startup-chatbot-bot (bot strict-required-p &optional context)
+  "Initializes shared-startup BOT, cleaning up any partial state if startup fails."
+  (let ((completed-p nil))
+    (unwind-protect
+         (progn
+           (initialize-mcp-servers-for-chatbot bot :strict-required-p strict-required-p)
+           (setf completed-p t)
+           bot)
+      (unless completed-p
+        (cleanup-failed-startup-chatbot-initialization bot context)))))
+
+(defun startup-chatbot-satisfies-strict-required-p (bot strict-required-p)
+  "Returns true when BOT's current startup state is compatible with STRICT-REQUIRED-P."
+  (or (not strict-required-p)
+      (let ((status (and bot
+                         (chatbot-mcp-startup-status bot))))
+        (and status
+             (= 0 (mcp-startup-status-required-failed-count status))))))
+
 (defun make-startup-chatbot (context strict-required-p)
   "Returns a newly initialized shared startup chatbot for CONTEXT."
   (let ((bot (make-instance 'chatbot :runtime-context context)))
-    (initialize-mcp-servers-for-chatbot bot :strict-required-p strict-required-p)
+    (initialize-startup-chatbot-bot bot strict-required-p context)
     bot))
 
-(defun startup-chatbot-ready-p (bot)
+(defun startup-chatbot-ready-p (bot &optional strict-required-p)
   "Returns true when BOT already has initialized shared MCP startup state."
   (and bot
        (or (chatbot-mcp-startup-status bot)
-           (chatbot-mcp-servers bot))))
+           (chatbot-mcp-servers bot))
+       (startup-chatbot-satisfies-strict-required-p bot strict-required-p)))
 
 (defun ensure-startup-chatbot-initialized (context strict-required-p)
   "Returns the existing shared startup chatbot for CONTEXT, or creates it."
   (let ((existing-bot (current-startup-chatbot context)))
     (cond
-      ((startup-chatbot-ready-p existing-bot)
+      ((startup-chatbot-ready-p existing-bot strict-required-p)
        existing-bot)
       (existing-bot
-       (initialize-mcp-servers-for-chatbot existing-bot :strict-required-p strict-required-p)
+       (initialize-startup-chatbot-bot existing-bot strict-required-p context)
        existing-bot)
       (t
        (let ((bot (make-startup-chatbot context strict-required-p)))
@@ -430,8 +464,7 @@ Servers shared from STARTUP-BOT remain owned by the startup chatbot."
 (defun finalize-chatbot-shutdown (bot startup-bot context)
   "Clears startup references and local MCP server state after BOT shutdown."
   (clear-startup-chatbot-reference bot startup-bot context)
-  (setf (chatbot-mcp-servers bot) nil
-        (chatbot-mcp-startup-status bot) nil)
+  (clear-chatbot-mcp-startup-state bot)
   bot)
 
 (defun shutdown-chatbot (bot &optional context)
