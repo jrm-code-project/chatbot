@@ -2439,27 +2439,74 @@ data: [DONE]")
        (fiveam:is-true (startup-chatbot-initialized-p context)))
       (setf (runtime-context-startup-chatbot context) nil))))
 
+(fiveam:test test-startup-chatbot-mcp-servers-hides-incomplete-server-only-shared-bot
+  (let* ((context (make-runtime-context))
+        (server-only-bot (make-instance 'chatbot
+                                        :runtime-context context
+                                        :mcp-servers '(:stale-shared-server)))
+        (ready-bot (make-instance 'chatbot
+                                  :runtime-context context
+                                  :mcp-servers '(:shared-server)
+                                  :mcp-startup-status (make-instance 'mcp-startup-status
+                                                                     :entries nil
+                                                                     :configured-count 1
+                                                                     :successful-count 1
+                                                                     :failed-count 0
+                                                                     :required-failed-count 0))))
+    (setf (runtime-context-startup-chatbot context) server-only-bot)
+    (fiveam:is (null (startup-chatbot-mcp-servers context)))
+    (setf (runtime-context-startup-chatbot context) ready-bot)
+    (fiveam:is (equal '(:shared-server) (startup-chatbot-mcp-servers context)))
+    (setf (runtime-context-startup-chatbot context) nil)))
+
 (fiveam:test test-explicit-runtime-context-isolates-startup-mcp-servers
   (let* ((context-a (make-runtime-context))
-        (context-b (make-runtime-context)))
+        (context-b (make-runtime-context))
+        (original-default-startup-chatbot
+          (runtime-context-startup-chatbot *default-runtime-context*)))
     (let ((*initialize-mcp-servers-for-chatbot-function*
-            (lambda (bot &key strict-required-p)
-              (declare (ignore strict-required-p))
-              (setf (chatbot-mcp-servers bot)
-                    (list (if (eq (chatbot-runtime-context bot) context-a)
-                              :context-a-server
-                              :context-b-server)))
-              bot)))
-      (initialize-startup-chatbot context-a)
-      (initialize-startup-chatbot context-b)
-      (let* ((conv-a (new-chat :runtime-context context-a))
-             (conv-b (new-chat :runtime-context context-b))
-             (conv-default (new-chat)))
-        (fiveam:is (equal '(:context-a-server)
-                          (chatbot-mcp-servers (conversation-chatbot conv-a))))
-        (fiveam:is (equal '(:context-b-server)
-                          (chatbot-mcp-servers (conversation-chatbot conv-b))))
-        (fiveam:is (null (chatbot-mcp-servers (conversation-chatbot conv-default))))))))
+           (lambda (bot &key strict-required-p)
+             (declare (ignore strict-required-p))
+             (setf (chatbot-mcp-servers bot)
+                   (list (if (eq (chatbot-runtime-context bot) context-a)
+                             :context-a-server
+                             :context-b-server)))
+             (setf (chatbot-mcp-startup-status bot)
+                   (make-instance 'mcp-startup-status
+                                  :entries nil
+                                  :configured-count 1
+                                  :successful-count 1
+                                  :failed-count 0
+                                  :required-failed-count 0))
+             bot)))
+      (unwind-protect
+          (progn
+            (setf (runtime-context-startup-chatbot *default-runtime-context*) nil)
+            (initialize-startup-chatbot context-a)
+            (initialize-startup-chatbot context-b)
+            (let* ((conv-a (new-chat :runtime-context context-a))
+                   (conv-b (new-chat :runtime-context context-b))
+                   (conv-default (new-chat)))
+              (fiveam:is (equal '(:context-a-server)
+                                (chatbot-mcp-servers (conversation-chatbot conv-a))))
+              (fiveam:is (equal '(:context-b-server)
+                                (chatbot-mcp-servers (conversation-chatbot conv-b))))
+              (fiveam:is (null (chatbot-mcp-servers (conversation-chatbot conv-default))))))
+        (setf (runtime-context-startup-chatbot *default-runtime-context*)
+             original-default-startup-chatbot)))))
+
+(fiveam:test test-new-chat-does-not-inherit-incomplete-server-only-shared-startup-state
+  (let* ((context (make-runtime-context))
+         (startup-bot (make-instance 'chatbot
+                                     :runtime-context context
+                                     :mcp-servers '(:stale-shared-server))))
+    (setf (runtime-context-startup-chatbot context) startup-bot)
+    (unwind-protect
+         (let* ((conv (new-chat :runtime-context context))
+                (bot (conversation-chatbot conv)))
+           (fiveam:is (null (chatbot-mcp-servers bot)))
+           (fiveam:is-false (chatbot-mcp-startup-status bot)))
+      (setf (runtime-context-startup-chatbot context) nil))))
 
 (fiveam:test test-new-chat-does-not-start-mcp-servers
   (let ((original-startup-chatbot *startup-chatbot*)

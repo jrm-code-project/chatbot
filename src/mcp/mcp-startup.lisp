@@ -396,7 +396,7 @@
 (defun startup-chatbot-mcp-servers (&optional context)
   "Returns the shared MCP server list when startup initialization has occurred."
   (let ((startup-bot (current-startup-chatbot context)))
-    (and startup-bot
+    (and (startup-chatbot-ready-p startup-bot)
          (chatbot-mcp-servers startup-bot))))
 
 (defun ensure-startup-chatbot (&optional context)
