@@ -2569,11 +2569,19 @@ data: [DONE]")
 (fiveam:test test-shutdown-chatbot-preserves-shared-startup-servers
   (let* ((context (make-runtime-context))
          (shared-servers (list :shared-server))
+         (startup-status (make-instance 'mcp-startup-status
+                                       :entries nil
+                                       :configured-count 1
+                                       :successful-count 1
+                                       :failed-count 0
+                                       :required-failed-count 0))
          (startup-bot (make-instance 'chatbot
                                      :mcp-servers shared-servers
+                                     :mcp-startup-status startup-status
                                      :runtime-context context))
          (bot (make-instance 'chatbot
                              :mcp-servers shared-servers
+                             :mcp-startup-status startup-status
                              :runtime-context context))
          (stopped nil))
     (let ((*stop-mcp-server-function*
@@ -2585,9 +2593,47 @@ data: [DONE]")
              (shutdown-chatbot bot context)
              (fiveam:is (null stopped))
              (fiveam:is (eq shared-servers (chatbot-mcp-servers startup-bot)))
+             (fiveam:is (null (chatbot-mcp-servers bot)))
+             (fiveam:is-false (chatbot-mcp-startup-status bot))
              (shutdown-chatbot startup-bot context)
              (fiveam:is (equal shared-servers stopped))
+             (fiveam:is-false (chatbot-mcp-startup-status startup-bot))
              (fiveam:is (null (runtime-context-startup-chatbot context))))
+        (setf (runtime-context-startup-chatbot context) nil)))))
+
+(fiveam:test test-initialize-startup-chatbot-reinitializes-shutdown-shared-bot
+  (let* ((context (make-runtime-context))
+         (init-calls 0)
+         (startup-bot (make-instance 'chatbot :runtime-context context)))
+    (let ((*initialize-mcp-servers-for-chatbot-function*
+            (lambda (bot &key strict-required-p)
+              (declare (ignore strict-required-p))
+              (incf init-calls)
+              (setf (chatbot-mcp-servers bot) '(:shared-server))
+              (setf (chatbot-mcp-startup-status bot)
+                    (make-instance 'mcp-startup-status
+                                   :entries nil
+                                   :configured-count 1
+                                   :successful-count 1
+                                   :failed-count 0
+                                   :required-failed-count 0))
+              bot))
+          (*stop-mcp-server-function* (lambda (server)
+                                        (declare (ignore server))
+                                        nil)))
+      (setf (runtime-context-startup-chatbot context) startup-bot)
+      (unwind-protect
+           (progn
+             (initialize-startup-chatbot context)
+             (fiveam:is (= 1 init-calls))
+             (shutdown-chatbot startup-bot context)
+             (fiveam:is-false (chatbot-mcp-startup-status startup-bot))
+             (fiveam:is (null (runtime-context-startup-chatbot context)))
+             ;; Simulate later reuse of the same chatbot object as the shared startup slot.
+             (setf (runtime-context-startup-chatbot context) startup-bot)
+             (initialize-startup-chatbot context)
+             (fiveam:is (= 2 init-calls))
+             (fiveam:is (eq startup-bot (current-startup-chatbot context))))
         (setf (runtime-context-startup-chatbot context) nil)))))
 
 (fiveam:test test-startup-chatbot-shared-servers-p-detects-shared-and-owned-server-sets

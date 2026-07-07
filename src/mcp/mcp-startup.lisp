@@ -430,7 +430,8 @@ Servers shared from STARTUP-BOT remain owned by the startup chatbot."
 (defun finalize-chatbot-shutdown (bot startup-bot context)
   "Clears startup references and local MCP server state after BOT shutdown."
   (clear-startup-chatbot-reference bot startup-bot context)
-  (setf (chatbot-mcp-servers bot) nil)
+  (setf (chatbot-mcp-servers bot) nil
+        (chatbot-mcp-startup-status bot) nil)
   bot)
 
 (defun shutdown-chatbot (bot &optional context)
