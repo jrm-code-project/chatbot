@@ -2352,10 +2352,27 @@ data: [DONE]")
        (fiveam:is (eq first-bot (current-startup-chatbot context))))
       (setf (runtime-context-startup-chatbot context) nil))))
 
+(fiveam:test test-startup-chatbot-initialized-p-requires-ready-startup-state
+  (let* ((context (make-runtime-context))
+        (statusless-bot (make-instance 'chatbot :runtime-context context))
+        (ready-bot (make-instance 'chatbot
+                                  :runtime-context context
+                                  :mcp-startup-status (make-instance 'mcp-startup-status
+                                                                     :entries nil
+                                                                     :configured-count 0
+                                                                     :successful-count 0
+                                                                     :failed-count 0
+                                                                     :required-failed-count 0))))
+    (setf (runtime-context-startup-chatbot context) statusless-bot)
+    (fiveam:is-false (startup-chatbot-initialized-p context))
+    (setf (runtime-context-startup-chatbot context) ready-bot)
+    (fiveam:is-true (startup-chatbot-initialized-p context))
+    (setf (runtime-context-startup-chatbot context) nil)))
+
 (fiveam:test test-initialize-startup-chatbot-initializes-statusless-shared-bot-once
   (let* ((context (make-runtime-context))
-         (init-calls 0)
-         (existing-bot (make-instance 'chatbot :runtime-context context)))
+        (init-calls 0)
+        (existing-bot (make-instance 'chatbot :runtime-context context)))
     (let ((*initialize-mcp-servers-for-chatbot-function*
            (lambda (bot &key strict-required-p)
              (declare (ignore strict-required-p))
@@ -2370,12 +2387,14 @@ data: [DONE]")
                                   :required-failed-count 0))
              bot)))
       (setf (runtime-context-startup-chatbot context) existing-bot)
+      (fiveam:is-false (startup-chatbot-initialized-p context))
       (let ((first-bot (initialize-startup-chatbot context))
-            (second-bot (initialize-startup-chatbot context)))
+           (second-bot (initialize-startup-chatbot context)))
         (fiveam:is (= 1 init-calls))
         (fiveam:is (eq existing-bot first-bot))
         (fiveam:is (eq first-bot second-bot))
-        (fiveam:is (eq first-bot (current-startup-chatbot context))))
+        (fiveam:is (eq first-bot (current-startup-chatbot context)))
+        (fiveam:is-true (startup-chatbot-initialized-p context)))
       (setf (runtime-context-startup-chatbot context) nil))))
 
 (fiveam:test test-explicit-runtime-context-isolates-startup-mcp-servers

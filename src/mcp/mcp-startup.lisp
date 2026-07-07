@@ -307,8 +307,8 @@
       (default-initialize-mcp-servers-for-chatbot bot :strict-required-p strict-required-p)))
 
 (defun startup-chatbot-initialized-p (&optional context)
-  "Returns true when the shared startup chatbot has been created."
-  (not (null (current-startup-chatbot context))))
+  "Returns true when the shared startup chatbot has completed initialization."
+  (startup-chatbot-ready-p (current-startup-chatbot context)))
 
 (defun clear-chatbot-mcp-startup-state (bot)
   "Clears BOT's MCP server and startup-status state."
