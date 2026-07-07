@@ -804,35 +804,21 @@ longer mirrored."
                                   (default-conversation-compatibility-p t)
                                   (legacy-function-seam-compatibility-p t))
   "Calls THUNK with the resolved runtime context active.
-Function seams now resolve through the active runtime context directly.
-DEFAULT-CONVERSATION-COMPATIBILITY-P is retained for compatibility but no longer
-rebinds or mirrors *DEFAULT-CONVERSATION*. Legacy function-seam synchronization
-only runs when that default-context compatibility flag is enabled; approval
-seams remain owned by the runtime context."
-  (declare (ignore default-conversation-compatibility-p))
-  (let* ((resolved-context (resolve-runtime-context context))
-         (default-context-p (default-runtime-context-p resolved-context))
-         (legacy-function-seam-compatibility-active-p
-          (and default-context-p legacy-function-seam-compatibility-p)))
+Function seams and approval seams now resolve through the active runtime
+context directly. DEFAULT-CONVERSATION-COMPATIBILITY-P and
+LEGACY-FUNCTION-SEAM-COMPATIBILITY-P are retained for API compatibility but no
+longer mirror legacy ambient specials back into the runtime context."
+  (declare (ignore default-conversation-compatibility-p
+                   legacy-function-seam-compatibility-p))
+  (let ((resolved-context (resolve-runtime-context context)))
     (cond
       ((null resolved-context)
        (funcall thunk))
       ((active-runtime-context-p resolved-context)
        (funcall thunk))
       (t
-       (let ((result
-               (let ((*active-runtime-context* resolved-context))
-                 (unwind-protect
-                     (funcall thunk)
-                   (when legacy-function-seam-compatibility-active-p
-                     (setf (runtime-context-getenv-function resolved-context) *getenv-function*)
-                     (setf (runtime-context-http-post-function resolved-context) *http-post-function*)
-                     (setf (runtime-context-http-get-function resolved-context) *http-get-function*)
-                     (setf (runtime-context-http-patch-function resolved-context) *http-patch-function*)
-                     (setf (runtime-context-http-delete-function resolved-context) *http-delete-function*)
-                     (setf (runtime-context-gemini-api-key-function resolved-context)
-                           *gemini-api-key-function*))))))
-         result)))))
+       (let ((*active-runtime-context* resolved-context))
+         (funcall thunk))))))
 
 (setf *default-runtime-context* (make-runtime-context))
 

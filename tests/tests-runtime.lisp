@@ -1085,7 +1085,7 @@
       (setf *getenv-function* original-legacy-getenv)
       (setf *filesystem-access-approval-function* original-legacy-approval))))
 
-(fiveam:test test-call-with-runtime-context-default-compatibility-still-syncs-legacy-function-seams-only
+(fiveam:test test-call-with-runtime-context-default-compatibility-no-longer-syncs-legacy-function-seams
   (let* ((default-context *default-runtime-context*)
          (context-getenv-function (lambda (name)
                                    (declare (ignore name))
@@ -1114,7 +1114,7 @@
             (call-with-runtime-context
              default-context
              (lambda ())))
-           (fiveam:is (eq legacy-getenv-function
+           (fiveam:is (eq context-getenv-function
                         (runtime-context-getenv-function default-context)))
            (fiveam:is (eq context-approval-function
                         (runtime-context-filesystem-access-approval-function
