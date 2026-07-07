@@ -2288,19 +2288,47 @@
          (*minions-data-directory* (merge-pathnames "restore-conversation-checkpoints/"
                                                     (uiop:default-temporary-directory)))
          (checkpoint-file (merge-pathnames filename (minions-data-directory)))
+          (system-instruction-path (merge-pathnames "restore-system-instruction.md"
+                                                  (uiop:temporary-directory)))
          (scoped-directory (uiop:ensure-directory-pathname
                             (merge-pathnames "restore-scope/" (uiop:temporary-directory))))
+          (filesystem-root-directory (uiop:ensure-directory-pathname
+                                    (merge-pathnames "restore-filesystem-root/"
+                                                     (uiop:temporary-directory))))
+          (filesystem-allowed-directory (uiop:ensure-directory-pathname
+                                       (merge-pathnames "restore-allowed/"
+                                                        (uiop:temporary-directory))))
+          (filesystem-allowlist-path (merge-pathnames "restore-filesystem-allowlist.lisp"
+                                                    (uiop:temporary-directory)))
          (bot (conversation-chatbot (new-chat :backend :google
                                               :model "gemini-3.5-flash"
                                               :system-instruction "Sterile context."
+                                              :system-instruction-path system-instruction-path
+                                              :system-instruction-storage-kind :markdown-file
+                                              :temperature 0.75d0
+                                              :top-p 0.9d0
                                               :content-cache-policy :auto
-                                             :content-cache-ttl-seconds 1800
+                                              :content-cache-ttl-seconds 1800
                                               :content-cache-min-tokens 256
+                                              :google-search-p t
+                                              :gemini-fallback-to-google-p t
+                                              :web-tools-p t
+                                              :code-execution-p t
+                                              :include-timestamp-p t
+                                              :include-model-p t
+                                              :enable-eval-p t
+                                              :enable-git-tools-p t
+                                              :filesystem-tools-p t
+                                              :filesystem-root-directory filesystem-root-directory
+                                              :filesystem-allowed-directories
+                                              (list filesystem-allowed-directory)
+                                              :filesystem-allowlist-path filesystem-allowlist-path
                                               :parent-name "Supervisor"
                                               :depth 4
                                               :token-budget 900
                                               :spent-tokens 321
-                                              :scoped-directory scoped-directory)))
+                                              :scoped-directory scoped-directory
+                                              :filesystem-read-only-p t)))
          (conv (make-instance 'conversation :chatbot bot)))
     (setf (chatbot-checkpoint-name bot) "TestRestoreConv")
     (setf (conversation-adaptive-context-pruning-max-tokens conv) 84)
@@ -2319,9 +2347,31 @@
              (fiveam:is (eq :google (chatbot-backend r-bot)))
              (fiveam:is (string= "gemini-3.5-flash" (chatbot-model r-bot)))
              (fiveam:is (string= "Sterile context." (chatbot-system-instruction r-bot)))
+             (fiveam:is (equal system-instruction-path
+                               (chatbot-system-instruction-path r-bot)))
+             (fiveam:is (eq :markdown-file
+                            (chatbot-system-instruction-storage-kind r-bot)))
+             (fiveam:is (= 0.75d0 (chatbot-temperature r-bot)))
+             (fiveam:is (= 0.9d0 (chatbot-top-p r-bot)))
              (fiveam:is (eq :auto (chatbot-content-cache-policy r-bot)))
              (fiveam:is (= 1800 (chatbot-content-cache-ttl-seconds r-bot)))
              (fiveam:is (= 256 (chatbot-content-cache-min-tokens r-bot)))
+             (fiveam:is-true (chatbot-google-search-p r-bot))
+             (fiveam:is-true (chatbot-gemini-fallback-to-google-p r-bot))
+             (fiveam:is-true (chatbot-web-tools-p r-bot))
+             (fiveam:is-true (chatbot-code-execution-p r-bot))
+             (fiveam:is-true (chatbot-include-timestamp-p r-bot))
+             (fiveam:is-true (chatbot-include-model-p r-bot))
+             (fiveam:is-true (chatbot-enable-eval-p r-bot))
+             (fiveam:is-true (chatbot-enable-git-tools-p r-bot))
+             (fiveam:is-true (chatbot-filesystem-tools-p r-bot))
+             (fiveam:is (equal (chatbot-filesystem-root-directory bot)
+                               (chatbot-filesystem-root-directory r-bot)))
+             (fiveam:is (equal (list filesystem-allowed-directory)
+                               (chatbot-filesystem-allowed-directories r-bot)))
+             (fiveam:is (equal filesystem-allowlist-path
+                               (chatbot-filesystem-allowlist-path r-bot)))
+             (fiveam:is-true (chatbot-filesystem-read-only-p r-bot))
              (fiveam:is (string= "Supervisor" (chatbot-parent-name r-bot)))
              (fiveam:is (= 4 (chatbot-depth r-bot)))
              (fiveam:is (= 900 (chatbot-token-budget r-bot)))
