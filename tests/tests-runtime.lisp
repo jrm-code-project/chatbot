@@ -873,7 +873,7 @@
                   (funcall (runtime-context-filesystem-access-approval-function context))))
     (fiveam:is (eq :legacy-approval legacy-result))))
 
-(fiveam:test test-default-runtime-context-filesystem-approval-keeps-active-legacy-override
+(fiveam:test test-default-runtime-context-filesystem-approval-prefers-runtime-context
   (let* ((default-context *default-runtime-context*)
         (original-approval-function *filesystem-access-approval-function*)
         (original-default-approval
@@ -892,12 +892,38 @@
            (call-with-runtime-context
             default-context
             (lambda ()
-              (fiveam:is (eq :legacy-approval
+              (fiveam:is (eq :context-approval
                              (funcall (current-filesystem-access-approval-function
                                        default-context))))))))
       (setf *filesystem-access-approval-function* original-approval-function)
       (setf (runtime-context-filesystem-access-approval-function default-context)
            original-default-approval))))
+
+(fiveam:test test-default-runtime-context-eval-approval-prefers-runtime-context
+  (let* ((default-context *default-runtime-context*)
+       (original-approval-function *eval-approval-function*)
+       (original-default-approval
+         (runtime-context-eval-approval-function default-context)))
+    (unwind-protect
+      (progn
+        (setf (runtime-context-eval-approval-function default-context)
+              (lambda (&rest ignored)
+                (declare (ignore ignored))
+                :context-approval))
+        (fiveam:is (eq :context-approval
+                       (funcall (current-eval-approval-function default-context))))
+        (let ((*eval-approval-function* (lambda (&rest ignored)
+                                          (declare (ignore ignored))
+                                          :legacy-approval)))
+          (call-with-runtime-context
+           default-context
+           (lambda ()
+             (fiveam:is (eq :context-approval
+                            (funcall (current-eval-approval-function
+                                      default-context))))))))
+      (setf *eval-approval-function* original-approval-function)
+      (setf (runtime-context-eval-approval-function default-context)
+          original-default-approval))))
 
 (fiveam:test test-default-runtime-context-no-arg-function-seam-keeps-legacy-override
   (let* ((default-context *default-runtime-context*)
@@ -1043,7 +1069,7 @@
       (setf *getenv-function* original-legacy-getenv)
       (setf *filesystem-access-approval-function* original-legacy-approval))))
 
-(fiveam:test test-call-with-runtime-context-default-compatibility-still-syncs-legacy-function-and-approval-seams
+(fiveam:test test-call-with-runtime-context-default-compatibility-still-syncs-legacy-function-seams-only
   (let* ((default-context *default-runtime-context*)
          (context-getenv-function (lambda (name)
                                    (declare (ignore name))
@@ -1074,7 +1100,7 @@
              (lambda ())))
            (fiveam:is (eq legacy-getenv-function
                         (runtime-context-getenv-function default-context)))
-           (fiveam:is (eq legacy-approval-function
+           (fiveam:is (eq context-approval-function
                         (runtime-context-filesystem-access-approval-function
                          default-context))))
       (setf (runtime-context-getenv-function default-context) original-default-getenv)

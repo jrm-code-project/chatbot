@@ -610,17 +610,12 @@ compatibility-only ambient special variables."
             (not (default-runtime-context-p *active-runtime-context*)))
        (runtime-context-accessor-value *active-runtime-context* accessor))
       (resolved-context
-       (if (and (active-runtime-context-p resolved-context)
-                (default-runtime-context-p resolved-context))
-           (legacy-global-value legacy-symbol)
-           (runtime-context-accessor-value resolved-context accessor)))
+       (runtime-context-accessor-value resolved-context accessor))
       (t
        (legacy-global-value legacy-symbol)))))
 
 (defun set-runtime-context-approval-function-value (value context accessor legacy-symbol)
-  "Stores approval VALUE through the runtime-context bridge.
-Default-context active execution still mirrors the legacy special binding for
-compatibility with approval overrides."
+  "Stores approval VALUE through the runtime-context bridge."
   (let ((resolved-context (and context
                               (resolve-runtime-context context))))
     (cond
@@ -629,11 +624,7 @@ compatibility with approval overrides."
             (not (default-runtime-context-p *active-runtime-context*)))
        (set-runtime-context-accessor-value *active-runtime-context* accessor value))
       (resolved-context
-       (progn
-         (set-runtime-context-accessor-value resolved-context accessor value)
-         (when (and (active-runtime-context-p resolved-context)
-                    (default-runtime-context-p resolved-context))
-           (setf (symbol-value legacy-symbol) value))))
+       (set-runtime-context-accessor-value resolved-context accessor value))
       (t
        (setf (symbol-value legacy-symbol) value)
        (when (default-runtime-context-p *default-runtime-context*)
@@ -888,8 +879,9 @@ Only the canonical default runtime context still requires this compatibility she
   "Calls THUNK with the resolved runtime context active.
 Only the canonical default runtime context still requires *DEFAULT-CONVERSATION*
 legacy rebinding. Function seams now resolve through the active runtime context
-directly, and legacy function/approval seam synchronization only runs when that
-default-context compatibility is still desired."
+directly. Legacy function-seam synchronization only runs when that
+default-context compatibility is still desired; approval seams now remain
+owned by the runtime context even under the default-context shell."
   (let* ((resolved-context (resolve-runtime-context
                            context
                            :sync-from-globals-p default-conversation-compatibility-p))
@@ -916,11 +908,8 @@ default-context compatibility is still desired."
                      (setf (runtime-context-http-get-function resolved-context) *http-get-function*)
                      (setf (runtime-context-http-patch-function resolved-context) *http-patch-function*)
                      (setf (runtime-context-http-delete-function resolved-context) *http-delete-function*)
-                     (setf (runtime-context-gemini-api-key-function resolved-context) *gemini-api-key-function*)
-                     (setf (runtime-context-filesystem-access-approval-function resolved-context)
-                           *filesystem-access-approval-function*)
-                     (setf (runtime-context-eval-approval-function resolved-context)
-                           *eval-approval-function*))))))
+                     (setf (runtime-context-gemini-api-key-function resolved-context)
+                           *gemini-api-key-function*))))))
          (when default-conversation-compatibility-active-p
            (maybe-sync-legacy-globals-from-default-runtime-context resolved-context))
          result)))))
