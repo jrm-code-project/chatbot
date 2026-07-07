@@ -143,11 +143,12 @@ configuration, instructions, or preloaded memory."
                                  :scoped-directory (or scoped-directory filesystem-root-directory)
                                  :filesystem-read-only-p filesystem-read-only-p
                                  :planner-p planner-p)))
-        (when (startup-chatbot-mcp-servers resolved-context)
-          (setf (chatbot-mcp-servers bot)
-                (startup-chatbot-mcp-servers resolved-context))
-          (setf (chatbot-mcp-startup-status bot)
-                (startup-chatbot-mcp-status resolved-context)))
+        (let ((startup-servers (startup-chatbot-mcp-servers resolved-context))
+              (startup-status (startup-chatbot-mcp-status resolved-context)))
+          (when startup-servers
+            (setf (chatbot-mcp-servers bot) startup-servers))
+          (when startup-status
+            (setf (chatbot-mcp-startup-status bot) startup-status)))
         (make-instance 'conversation
                        :chatbot bot
                        :cached-content-name cached-content-name

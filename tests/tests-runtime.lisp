@@ -2454,10 +2454,58 @@ data: [DONE]")
        (fiveam:is (eq (chatbot-mcp-servers bot)
                       (chatbot-mcp-servers (current-startup-chatbot context))))))))
 
+(fiveam:test test-new-chat-inherits-shared-startup-status-with-zero-servers
+  (let* ((context (make-runtime-context :auto-initialize-startup-mcp-servers-p t))
+        (startup-status (make-instance 'mcp-startup-status
+                                       :entries nil
+                                       :configured-count 0
+                                       :successful-count 0
+                                       :failed-count 0
+                                       :required-failed-count 0))
+        (init-calls 0))
+    (let ((*initialize-mcp-servers-for-chatbot-function*
+          (lambda (bot &key strict-required-p)
+            (declare (ignore strict-required-p))
+            (incf init-calls)
+            (setf (chatbot-mcp-servers bot) nil)
+            (setf (chatbot-mcp-startup-status bot) startup-status)
+            bot)))
+      (let* ((conv (new-chat :runtime-context context))
+            (bot (conversation-chatbot conv)))
+       (fiveam:is (= 1 init-calls))
+       (fiveam:is-true (startup-chatbot-initialized-p context))
+       (fiveam:is (null (chatbot-mcp-servers bot)))
+       (fiveam:is (eq startup-status (chatbot-mcp-startup-status bot)))))))
+
+(fiveam:test test-new-chat-inherits-shared-startup-status-without-successful-servers
+  (let* ((context (make-runtime-context :auto-initialize-startup-mcp-servers-p t))
+        (startup-status (make-instance 'mcp-startup-status
+                                       :entries nil
+                                       :configured-count 1
+                                       :successful-count 0
+                                       :failed-count 1
+                                       :required-failed-count 0))
+        (init-calls 0))
+    (let ((*initialize-mcp-servers-for-chatbot-function*
+           (lambda (bot &key strict-required-p)
+             (declare (ignore strict-required-p))
+             (incf init-calls)
+             (setf (chatbot-mcp-servers bot) nil)
+             (setf (chatbot-mcp-startup-status bot) startup-status)
+             bot)))
+      (let* ((conv (new-chat :runtime-context context))
+            (bot (conversation-chatbot conv))
+            (status (chatbot-mcp-startup-status bot)))
+       (fiveam:is (= 1 init-calls))
+       (fiveam:is-true (startup-chatbot-initialized-p context))
+       (fiveam:is (null (chatbot-mcp-servers bot)))
+       (fiveam:is (eq startup-status status))
+       (fiveam:is (= 1 (mcp-startup-status-failed-count status)))))))
+
 (fiveam:test test-auto-startup-chatbot-defaults-to-noop
   (let ((original-startup-chatbot *startup-chatbot*)
-        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
-        (original-auto-init *auto-initialize-startup-mcp-servers-p*)
+       (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
+       (original-auto-init *auto-initialize-startup-mcp-servers-p*)
         (original-context-auto-init
          (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*))
         (init-calls 0))
