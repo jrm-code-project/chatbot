@@ -147,6 +147,7 @@
                (new-chat-persona persona-name :runtime-context runtime-context)
                (new-chat :backend backend
                          :model model
+                         :checkpoint-name registry-name
                          :system-instruction generated-system-instruction
                          :temperature temperature
                          :top-p top-p
@@ -162,6 +163,7 @@
                                                                (when constraints (cons :constraints constraints))
                                                                (when context (cons :context context)))))))
     (let ((bot (conversation-chatbot conversation)))
+      (setf (chatbot-checkpoint-name bot) registry-name)
       (setf (chatbot-persona-name bot) registry-name)
       (when generated-system-instruction
         (setf (chatbot-system-instruction bot) generated-system-instruction)

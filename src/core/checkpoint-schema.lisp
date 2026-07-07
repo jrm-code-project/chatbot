@@ -117,7 +117,9 @@
 (defun conversation-persistence-state (conversation &key name)
   "Returns CONVERSATION serialized to the shared persisted-state schema."
   (let ((bot (conversation-chatbot conversation)))
-    (list :name name
+    (list :name (or name
+                    (chatbot-checkpoint-name bot)
+                    (chatbot-persona-name bot))
           :backend (string-downcase (symbol-name (chatbot-backend bot)))
           :model (or (chatbot-model bot) "")
           :parent-name (chatbot-parent-name bot)
@@ -151,6 +153,7 @@
          (history (normalize-persisted-history
                    (get-string-plist-value state "messages"))))
     (list :name (if (empty-string-p name) nil name)
+          :checkpoint-name (if (empty-string-p name) nil name)
           :backend (persisted-backend-keyword backend-str)
           :model (if (empty-string-p model) nil model)
           :parent-name (if (empty-string-p parent-name) nil parent-name)

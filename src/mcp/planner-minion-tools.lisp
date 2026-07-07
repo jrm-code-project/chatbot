@@ -250,11 +250,13 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
                           (make-instance 'conversation :chatbot bot)))
          (planner-conv (new-chat :backend (chatbot-backend bot)
                                  :model (chatbot-model bot)
+                                 :checkpoint-name "Planner"
                                  :system-instruction +planner-system-instruction+
                                  :parent-name (chatbot-persona-name bot)
                                  :depth (1+ (chatbot-depth bot))
                                  :planner-p t
                                  :runtime-context context)))
+    (setf (chatbot-checkpoint-name (conversation-chatbot planner-conv)) "Planner")
     (setf (chatbot-persona-name (conversation-chatbot planner-conv)) "Planner")
     (attach-subordinate-conversation bot planner-conv)
     (setf (current-active-planner context) planner-conv)
@@ -283,6 +285,7 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
                                  :filesystem-read-only-p t)
                (new-chat :backend backend-kw
                          :model model
+                         :checkpoint-name name
                          :system-instruction system-instruction
                          :runtime-context (chatbot-runtime-context bot)
                          :parent-name (chatbot-persona-name bot)
@@ -293,6 +296,7 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
                          :filesystem-tools-p t
                          :filesystem-read-only-p t)))
          (child-bot (conversation-chatbot sub-conv)))
+    (setf (chatbot-checkpoint-name child-bot) name)
     (setf (chatbot-persona-name child-bot) name)
     (append-delegation-instructions child-bot name child-depth requested-budget)
     (save-minion-state sub-conv)

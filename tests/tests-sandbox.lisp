@@ -66,6 +66,9 @@
                     (conversation-chatbot (persona-conversation persona)))))
              (fiveam:is (search "You are reviewer." instruction))
              (fiveam:is (search "Adopt this tone: calm." instruction)))
+           (fiveam:is (string= "Alpha"
+                               (chatbot-checkpoint-name
+                                (conversation-chatbot (persona-conversation persona)))))
            (fiveam:is (= 0.4d0 (getf (sampling-parameters persona) :temperature)))
            (fiveam:is (= 0.7d0 (getf (sampling-parameters persona) :top-p)))
            (fiveam:signals error
@@ -106,6 +109,8 @@
             (query-all "Kickoff" :personas (list alpha beta))
             (fiveam:is (string= "Alpha" (chatbot-persona-name (conversation-chatbot (persona-conversation alpha)))))
             (fiveam:is (string= "Beta" (chatbot-persona-name (conversation-chatbot (persona-conversation beta)))))
+            (fiveam:is (string= "Alpha" (chatbot-checkpoint-name (conversation-chatbot (persona-conversation alpha)))))
+            (fiveam:is (string= "Beta" (chatbot-checkpoint-name (conversation-chatbot (persona-conversation beta)))))
             (fiveam:is (probe-file alpha-checkpoint))
             (fiveam:is (probe-file beta-checkpoint))
             (fiveam:is-false (probe-file default-checkpoint))))

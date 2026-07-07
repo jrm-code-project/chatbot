@@ -143,6 +143,11 @@
     :accessor chatbot-persona-name
     :initform nil
     :documentation "Optional name of the persona associated with this chatbot.")
+   (checkpoint-name
+   :initarg :checkpoint-name
+   :accessor chatbot-checkpoint-name
+   :initform nil
+   :documentation "Optional explicit persistence identifier used for checkpoint filenames and restore identity.")
    (model
     :initarg :model
     :accessor chatbot-model

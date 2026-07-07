@@ -2294,7 +2294,7 @@
                                               :model "gemini-3.5-flash"
                                               :system-instruction "Sterile context."
                                               :content-cache-policy :auto
-                                              :content-cache-ttl "1800s"
+                                             :content-cache-ttl-seconds 1800
                                               :content-cache-min-tokens 256
                                               :parent-name "Supervisor"
                                               :depth 4
@@ -2302,7 +2302,7 @@
                                               :spent-tokens 321
                                               :scoped-directory scoped-directory)))
          (conv (make-instance 'conversation :chatbot bot)))
-    (setf (chatbot-persona-name bot) "TestRestoreConv")
+    (setf (chatbot-checkpoint-name bot) "TestRestoreConv")
     (setf (conversation-adaptive-context-pruning-max-tokens conv) 84)
     (setf (conversation-interaction-id conv) "interaction-42")
     (setf (conversation-cached-content-name conv) "cachedContents/abc123")
@@ -2320,12 +2320,14 @@
              (fiveam:is (string= "gemini-3.5-flash" (chatbot-model r-bot)))
              (fiveam:is (string= "Sterile context." (chatbot-system-instruction r-bot)))
              (fiveam:is (eq :auto (chatbot-content-cache-policy r-bot)))
-             (fiveam:is (string= "1800s" (chatbot-content-cache-ttl r-bot)))
+             (fiveam:is (= 1800 (chatbot-content-cache-ttl-seconds r-bot)))
              (fiveam:is (= 256 (chatbot-content-cache-min-tokens r-bot)))
              (fiveam:is (string= "Supervisor" (chatbot-parent-name r-bot)))
              (fiveam:is (= 4 (chatbot-depth r-bot)))
              (fiveam:is (= 900 (chatbot-token-budget r-bot)))
              (fiveam:is (= 321 (chatbot-spent-tokens r-bot)))
+             (fiveam:is (string= "TestRestoreConv" (chatbot-checkpoint-name r-bot)))
+             (fiveam:is-false (chatbot-persona-name r-bot))
              (fiveam:is (equal scoped-directory (chatbot-scoped-directory r-bot)))
              (fiveam:is (= 84 (conversation-adaptive-context-pruning-max-tokens restored)))
              (fiveam:is (string= "interaction-42" (conversation-interaction-id restored)))
