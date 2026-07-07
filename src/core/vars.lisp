@@ -298,7 +298,9 @@ Unknown backends fall back to the Gemini default."
   "Canonical runtime context used for legacy no-context entry points.")
 
 (defvar *active-conversation* nil
-  "Conversation currently being processed by CHAT, when any.")
+  "Deprecated compatibility alias for the active conversation.
+Runtime code no longer consults or mirrors this special; use
+CURRENT-ACTIVE-CONVERSATION with an explicit runtime context instead.")
 
 (defun runtime-context-accessor-value (context accessor)
   "Reads ACCESSOR from CONTEXT."
@@ -665,36 +667,18 @@ longer mirrored."
        (set-runtime-context-owned-value value context ',accessor ',legacy-symbol))))
 
 (defun transient-runtime-context-value (context accessor legacy-symbol)
-  "Returns transient runtime state from CONTEXT, falling back to legacy globals only
-for default-context compatibility."
+  "Returns transient runtime state from CONTEXT's canonical runtime context."
+  (declare (ignore legacy-symbol))
   (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and resolved-context
-            (not (default-runtime-context-p resolved-context)))
-       (runtime-context-accessor-value resolved-context accessor))
-      (resolved-context
-       (or (runtime-context-accessor-value resolved-context accessor)
-           (legacy-global-value legacy-symbol)))
-      (t
-       (legacy-global-value legacy-symbol)))))
+    (and resolved-context
+         (runtime-context-accessor-value resolved-context accessor))))
 
 (defun set-transient-runtime-context-value (value context accessor legacy-symbol)
-  "Stores transient runtime state in CONTEXT, mirroring to legacy globals only for
-the canonical default runtime context."
+  "Stores transient runtime state in CONTEXT's canonical runtime context."
+  (declare (ignore legacy-symbol))
   (let ((resolved-context (resolve-runtime-context context)))
-    (cond
-      ((and (null context)
-            *active-runtime-context*
-            (not (default-runtime-context-p *active-runtime-context*)))
-       (set-runtime-context-accessor-value *active-runtime-context* accessor value))
-      (resolved-context
-       (set-runtime-context-accessor-value resolved-context accessor value)
-       (when (default-runtime-context-p resolved-context)
-         (setf (symbol-value legacy-symbol) value)))
-      (t
-       (setf (symbol-value legacy-symbol) value)
-       (when (default-runtime-context-p *default-runtime-context*)
-         (set-runtime-context-accessor-value *default-runtime-context* accessor value)))))
+    (when resolved-context
+      (set-runtime-context-accessor-value resolved-context accessor value)))
   value)
 
 (defmacro define-transient-runtime-context-helper (name accessor legacy-symbol getter-doc setter-doc)
@@ -897,7 +881,11 @@ seams remain owned by the runtime context."
   "Compatibility character ceiling for auto-pruning, aligned with the default estimated token window.")
 
 (defvar *active-planner* nil
-  "Tracks the active planner minion conversation, or NIL if not in Planner Mode.")
+  "Deprecated compatibility alias for the active planner minion conversation.
+Runtime code no longer consults or mirrors this special; use
+CURRENT-ACTIVE-PLANNER with an explicit runtime context instead.")
 
 (defvar *active-planner-parent-conversation* nil
-  "Tracks the parent conversation that spawned the active planner minion.")
+  "Deprecated compatibility alias for the active planner parent conversation.
+Runtime code no longer consults or mirrors this special; use
+CURRENT-ACTIVE-PLANNER-PARENT-CONVERSATION with an explicit runtime context instead.")

@@ -667,7 +667,7 @@
       (setf *active-planner* original-legacy-active-planner)
       (setf *active-planner-parent-conversation* original-legacy-active-planner-parent))))
 
-(fiveam:test test-default-runtime-context-transient-helpers-still-mirror-legacy-globals
+(fiveam:test test-default-runtime-context-transient-helpers-no-longer-mirror-legacy-globals
   (let* ((default-context *default-runtime-context*)
         (conversation (new-chat))
         (planner (new-chat))
@@ -686,9 +686,17 @@
            (setf (current-active-conversation) conversation)
            (setf (current-active-planner) planner)
            (setf (current-active-planner-parent-conversation) parent)
-           (fiveam:is (eq conversation *active-conversation*))
-           (fiveam:is (eq planner *active-planner*))
-           (fiveam:is (eq parent *active-planner-parent-conversation*))))
+           (fiveam:is (eq original-legacy-active-conversation *active-conversation*))
+           (fiveam:is (eq original-legacy-active-planner *active-planner*))
+           (fiveam:is (eq original-legacy-active-planner-parent
+                         *active-planner-parent-conversation*))
+           (fiveam:is (eq conversation
+                          (runtime-context-active-conversation default-context)))
+           (fiveam:is (eq planner
+                          (runtime-context-active-planner default-context)))
+           (fiveam:is (eq parent
+                          (runtime-context-active-planner-parent-conversation
+                           default-context)))))
       (setf (runtime-context-active-conversation default-context) original-default-active-conversation)
       (setf (runtime-context-active-planner default-context) original-default-active-planner)
       (setf (runtime-context-active-planner-parent-conversation default-context)
@@ -720,7 +728,7 @@
       (setf *active-planner* original-legacy-active-planner)
       (setf *active-planner-parent-conversation* original-legacy-active-planner-parent))))
 
-(fiveam:test test-default-runtime-context-transient-getters-still-fall-back-to-legacy-globals
+(fiveam:test test-default-runtime-context-transient-getters-no-longer-fall-back-to-legacy-globals
   (let* ((default-context *default-runtime-context*)
         (legacy-conversation (new-chat))
         (legacy-planner (new-chat))
@@ -743,10 +751,12 @@
           (call-with-runtime-context
            default-context
            (lambda ()
-             (fiveam:is (eq legacy-conversation (current-active-conversation)))
-             (fiveam:is (eq legacy-planner (current-active-planner)))
-             (fiveam:is (eq legacy-parent
-                           (current-active-planner-parent-conversation))))))
+             (fiveam:is-false (current-active-conversation))
+             (fiveam:is-false (current-active-planner))
+             (fiveam:is-false (current-active-planner-parent-conversation))
+             (fiveam:is (eq legacy-conversation *active-conversation*))
+             (fiveam:is (eq legacy-planner *active-planner*))
+             (fiveam:is (eq legacy-parent *active-planner-parent-conversation*)))))
       (setf (runtime-context-active-conversation default-context) original-default-active-conversation)
       (setf (runtime-context-active-planner default-context) original-default-active-planner)
       (setf (runtime-context-active-planner-parent-conversation default-context)
