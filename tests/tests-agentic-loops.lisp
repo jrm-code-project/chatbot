@@ -315,7 +315,7 @@ blind polling alone under heavier full-suite load."
         (observed-loop-log-level nil)
         (*agentic-loop-chat-function*
          (lambda (prompt &key conversation callback file files temperature top-p)
-           (declare (ignore prompt callback file files temperature top-p))
+           (declare (ignore prompt conversation callback file files temperature top-p))
            (setf observed-loop-log-level (current-log-level))
            (log-message :info "loop info suppressed")
            (log-message :warn "loop warn visible")

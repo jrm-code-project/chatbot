@@ -585,9 +585,7 @@
       (setf (runtime-context-http-read-timeout *default-runtime-context*) original-context-read))))
 
 (fiveam:test test-explicit-runtime-context-does-not-warn-about-legacy-globals
-  (let* ((context (make-runtime-context :http-connect-timeout 7))
-         (*warn-on-legacy-runtime-globals-p* t)
-         (*legacy-runtime-global-warnings-issued* nil))
+  (let* ((context (make-runtime-context :http-connect-timeout 7)))
     (let ((*error-output* (make-string-output-stream)))
       (call-with-runtime-context
        context

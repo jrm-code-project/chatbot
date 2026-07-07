@@ -209,7 +209,7 @@
                     (let* ((sign (char timezone-fragment 0))
                            (offset-hours (parse-integer timezone-fragment :start 1 :end 3))
                            (offset-minutes (parse-integer timezone-fragment :start 4 :end 6))
-                           (offset (+ offset-hours (/ offset-minutes 60.0d0))))
+                           (offset (+ offset-hours (/ offset-minutes 60))))
                       (case sign
                         (#\+ (- offset))
                         (#\- offset)

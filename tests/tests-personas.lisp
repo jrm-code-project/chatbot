@@ -620,18 +620,17 @@ Paragraph two." s))
 data: {\"event_type\":\"step.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Compressed mock response content.\"}}
 data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"session-1\",\"model\":\"models/gemini-mock-model\",\"usage\":{\"total_input_tokens\":1,\"total_output_tokens\":1,\"total_tokens\":2}}}")
                     200))))
-           (let* ((conv (new-chat-persona "persona-auto-compress-diary"))
-                  (entries (conversation-persona-diary-entries conv)))
-             ;; Because we ran compression inline, Gopher should have automatically compressed 1.txt to CompressedDiary/1.txt
-             ;; Verify file exists in CompressedDiary/ with the mocked content
-             (let ((compressed-1-path (merge-pathnames "1.txt" compressed-diary-dir))
-                   (compressed-2-path (merge-pathnames "2.txt" compressed-diary-dir)))
-               (fiveam:is (not (null (probe-file compressed-1-path))))
-               (fiveam:is (string= "Compressed mock response content." (uiop:read-file-string compressed-1-path)))
-               ;; Verify 2.txt was NOT overwritten
-               (fiveam:is (string= "Compressed already-existing content."
-                                   (string-right-trim '(#\Space #\Tab #\Return #\Linefeed)
-                                                       (uiop:read-file-string compressed-2-path)))))))
+           (new-chat-persona "persona-auto-compress-diary")
+           ;; Because we ran compression inline, Gopher should have automatically compressed 1.txt to CompressedDiary/1.txt
+           ;; Verify file exists in CompressedDiary/ with the mocked content
+           (let ((compressed-1-path (merge-pathnames "1.txt" compressed-diary-dir))
+                (compressed-2-path (merge-pathnames "2.txt" compressed-diary-dir)))
+             (fiveam:is (not (null (probe-file compressed-1-path))))
+             (fiveam:is (string= "Compressed mock response content." (uiop:read-file-string compressed-1-path)))
+             ;; Verify 2.txt was NOT overwritten
+             (fiveam:is (string= "Compressed already-existing content."
+                                (string-right-trim '(#\Space #\Tab #\Return #\Linefeed)
+                                                    (uiop:read-file-string compressed-2-path))))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
 (fiveam:test test-persona-config-enables-filesystem-tools
@@ -1247,7 +1246,6 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
 (fiveam:test test-context-pruning
   (let* ((*context-pruning-threshold-characters* 8000)
          (conv (new-chat :backend :google))
-         (bot (conversation-chatbot conv))
          (long-text (make-string 3000 :initial-element #\A))
          (calls '()))
     (setf (conversation-messages conv)
