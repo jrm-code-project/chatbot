@@ -30,6 +30,10 @@ Creates a fresh conversation state. Useful when you want to clear the history wi
 (new-chat :backend :gemini :model "gemini-1.5-pro")
 ```
 
+```commonlisp
+(setf (current-default-conversation) (new-chat :backend :gemini :model "gemini-1.5-pro"))
+```
+
 ## Persona Configuration
 
 A "persona" is a persistent configuration that defines a chatbot's backend, model, system instructions, and optional tools. Personas are stored in your home directory under `~/.Personas/`.
@@ -70,7 +74,7 @@ Loads a persona from the `~/.Personas/` directory and creates a new conversation
 
 **Basic Usage:**
 ```commonlisp
-(new-chat-persona "MyPersona")
+(setf (current-default-conversation) (new-chat-persona "MyPersona"))
 ```
 
 Once loaded, subsequent calls to `chat` will automatically route to this newly instantiated persona conversation unless overridden.
