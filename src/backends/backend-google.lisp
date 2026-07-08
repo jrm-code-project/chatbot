@@ -84,21 +84,23 @@
                :recursion-depth recursion-depth))
 
 (defun google-request-state (bot input conversation file-attachments effective-model effective-generation-config
-                              &key request-contents history-messages malformed-response-fallback-attempted-p cached-content-name)
+                              &key request-contents history-messages malformed-response-fallback-attempted-p cached-content-name bypass-cache-p)
   "Builds the provider-runner state for a Google generateContent turn."
   (let* ((current-messages (conversation-messages conversation))
          (persona-memory (conversation-persona-memory conversation))
          (persona-diary-entries (conversation-persona-diary-entries conversation))
          (resolved-cached-content-name
-           (or cached-content-name
-               (ensure-google-conversation-content-cache conversation
-                                                        :effective-model effective-model))))
+           (and (not bypass-cache-p)
+                (or cached-content-name
+                    (ensure-google-conversation-content-cache conversation
+                                                             :effective-model effective-model)))))
     (list :input input
           :file-attachments file-attachments
           :effective-model effective-model
           :effective-generation-config effective-generation-config
           :malformed-response-fallback-attempted-p malformed-response-fallback-attempted-p
           :cached-content-name resolved-cached-content-name
+          :bypass-cache-p bypass-cache-p
           :history-messages (or history-messages
                               (stateless-history-messages current-messages input))
           :request-contents (or request-contents
@@ -207,6 +209,7 @@
      :effective-model (getf state :effective-model)
      :effective-generation-config (getf state :effective-generation-config)
      :cached-content-name (getf state :cached-content-name)
+     :bypass-cache-p (getf state :bypass-cache-p)
      :malformed-response-fallback-attempted-p
      (getf state :malformed-response-fallback-attempted-p))))
 
@@ -268,6 +271,7 @@
                             recursion-messages)
    :history-messages recursive-history
    :cached-content-name (getf outcome :cached-content-name)
+   :bypass-cache-p (getf outcome :bypass-cache-p)
    :malformed-response-fallback-attempted-p
    (getf outcome :malformed-response-fallback-attempted-p)))
 
@@ -389,7 +393,8 @@
 (defun chat-google (bot input conversation callback
                    &key file-attachments request-contents history-messages effective-model effective-generation-config
                      malformed-response-fallback-attempted-p return-turn-result-p
-                     (recursion-depth 0))
+                     (recursion-depth 0)
+                     bypass-cache-p)
   "Sends user input to the active conversation using Google's non-streaming generateContent API."
   (let ((result
           (run-provider-turn-loop
@@ -397,7 +402,8 @@
            (google-request-state bot input conversation file-attachments effective-model effective-generation-config
                                 :request-contents request-contents
                                 :history-messages history-messages
-                                :malformed-response-fallback-attempted-p malformed-response-fallback-attempted-p)
+                                :malformed-response-fallback-attempted-p malformed-response-fallback-attempted-p
+                                :bypass-cache-p bypass-cache-p)
            (lambda (state current-depth)
              (declare (ignore current-depth))
              (submit-google-turn bot nil state))
@@ -431,8 +437,25 @@
                                         :interaction-id (conversation-interaction-id conversation)))
            :error-handler
            (lambda (state condition current-depth)
-             (declare (ignore state current-depth))
-             (error "Google Chat Error: ~A" condition))
+             (if (and (getf state :cached-content-name)
+                      (google-caching-error-p condition))
+                 (progn
+                   (log-message :warn "Google content cache not found or permission denied; retrying turn without explicit cache."
+                                :context `(("name" . ,(getf state :cached-content-name))
+                                           ("error" . ,(princ-to-string condition))))
+                   (clear-google-conversation-content-cache-state conversation)
+                   (chat-google bot
+                                input
+                                conversation
+                                callback
+                                :file-attachments file-attachments
+                                :effective-model effective-model
+                                :effective-generation-config effective-generation-config
+                                :malformed-response-fallback-attempted-p malformed-response-fallback-attempted-p
+                                :return-turn-result-p return-turn-result-p
+                                :recursion-depth current-depth
+                                :bypass-cache-p t))
+                 (error "Google Chat Error: ~A" condition)))
            :initial-recursion-depth recursion-depth)))
     (if return-turn-result-p
         result

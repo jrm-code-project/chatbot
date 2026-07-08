@@ -319,6 +319,15 @@
   "Returns true when CONDITION represents an already-absent cachedContents resource."
   (google-content-cache-missing-text-p (princ-to-string condition)))
 
+(defun google-caching-error-p (condition)
+  "Returns true when CONDITION describes a missing Google cache or permission-denied error."
+  (let ((msg (string-downcase (princ-to-string condition))))
+    (or (google-content-cache-missing-condition-p condition)
+        (search "cachedcontent" msg)
+        (search "cached content" msg)
+        (search "permission_denied" msg)
+        (search "permission denied" msg))))
+
 (defun delete-google-content-cache (cached-content-name &key missing-ok-p)
   "Deletes CACHED-CONTENT-NAME and returns true when the API succeeds.
 When MISSING-OK-P is true, already-absent cache responses are tolerated,

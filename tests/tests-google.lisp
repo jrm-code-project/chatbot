@@ -455,6 +455,94 @@
                           (:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent"))
                         (nreverse cache-events))))))
 
+(fiveam:test test-google-chat-recovers-gracefully-when-cache-not-found-on-chat
+  (let ((chat-events nil)
+        (chat-payloads nil))
+    (let* ((*gemini-base-url* "https://example.test/gemini")
+           (context
+             (make-runtime-context
+              :gemini-api-key-function (lambda () "mocked-google-api-key")
+              :http-post-function
+              (lambda (url &rest args)
+                (let ((payload (getf args :content)))
+                  (push payload chat-payloads)
+                  (if (search "/cachedContents" url)
+                      (progn
+                        (push (list :create url) chat-events)
+                        (values "{\"name\":\"cachedContents/cache-1\",\"ttl\":\"3600s\",\"expireTime\":\"2030-01-01T00:00:00Z\"}" 200))
+                      (progn
+                        (push (list :chat url) chat-events)
+                        (if (and payload (search "cache-1" payload))
+                            ;; First attempt fails with 404 CachedContent not found (or permission denied)
+                            (error "An HTTP request to \"~A\" returned 404 not found.~%~%{\"error\":{\"code\":404,\"message\":\"CachedContent not found\",\"status\":\"NOT_FOUND\"}}" url)
+                            ;; Second attempt succeeds without the cached content reference
+                            (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello without cache\"}], \"role\": \"model\"}}]}" 200))))))))
+           (conv (new-chat :backend :google
+                           :system-instruction "Be concise"
+                           :content-cache-policy :auto
+                           :content-cache-min-tokens 1
+                           :runtime-context context)))
+      (setf (conversation-persona-memory conv) "Stored persona memory.")
+      ;; Pre-seed with existing cache
+      (let ((descriptor (google-cacheable-prefix-descriptor conv)))
+        (setf (conversation-cached-content-name conv) "cachedContents/cache-1")
+        (setf (conversation-cached-content-key conv) (getf descriptor :fingerprint))
+        (setf (conversation-cached-content-metadata conv)
+              '(("name" . "cachedContents/cache-1")
+                ("ttl" . "3600s")
+                ("expireTime" . "2030-01-01T00:00:00Z"))))
+      (fiveam:is (string= "Hello without cache"
+                          (chat "First live turn" :conversation conv)))
+      ;; The cache state should be completely cleared after recovering from the error
+      (fiveam:is (null (conversation-cached-content-name conv)))
+      (fiveam:is (equal `((:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent")
+                          (:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent"))
+                        (nreverse chat-events))))))
+
+(fiveam:test test-google-chat-recovers-gracefully-when-permission-denied-on-chat
+  (let ((chat-events nil)
+        (chat-payloads nil))
+    (let* ((*gemini-base-url* "https://example.test/gemini")
+           (context
+             (make-runtime-context
+              :gemini-api-key-function (lambda () "mocked-google-api-key")
+              :http-post-function
+              (lambda (url &rest args)
+                (let ((payload (getf args :content)))
+                  (push payload chat-payloads)
+                  (if (search "/cachedContents" url)
+                      (progn
+                        (push (list :create url) chat-events)
+                        (values "{\"name\":\"cachedContents/cache-1\",\"ttl\":\"3600s\",\"expireTime\":\"2030-01-01T00:00:00Z\"}" 200))
+                      (progn
+                        (push (list :chat url) chat-events)
+                        (if (and payload (search "cache-1" payload))
+                            ;; First attempt fails with 403 PERMISSION_DENIED
+                            (error "An HTTP request to \"~A\" returned 403 forbidden.~%~%{\"error\":{\"code\":403,\"message\":\"The caller does not have permission\",\"status\":\"PERMISSION_DENIED\"}}" url)
+                            ;; Second attempt succeeds without the cached content reference
+                            (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello without cache\"}], \"role\": \"model\"}}]}" 200))))))))
+           (conv (new-chat :backend :google
+                           :system-instruction "Be concise"
+                           :content-cache-policy :auto
+                           :content-cache-min-tokens 1
+                           :runtime-context context)))
+      (setf (conversation-persona-memory conv) "Stored persona memory.")
+      ;; Pre-seed with existing cache
+      (let ((descriptor (google-cacheable-prefix-descriptor conv)))
+        (setf (conversation-cached-content-name conv) "cachedContents/cache-1")
+        (setf (conversation-cached-content-key conv) (getf descriptor :fingerprint))
+        (setf (conversation-cached-content-metadata conv)
+              '(("name" . "cachedContents/cache-1")
+                ("ttl" . "3600s")
+                ("expireTime" . "2030-01-01T00:00:00Z"))))
+      (fiveam:is (string= "Hello without cache"
+                          (chat "First live turn" :conversation conv)))
+      ;; The cache state should be completely cleared after recovering from the error
+      (fiveam:is (null (conversation-cached-content-name conv)))
+      (fiveam:is (equal `((:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent")
+                          (:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent"))
+                        (nreverse chat-events))))))
+
 (fiveam:test test-google-chat-moves-tools-into-cached-content
   (let* ((tool '((:name . "lookup_time")
                  (:description . "Looks up the current time")
