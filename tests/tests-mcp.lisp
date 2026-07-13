@@ -593,23 +593,26 @@
   (let* ((temp-dir (uiop:default-temporary-directory))
          (root (merge-pathnames "filesystem-tool-root-scope/" temp-dir))
          (outside-file (merge-pathnames "outside.txt" temp-dir))
+         (context (make-runtime-context
+                   :filesystem-access-approval-function
+                   (lambda (&rest ignored)
+                     (declare (ignore ignored))
+                     nil)))
          (bot (make-instance 'chatbot
+                             :runtime-context context
                              :filesystem-tools-p t
                              :filesystem-root-directory root)))
     (ensure-directories-exist root)
     (with-open-file (s outside-file :direction :output :if-exists :supersede)
       (write-line "Outside" s))
     (unwind-protect
-         (let ((*filesystem-access-approval-function* (lambda (&rest ignored)
-                                                       (declare (ignore ignored))
-                                                       nil)))
-           (fiveam:signals mcp-tool-execution-error
-             (execute-chatbot-tool bot
-                                  :built-in
-                                  "readFileLines"
-                                  `(("filename" . ,(namestring outside-file))
-                                    ("beginningLine" . 1)
-                                    ("endingLine" . 1)))))
+         (fiveam:signals mcp-tool-execution-error
+           (execute-chatbot-tool bot
+                                 :built-in
+                                 "readFileLines"
+                                 `(("filename" . ,(namestring outside-file))
+                                  ("beginningLine" . 1)
+                                  ("endingLine" . 1))))
       (delete-file outside-file)
       (uiop:delete-directory-tree root :validate t))))
 
@@ -678,21 +681,24 @@
   (let* ((temp-dir (uiop:default-temporary-directory))
         (root (merge-pathnames "filesystem-tool-directory-scope/" temp-dir))
         (outside-dir (merge-pathnames "outside-dir/" temp-dir))
+        (context (make-runtime-context
+                  :filesystem-access-approval-function
+                  (lambda (&rest ignored)
+                    (declare (ignore ignored))
+                    nil)))
         (bot (make-instance 'chatbot
+                            :runtime-context context
                             :filesystem-tools-p t
                             :filesystem-root-directory root)))
     (ensure-directories-exist root)
     (ensure-directories-exist outside-dir)
     (unwind-protect
-        (let ((*filesystem-access-approval-function* (lambda (&rest ignored)
-                                                       (declare (ignore ignored))
-                                                       nil)))
-          (fiveam:signals mcp-tool-execution-error
-            (execute-chatbot-tool bot
-                                  :built-in
-                                  "directory"
-                                  `(("pathname" . ,(namestring outside-dir))
-                                    ("pattern" . "*.txt")))))
+        (fiveam:signals mcp-tool-execution-error
+          (execute-chatbot-tool bot
+                                :built-in
+                                "directory"
+                                `(("pathname" . ,(namestring outside-dir))
+                                  ("pattern" . "*.txt"))))
       (uiop:delete-directory-tree outside-dir :validate t)
       (uiop:delete-directory-tree root :validate t))))
 
@@ -737,24 +743,28 @@
        (fiveam:is (search "URL: https://www.lispworks.com/documentation/HyperSpec/Body/22_c.htm" result))))))
 
 (fiveam:test test-execute-chatbot-tool-eval
-  (let ((bot (make-instance 'chatbot
-                           :enable-eval-p t))
-       (captured-expression nil))
-    (let ((*eval-approval-function* (lambda (approval-bot source tool-name)
-                                     (declare (ignore approval-bot tool-name))
-                                     (setf captured-expression source)
-                                     t)))
-      (let* ((result-json (execute-chatbot-tool bot
-                                               :built-in
-                                               "eval"
-                                               '(("expression" . "(progn (format t \"hello\") (format *error-output* \"oops\") (values 42 :done))"))))
-            (result (cl-json:decode-json-from-string result-json)))
-       (fiveam:is (string= "(progn (format t \"hello\") (format *error-output* \"oops\") (values 42 :done))"
-                           captured-expression))
-       (fiveam:is (equal '("42" ":DONE")
-                         (coerce (cdr (assoc :values result)) 'list)))
-       (fiveam:is (string= "hello" (cdr (assoc :stdout result))))
-       (fiveam:is (string= "oops" (cdr (assoc :stderr result))))))))
+  (let* ((captured-expression nil)
+         (context
+           (make-runtime-context
+            :eval-approval-function
+            (lambda (approval-bot source tool-name)
+              (declare (ignore approval-bot tool-name))
+              (setf captured-expression source)
+              t)))
+         (bot (make-instance 'chatbot
+                             :runtime-context context
+                             :enable-eval-p t))
+         (result-json (execute-chatbot-tool bot
+                                            :built-in
+                                            "eval"
+                                            '(("expression" . "(progn (format t \"hello\") (format *error-output* \"oops\") (values 42 :done))"))))
+         (result (cl-json:decode-json-from-string result-json)))
+    (fiveam:is (string= "(progn (format t \"hello\") (format *error-output* \"oops\") (values 42 :done))"
+                        captured-expression))
+    (fiveam:is (equal '("42" ":DONE")
+                      (coerce (cdr (assoc :values result)) 'list)))
+    (fiveam:is (string= "hello" (cdr (assoc :stdout result))))
+    (fiveam:is (string= "oops" (cdr (assoc :stderr result))))))
 
 (fiveam:test test-execute-chatbot-tool-eval-rejects-parse-failure
   (let ((bot (make-instance 'chatbot
@@ -772,13 +782,17 @@
       (fiveam:is-false approval-called-p))))
 
 (fiveam:test test-execute-chatbot-tool-eval-denies-without-evaluating
-  (let ((bot (make-instance 'chatbot
-                           :enable-eval-p t)))
+  (let* ((context (make-runtime-context
+                   :eval-approval-function
+                   (lambda (&rest ignored)
+                     (declare (ignore ignored))
+                     nil)))
+         (bot (make-instance 'chatbot
+                             :runtime-context context
+                             :enable-eval-p t)))
     (setf (get 'eval-tool-denied-sentinel :hit) nil)
     (unwind-protect
-        (let ((*eval-approval-function* (lambda (&rest ignored)
-                                          (declare (ignore ignored))
-                                          nil)))
+        (progn
           (fiveam:signals mcp-tool-execution-error
             (execute-chatbot-tool bot
                                   :built-in
@@ -885,22 +899,25 @@
   (let* ((temp-dir (uiop:default-temporary-directory))
          (root (merge-pathnames "filesystem-tool-write-file-scope/" temp-dir))
          (outside-file (merge-pathnames "outside.txt" temp-dir))
+         (context (make-runtime-context
+                   :filesystem-access-approval-function
+                   (lambda (&rest ignored)
+                     (declare (ignore ignored))
+                     nil)))
          (bot (make-instance 'chatbot
+                             :runtime-context context
                              :filesystem-tools-p t
                              :filesystem-root-directory root)))
     (ensure-directories-exist root)
     (unwind-protect
-         (let ((*filesystem-access-approval-function* (lambda (&rest ignored)
-                                                        (declare (ignore ignored))
-                                                        nil)))
-           (fiveam:signals mcp-tool-execution-error
-             (execute-chatbot-tool bot
-                                   :built-in
-                                   "writeFile"
-                                   `(("pathname" . ,(namestring outside-file))
-                                     ("useLfOnly" . t)
-                                     ("endWithEol" . t)
-                                     ("lines" . ,#("Alpha"))))))
+         (fiveam:signals mcp-tool-execution-error
+           (execute-chatbot-tool bot
+                                 :built-in
+                                 "writeFile"
+                                 `(("pathname" . ,(namestring outside-file))
+                                   ("useLfOnly" . t)
+                                   ("endWithEol" . t)
+                                   ("lines" . ,#("Alpha")))))
       (uiop:delete-directory-tree root :validate t))))
 
 (fiveam:test test-execute-chatbot-tool-delete-file
@@ -958,21 +975,24 @@
   (let* ((temp-dir (uiop:default-temporary-directory))
         (root (merge-pathnames "filesystem-tool-delete-file-scope/" temp-dir))
         (outside-file (merge-pathnames "outside.txt" temp-dir))
+        (context (make-runtime-context
+                  :filesystem-access-approval-function
+                  (lambda (&rest ignored)
+                    (declare (ignore ignored))
+                    nil)))
         (bot (make-instance 'chatbot
+                            :runtime-context context
                             :filesystem-tools-p t
                             :filesystem-root-directory root)))
     (ensure-directories-exist root)
     (with-open-file (s outside-file :direction :output :if-exists :supersede)
       (write-line "Outside" s))
     (unwind-protect
-        (let ((*filesystem-access-approval-function* (lambda (&rest ignored)
-                                                       (declare (ignore ignored))
-                                                       nil)))
-          (fiveam:signals mcp-tool-execution-error
-            (execute-chatbot-tool bot
-                                  :built-in
-                                  "deleteFile"
-                                  `(("pathname" . ,(namestring outside-file))))))
+        (fiveam:signals mcp-tool-execution-error
+          (execute-chatbot-tool bot
+                                :built-in
+                                "deleteFile"
+                                `(("pathname" . ,(namestring outside-file)))))
       (delete-file outside-file)
       (uiop:delete-directory-tree root :validate t))))
 
@@ -982,22 +1002,26 @@
         (outside-dir (merge-pathnames "approved-dir/" temp-dir))
         (file-path (merge-pathnames "notes.txt" outside-dir))
         (allowlist-path (merge-pathnames "filesystem-allowlist.lisp" persona-root))
+        (prompted-directory nil)
+        (context
+          (make-runtime-context
+           :filesystem-access-approval-function
+           (lambda (ignored-bot directory tool-name)
+             (declare (ignore ignored-bot))
+             (setf prompted-directory (list (namestring directory) tool-name))
+             t)))
         (bot (make-instance 'chatbot
+                            :runtime-context context
                             :filesystem-tools-p t
                             :filesystem-root-directory persona-root
-                            :filesystem-allowlist-path allowlist-path))
-        (prompted-directory nil))
+                            :filesystem-allowlist-path allowlist-path)))
     (ensure-directories-exist persona-root)
     (ensure-directories-exist outside-dir)
     (with-open-file (s file-path :direction :output :if-exists :supersede)
       (write-line "Alpha" s)
       (write-line "Beta" s))
     (unwind-protect
-        (let ((*filesystem-access-approval-function*
-                (lambda (ignored-bot directory tool-name)
-                  (declare (ignore ignored-bot))
-                  (setf prompted-directory (list (namestring directory) tool-name))
-                  t)))
+        (progn
           (fiveam:is (string= (format nil "Alpha~%Beta")
                               (execute-chatbot-tool bot
                                                     :built-in

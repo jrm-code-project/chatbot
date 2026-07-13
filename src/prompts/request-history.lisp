@@ -114,7 +114,9 @@ Accepted signatures:
     (setf (conversation-cached-content-key target)
           (conversation-cached-content-key source))
     (setf (conversation-cached-content-metadata target)
-          (conversation-cached-content-metadata source))))
+          (conversation-cached-content-metadata source))
+    (setf (conversation-turns-since-cache-reload target)
+          (conversation-turns-since-cache-reload source))))
 
 (defun apply-chat-turn-result (result &optional conversation)
   "Applies RESULT to CONVERSATION, defaulting to RESULT's target conversation."
@@ -127,7 +129,9 @@ Accepted signatures:
       (setf (conversation-messages target)
             (chat-turn-result-messages result))
       (setf (conversation-interaction-id target)
-            (chat-turn-result-interaction-id result)))
+            (chat-turn-result-interaction-id result))
+      (when (conversation-cached-content-name target)
+        (incf (conversation-turns-since-cache-reload target))))
     (chat-turn-result-text result)))
 
 (defun emit-chat-response-text (text &key callback usage thought-text)

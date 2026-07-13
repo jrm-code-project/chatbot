@@ -23,6 +23,7 @@
     :pathname "src/"
     :components
     ((:file "package"            :pathname "core/package")
+     (:file "backend-registry"   :pathname "core/backend-registry" :depends-on ("package"))
      (:file "data"               :pathname "core/data" :depends-on ("package"))
      (:file "checkpoint-schema"  :pathname "core/checkpoint-schema" :depends-on ("package" "data"))
      (:file "vars"               :pathname "core/vars" :depends-on ("package" "data"))
@@ -66,10 +67,10 @@
      (:file "conversations"      :pathname "core/conversations" :depends-on ("package" "vars" "data" "checkpoint-schema" "json-utils" "personas" "mcp" "request-history"))
      (:file "turn-runner"        :pathname "backends/turn-runner" :depends-on ("package" "vars" "data" "request-history" "tool-execution"))
      (:file "google-caching"     :pathname "backends/google-caching" :depends-on ("package" "vars" "data" "logging" "http-utils" "google-payloads" "conversations"))
-     (:file "backend-gemini"     :pathname "backends/backend-gemini" :depends-on ("package" "vars" "data" "logging" "http-utils" "text-utils" "payloads" "gemini-payloads" "mcp" "tool-execution" "turn-runner"))
-     (:file "backend-openai"     :pathname "backends/backend-openai" :depends-on ("package" "vars" "data" "http-utils" "text-utils" "payloads" "openai-payloads" "mcp" "tool-execution" "turn-runner"))
-     (:file "backend-google"     :pathname "backends/backend-google" :depends-on ("package" "vars" "data" "logging" "http-utils" "payloads" "google-payloads" "google-caching" "mcp" "tool-execution" "turn-runner"))
-     (:file "chat"               :pathname "core/chat" :depends-on ("package" "vars" "data" "attachments" "conversations" "chat-entry" "backend-gemini" "backend-openai" "backend-google"))
+     (:file "backend-gemini"     :pathname "backends/backend-gemini" :depends-on ("package" "backend-registry" "vars" "data" "logging" "http-utils" "text-utils" "payloads" "gemini-payloads" "mcp" "tool-execution" "turn-runner"))
+     (:file "backend-openai"     :pathname "backends/backend-openai" :depends-on ("package" "backend-registry" "vars" "data" "http-utils" "text-utils" "payloads" "openai-payloads" "mcp" "tool-execution" "turn-runner"))
+     (:file "backend-google"     :pathname "backends/backend-google" :depends-on ("package" "backend-registry" "vars" "data" "logging" "http-utils" "payloads" "google-payloads" "google-caching" "mcp" "tool-execution" "turn-runner"))
+     (:file "chat"               :pathname "core/chat" :depends-on ("package" "backend-registry" "vars" "data" "attachments" "conversations" "chat-entry" "backend-gemini" "backend-openai" "backend-google"))
      (:file "test-runner"        :pathname "core/test-runner" :depends-on ("package"))
      (:file "round-robin"        :pathname "orchestration/round-robin" :depends-on ("package" "data" "attachments" "prompt-decoration" "text-utils" "chat"))
      (:file "sandbox-personas"   :pathname "orchestration/sandbox-personas" :depends-on ("package" "data" "conversations" "prompt-decoration" "text-utils" "chat"))

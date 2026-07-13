@@ -3,10 +3,10 @@
 
 (in-package "CHATBOT")
 
-(defparameter *google-content-cache-stale-refresh-fraction* 0.25d0
+(defparameter *google-content-cache-stale-refresh-fraction* 0.05d0
   "Fraction of a cache TTL remaining below which Google explicit caches are considered stale.")
 
-(defparameter *google-content-cache-stale-refresh-min-remaining-seconds* 600
+(defparameter *google-content-cache-stale-refresh-min-remaining-seconds* 60
   "Minimum remaining lifetime that marks a Google explicit cache as stale enough to refresh.")
 
 (defun google-explicit-content-cache-supported-p (bot)
@@ -238,6 +238,13 @@
       (<= (- expire-time (get-universal-time))
           (google-content-cache-stale-threshold-seconds conversation metadata)))))
 
+(defun google-content-cache-expired-p (metadata)
+  "Returns true when METADATA says the cached content has expired."
+  (let ((expire-time (parse-rfc3339-universal-time
+                     (cached-content-response-field metadata :expire-time))))
+    (and expire-time
+        (<= expire-time (get-universal-time)))))
+
 (defun create-google-content-cache (conversation &key effective-model)
   "Creates one explicit Gemini cachedContents resource for CONVERSATION."
   (let* ((descriptor (or (google-cacheable-prefix-descriptor conversation
@@ -367,25 +374,40 @@ or as 403/PERMISSION_DENIED."
          (existing-metadata (conversation-cached-content-metadata conversation)))
     (when descriptor
       (if (and existing-name
-              existing-key
-              (string= existing-key (getf descriptor :fingerprint))
-              (not (google-content-cache-somewhat-stale-p conversation existing-metadata)))
+               existing-key
+               (string= existing-key (getf descriptor :fingerprint))
+               (not (google-content-cache-somewhat-stale-p conversation existing-metadata)))
          existing-name
-         (let ((replacement-p (and existing-name t)))
-           (when existing-name
-             (delete-google-content-cache existing-name :missing-ok-p t)
-             (clear-google-conversation-content-cache-state conversation))
-           (let* ((response (create-google-content-cache conversation
-                                                         :effective-model effective-model))
-                  (name (cached-content-response-name response)))
-             (setf (conversation-cached-content-name conversation) name)
-             (setf (conversation-cached-content-key conversation)
-                   (getf descriptor :fingerprint))
-             (setf (conversation-cached-content-metadata conversation) response)
-             (log-message :info
-                          (if replacement-p
-                              "Replaced explicit Gemini content cache"
-                              "Created explicit Gemini content cache")
-                          :context `(("name" . ,name)
-                                     ("estimated-prefix-tokens" . ,(princ-to-string (getf descriptor :estimated-tokens)))))
-             name))))))
+         (let* ((descriptor-model (cdr (assoc "model" (getf descriptor :body) :test #'string=)))
+                (existing-model (and existing-metadata (cached-content-response-field existing-metadata :model)))
+                (model-match-p (or (null existing-model)
+                                   (string= (google-content-cache-model-resource-name descriptor-model)
+                                            (google-content-cache-model-resource-name existing-model)))))
+           (if (and existing-name
+                    model-match-p
+                    (not (google-content-cache-expired-p existing-metadata))
+                    (< (conversation-turns-since-cache-reload conversation) 5))
+               (progn
+                 (log-message :info "Postponing explicit Gemini content cache reload: fewer than 5 turns passed."
+                              :context `(("turns-passed" . ,(conversation-turns-since-cache-reload conversation))
+                                         ("existing-name" . ,existing-name)))
+                 existing-name)
+               (let ((replacement-p (and existing-name t)))
+                 (when existing-name
+                   (delete-google-content-cache existing-name :missing-ok-p t)
+                   (clear-google-conversation-content-cache-state conversation))
+                 (let* ((response (create-google-content-cache conversation
+                                                               :effective-model effective-model))
+                        (name (cached-content-response-name response)))
+                   (setf (conversation-cached-content-name conversation) name)
+                   (setf (conversation-cached-content-key conversation)
+                         (getf descriptor :fingerprint))
+                   (setf (conversation-cached-content-metadata conversation) response)
+                   (setf (conversation-turns-since-cache-reload conversation) 0)
+                   (log-message :info
+                                (if replacement-p
+                                    "Replaced explicit Gemini content cache"
+                                    "Created explicit Gemini content cache")
+                                :context `(("name" . ,name)
+                                           ("estimated-prefix-tokens" . ,(princ-to-string (getf descriptor :estimated-tokens)))))
+                   name))))))))

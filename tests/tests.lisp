@@ -5,6 +5,107 @@
 (fiveam:def-suite chatbot-suite :description "Chatbot framework test suite")
 (fiveam:in-suite chatbot-suite)
 
+(defparameter *test-live-http-post-function* *http-post-function*)
+(defparameter *test-live-http-get-function* *http-get-function*)
+(defparameter *test-live-http-patch-function* *http-patch-function*)
+(defparameter *test-live-http-delete-function* *http-delete-function*)
+(defparameter *test-default-getenv-function* *getenv-function*)
+(defparameter *test-default-gemini-api-key-function* *gemini-api-key-function*)
+
+(defun select-test-function-seam (legacy-value legacy-default context-value prefer-context-p)
+  "Selects the context seam for explicit contexts, otherwise a dynamic test seam."
+  (cond
+    ((and prefer-context-p
+          (not (eq context-value legacy-default)))
+     context-value)
+    ((not (eq legacy-value legacy-default))
+     legacy-value)
+    (t context-value)))
+
+(defun test-unmocked-http-function (operation)
+  "Returns a function that rejects unmocked test HTTP traffic."
+  (lambda (&rest arguments)
+    (declare (ignore arguments))
+    (error "Test attempted an unmocked HTTP ~A request." operation)))
+
+(defun test-http-function-seam (operation legacy-value live-value context-value prefer-context-p)
+  "Returns a mocked HTTP seam or a function that rejects live test traffic."
+  (let ((selected (select-test-function-seam legacy-value live-value context-value
+                                              prefer-context-p)))
+    (if (eq selected live-value)
+        (test-unmocked-http-function operation)
+        selected)))
+
+(defun make-test-backend-runtime-context (conversation)
+  "Returns a child runtime context carrying active test mocks for one backend call."
+  (let* ((conversation-context
+           (and conversation
+                (chatbot-runtime-context (conversation-chatbot conversation))))
+         (prefer-context-p
+           (and conversation-context
+                (not (eq conversation-context *default-runtime-context*)))))
+    (make-runtime-context
+     :startup-chatbot (current-startup-chatbot)
+     :getenv-function
+     (select-test-function-seam *getenv-function*
+                                *test-default-getenv-function*
+                                (current-getenv-function)
+                                prefer-context-p)
+     :http-post-function
+     (test-http-function-seam "POST" *http-post-function*
+                              *test-live-http-post-function*
+                              (current-http-post-function)
+                              prefer-context-p)
+     :http-get-function
+     (test-http-function-seam "GET" *http-get-function*
+                              *test-live-http-get-function*
+                              (current-http-get-function)
+                              prefer-context-p)
+     :http-patch-function
+     (test-http-function-seam "PATCH" *http-patch-function*
+                              *test-live-http-patch-function*
+                              (current-http-patch-function)
+                              prefer-context-p)
+     :http-delete-function
+     (test-http-function-seam "DELETE" *http-delete-function*
+                              *test-live-http-delete-function*
+                              (current-http-delete-function)
+                              prefer-context-p)
+     :gemini-api-key-function
+     (select-test-function-seam *gemini-api-key-function*
+                                *test-default-gemini-api-key-function*
+                                (current-gemini-api-key-function)
+                                prefer-context-p)
+     :default-conversation (current-default-conversation)
+     :active-conversation conversation
+     :active-planner (current-active-planner)
+     :active-planner-parent-conversation (current-active-planner-parent-conversation))))
+
+(defun make-test-chat-backends ()
+  "Returns a backend registry whose handlers install request-local test seams."
+  (let ((registry (make-hash-table :test 'equal)))
+    (maphash
+     (lambda (keyword handler)
+       (let ((delegate handler))
+         (setf (gethash keyword registry)
+               (lambda (input &rest arguments)
+                 (let ((context
+                         (make-test-backend-runtime-context
+                          (getf arguments :conversation))))
+                   (call-with-runtime-context
+                    context
+                    (lambda ()
+                      (apply delegate input arguments))))))))
+     *chat-backends*)
+    registry))
+
+(defun test-chat-google (bot input conversation callback &rest arguments)
+  "Calls CHAT-GOOGLE with dynamically bound test seams in a request context."
+  (call-with-runtime-context
+   (make-test-backend-runtime-context conversation)
+   (lambda ()
+     (apply #'chat-google bot input conversation callback arguments))))
+
 (defun test-results-passed-p (results)
   "Returns true when RESULTS contain only passing checks.
 Skipped checks still count as a non-successful suite run so this preserves the
@@ -17,7 +118,8 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
 
 (defun run-all-tests ()
   "Utility to run the chatbot-suite tests and return results."
-  (let ((*bypass-eval-approval-p* t))
+  (let ((*bypass-eval-approval-p* t)
+        (*chat-backends* (make-test-chat-backends)))
     (let ((results (fiveam:run 'chatbot-suite)))
       (fiveam:explain! results)
       (test-results-passed-p results))))

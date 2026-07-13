@@ -154,7 +154,7 @@ Unknown backends fall back to the Gemini default."
     (require-non-empty-string resolved (format nil "Default model for backend ~A" backend))))
 
 (defun normalize-chatbot-backend (backend context &key allow-nil-p)
-  "Normalizes BACKEND to a supported backend keyword for CONTEXT."
+  "Normalizes BACKEND to a backend keyword for CONTEXT."
   (when (null backend)
     (if allow-nil-p
         (return-from normalize-chatbot-backend nil)
@@ -163,18 +163,11 @@ Unknown backends fall back to the Gemini default."
           (typecase backend
             (keyword backend)
             (string
-             (let ((downcased (string-downcase backend)))
-               (cond
-                 ((string= downcased "gemini") :gemini)
-                 ((string= downcased "google") :google)
-                 ((string= downcased "openai") :openai)
-                 ((or (string= downcased "lm-studio")
-                      (string= downcased "lm_studio"))
-                  :lm-studio)
-                 (t nil))))
+             (unless (string= backend "")
+               (intern (substitute #\- #\_ (string-upcase backend)) "KEYWORD")))
             (t nil))))
-    (unless (member normalized '(:gemini :google :openai :lm-studio))
-      (error "Unsupported ~A backend: ~S" context backend))
+    (unless normalized
+      (error "Invalid ~A backend: ~S" context backend))
     normalized))
 
 (defun openai-api-key ()
@@ -312,6 +305,8 @@ CURRENT-ACTIVE-CONVERSATION with an explicit runtime context instead.")
 
 (defmethod initialize-instance :after ((bot chatbot) &key)
   "Applies backend-sensitive defaults for chatbot instances created without an explicit model."
+  (setf (chatbot-backend bot)
+        (normalize-chatbot-backend (chatbot-backend bot) "chatbot"))
   (when (null (chatbot-model bot))
     (setf (chatbot-model bot)
           (backend-default-model (chatbot-backend bot)))))
@@ -831,7 +826,7 @@ longer mirror legacy ambient specials back into the runtime context."
 (defparameter *context-pruning-estimated-target-tokens* 150000
   "Estimated prompt-token target after compressing oversized conversation history.")
 
-(defparameter *context-pruning-threshold-characters* 800000
+(defparameter *context-pruning-threshold-characters* 300000
   "Compatibility character ceiling for auto-pruning, aligned with the default estimated token window.")
 
 (defvar *active-planner* nil

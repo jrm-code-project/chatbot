@@ -415,3 +415,14 @@
     (if return-turn-result-p
         result
         (apply-chat-turn-result result conversation))))
+
+(defun gemini-chat-backend-handler (input &key bot conversation callback file-attachments
+                                               effective-model effective-generation-config)
+  "Runs one registered Gemini backend turn."
+  (chat-gemini bot input conversation callback
+               :file-attachments file-attachments
+               :effective-model effective-model
+               :effective-generation-config effective-generation-config
+               :return-turn-result-p t))
+
+(register-chat-backend :gemini #'gemini-chat-backend-handler)

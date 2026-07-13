@@ -325,3 +325,15 @@
     (if return-turn-result-p
         result
         (apply-chat-turn-result result conversation))))
+
+(defun openai-chat-backend-handler (input &key bot conversation callback file-attachments
+                                               effective-model effective-generation-config)
+  "Runs one registered OpenAI-compatible backend turn."
+  (declare (ignore effective-model))
+  (chat-openai bot input conversation callback
+               :file-attachments file-attachments
+               :effective-generation-config effective-generation-config
+               :return-turn-result-p t))
+
+(register-chat-backend :openai #'openai-chat-backend-handler)
+(register-chat-backend :lm-studio #'openai-chat-backend-handler)

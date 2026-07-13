@@ -47,23 +47,6 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
              (coerce (append (coerce curr 'list) (list inst)) 'vector))
             (t inst)))))
 
-(defun subordinate-conversation-name (conversation)
-  "Returns CONVERSATION's subordinate name."
-  (chatbot-persona-name (conversation-chatbot conversation)))
-
-(defun subordinate-conversation-worker-kind (conversation)
-  "Returns CONVERSATION's unified worker kind keyword."
-  (if (chatbot-planner-p (conversation-chatbot conversation))
-      :planner
-      :delegated))
-
-(defun subordinate-conversation-worker-id (conversation)
-  "Returns CONVERSATION's unified worker identifier."
-  (format nil "~A:~A"
-          (runtime-worker-kind-public-name
-           (subordinate-conversation-worker-kind conversation))
-          (subordinate-conversation-name conversation)))
-
 (defun subordinate-conversation-worker-status (conversation)
   "Returns CONVERSATION's unified worker status string."
   (let* ((bot (conversation-chatbot conversation))

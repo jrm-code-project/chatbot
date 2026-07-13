@@ -460,3 +460,14 @@
     (if return-turn-result-p
         result
         (apply-chat-turn-result result conversation))))
+
+(defun google-chat-backend-handler (input &key bot conversation callback file-attachments
+                                               effective-model effective-generation-config)
+  "Runs one registered Google generateContent backend turn."
+  (chat-google bot input conversation callback
+               :file-attachments file-attachments
+               :effective-model effective-model
+               :effective-generation-config effective-generation-config
+               :return-turn-result-p t))
+
+(register-chat-backend :google #'google-chat-backend-handler)

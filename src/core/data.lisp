@@ -162,7 +162,7 @@
     :initarg :backend
     :accessor chatbot-backend
     :initform :gemini
-    :documentation "The backend to use for the conversation (:gemini, :openai, or :google).")
+    :documentation "Keyword naming the registered backend to use for the conversation.")
    (system-instruction
     :initarg :system-instruction
     :accessor chatbot-system-instruction
@@ -373,7 +373,12 @@
     :initarg :cached-content-metadata
     :accessor conversation-cached-content-metadata
     :initform nil
-    :documentation "Optional raw cached-content metadata retained for observability and later reuse decisions.")))
+    :documentation "Optional raw cached-content metadata retained for observability and later reuse decisions.")
+   (turns-since-cache-reload
+    :initarg :turns-since-cache-reload
+    :accessor conversation-turns-since-cache-reload
+    :initform 0
+    :documentation "Number of turns that have passed since the explicit Gemini content cache was last created or replaced.")))
 
 (defclass round-robin-participant ()
   ((name

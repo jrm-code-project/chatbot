@@ -900,7 +900,9 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                   (funcall thunk)
                   :ran-inline)))
           (let* ((memory-path (merge-pathnames "memory.json" test-persona-dir))
-                 (conv (new-chat-persona "persona-memory-server"))
+                 (conv (new-chat-persona
+                        "persona-memory-server"
+                        :runtime-context (make-runtime-context)))
                  (bot (conversation-chatbot conv))
                 (memory-preload (decode-test-json (conversation-persona-memory conv)))
                 (preload-entities (test-json-elements
@@ -1111,6 +1113,10 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (shared-memory (make-instance 'mcp-server :name "memory"))
         (startup-bot (make-instance 'chatbot
                                     :mcp-servers (list shared-time shared-memory)
+                                    :mcp-startup-status
+                                    (make-instance 'mcp-startup-status
+                                                   :configured-count 2
+                                                   :successful-count 2)
                                     :runtime-context context))
         (persona-memory-server (make-instance 'mcp-server :name "memory")))
     (ensure-directories-exist test-persona-dir)
@@ -1413,7 +1419,7 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (fiveam:is (= 2 (length calls)))
         (let ((history (conversation-messages conv)))
          (fiveam:is (string= "system" (cdr (assoc "role" (first history) :test #'string=))))
-         (fiveam:is (search "Digest summary."
+         (fiveam:is (search "State Digest"
                             (cdr (assoc "content" (first history) :test #'string=))))
          (fiveam:is (string= "Primary response."
                              (cdr (assoc "content" (car (last history)) :test #'string=)))))))))

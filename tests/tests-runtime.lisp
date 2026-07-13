@@ -2177,6 +2177,7 @@ After fence.")
     (fiveam:is (equal (list :prompt (* thread-count iterations-per-thread 2)
                             :completion (* thread-count iterations-per-thread 3)
                             :thought (* thread-count iterations-per-thread 1)
+                            :cached 0
                             :total (* thread-count iterations-per-thread 6))
                       (current-global-token-grand-totals)))))
 
@@ -2272,6 +2273,50 @@ After fence.")
     (fiveam:is (string= "gemini-direct"
                         (chatbot-model (make-instance 'chatbot))))))
 
+(fiveam:test test-chat-backend-registry
+  (fiveam:is (eq 'equal (hash-table-test *chat-backends*)))
+  (dolist (backend '(:gemini :google :openai :lm-studio))
+    (fiveam:is-true (gethash backend *chat-backends*))))
+
+(fiveam:test test-registered-chat-backend-receives-turn-arguments
+  (let* ((*chat-backends* (make-hash-table :test 'equal))
+         (conversation (new-chat :backend "custom_backend" :model "custom-model"))
+         (bot (conversation-chatbot conversation))
+         (captured nil)
+         (handler
+           (lambda (input &key bot conversation callback file-attachments
+                               effective-model effective-generation-config)
+             (setf captured
+                   (list input bot conversation callback file-attachments
+                         effective-model effective-generation-config))
+             (make-chat-turn-result "custom response"))))
+    (register-chat-backend :custom-backend handler)
+    (fiveam:is
+     (string= "custom response"
+              (chat-turn-result-text
+               (invoke-chat-backend-turn
+                bot conversation "custom prompt" #'identity
+                :file-attachments '(:attachment)
+                :effective-model "turn-model"
+                :effective-generation-config '(:temperature 0.25)))))
+    (fiveam:is (equal "custom prompt" (first captured)))
+    (fiveam:is (eq bot (second captured)))
+    (fiveam:is (eq conversation (third captured)))
+    (fiveam:is (eq #'identity (fourth captured)))
+    (fiveam:is (equal '(:attachment) (fifth captured)))
+    (fiveam:is (string= "turn-model" (sixth captured)))
+    (fiveam:is (equal '(:temperature 0.25) (seventh captured)))))
+
+(fiveam:test test-unregistered-chat-backend-signals-clean-error
+  (let* ((*chat-backends* (make-hash-table :test 'equal))
+         (conversation (new-chat :backend :missing :model "missing-model")))
+    (fiveam:signals error
+      (invoke-chat-backend-turn
+       (conversation-chatbot conversation)
+       conversation
+       "prompt"
+       nil))))
+
 (fiveam:test test-gemini-api-revision-is-configurable
   (let ((conv (new-chat :backend :gemini))
         (captured-headers nil))
@@ -2319,6 +2364,10 @@ data: [DONE]")
            (lambda (bot &key strict-required-p)
              (declare (ignore strict-required-p))
              (setf (chatbot-mcp-servers bot) '(:shared-server))
+             (setf (chatbot-mcp-startup-status bot)
+                   (make-instance 'mcp-startup-status
+                                  :configured-count 1
+                                  :successful-count 1))
              bot)))
       (setf (runtime-context-startup-chatbot *default-runtime-context*) nil)
       (initialize-startup-chatbot)
@@ -2531,6 +2580,10 @@ data: [DONE]")
             (declare (ignore strict-required-p))
             (incf init-calls)
             (setf (chatbot-mcp-servers bot) '(:shared-server))
+            (setf (chatbot-mcp-startup-status bot)
+                  (make-instance 'mcp-startup-status
+                                 :configured-count 1
+                                 :successful-count 1))
             bot)))
       (let* ((conv (new-chat :runtime-context context))
             (bot (conversation-chatbot conv)))
@@ -2623,6 +2676,10 @@ data: [DONE]")
            (lambda (bot &key strict-required-p)
              (declare (ignore strict-required-p))
              (setf (chatbot-mcp-servers bot) '(:shared-server))
+             (setf (chatbot-mcp-startup-status bot)
+                   (make-instance 'mcp-startup-status
+                                  :configured-count 1
+                                  :successful-count 1))
              bot)))
       (setf (runtime-context-startup-chatbot *default-runtime-context*) nil)
       (setf (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*) t)
@@ -2913,25 +2970,33 @@ data: [DONE]")
   (let ((post-call-count 0)
         (get-call-count 0))
     ;; 1. Test POST request with transient errors that eventually succeeds on 3rd attempt
-    (let ((*http-post-function*
-            (lambda (url &rest args)
-              (declare (ignore url args))
-              (incf post-call-count)
-              (cond
-                ((<= post-call-count 2)
-                 (error "Transient Network timeout (12002)."))
-                (t
-                 (values "Success" 200))))))
-      (let ((res (post-web-request "https://api.test/post" nil "payload")))
-        (fiveam:is (string= "Success" res))
-        (fiveam:is (= 3 post-call-count))))
+    (let* ((post-function
+             (lambda (url &rest args)
+               (declare (ignore url args))
+               (incf post-call-count)
+               (cond
+                 ((<= post-call-count 2)
+                  (error "Transient Network timeout (12002)."))
+                 (t
+                  (values "Success" 200)))))
+           (context (make-runtime-context :http-post-function post-function)))
+      (call-with-runtime-context
+       context
+       (lambda ()
+         (let ((res (post-web-request "https://api.test/post" nil "payload")))
+           (fiveam:is (string= "Success" res))
+           (fiveam:is (= 3 post-call-count))))))
     
     ;; 2. Test GET request with non-retryable 404 client error that fails immediately on 1st attempt
-    (let ((*http-get-function*
-            (lambda (url &rest args)
-              (declare (ignore url args))
-              (incf get-call-count)
-              (error "HTTP 404 Not Found"))))
-      (fiveam:signals error
-        (get-web-request "https://api.test/get"))
-      (fiveam:is (= 1 get-call-count)))))
+    (let* ((get-function
+             (lambda (url &rest args)
+               (declare (ignore url args))
+               (incf get-call-count)
+               (error "HTTP 404 Not Found")))
+           (context (make-runtime-context :http-get-function get-function)))
+      (call-with-runtime-context
+       context
+       (lambda ()
+         (fiveam:signals error
+           (get-web-request "https://api.test/get"))
+         (fiveam:is (= 1 get-call-count)))))))

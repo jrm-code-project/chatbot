@@ -97,7 +97,35 @@
         :legacy-function-seam-compatibility-p nil)
        base-context)))
 
-(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p (content-cache-policy +default-content-cache-policy+) (content-cache-ttl-seconds *default-content-cache-ttl-seconds*) (content-cache-min-tokens *default-content-cache-min-tokens*) google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name persona-source-name checkpoint-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p cached-content-name cached-content-key cached-content-metadata)
+(defun subordinate-conversation-name (conversation)
+  "Returns CONVERSATION's subordinate name."
+  (chatbot-persona-name (conversation-chatbot conversation)))
+
+(defun subordinate-conversation-worker-kind (conversation)
+  "Returns CONVERSATION's unified worker kind keyword."
+  (if (chatbot-planner-p (conversation-chatbot conversation))
+      :planner
+      :delegated))
+
+(defun subordinate-conversation-worker-id (conversation)
+  "Returns CONVERSATION's unified worker identifier."
+  (format nil "~A:~A"
+          (runtime-worker-kind-public-name
+           (subordinate-conversation-worker-kind conversation))
+          (subordinate-conversation-name conversation)))
+
+(defun register-initial-subordinate-conversations (bot)
+  "Registers BOT's configured subordinate conversations as runtime workers."
+  (dolist (conversation (chatbot-subordinates bot))
+    (register-runtime-worker-entry
+     (make-runtime-worker-entry
+      :worker-id (subordinate-conversation-worker-id conversation)
+      :kind (subordinate-conversation-worker-kind conversation)
+      :conversation conversation
+      :owner-bot bot)
+     (chatbot-runtime-context bot))))
+
+(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p (content-cache-policy +default-content-cache-policy+) (content-cache-ttl-seconds *default-content-cache-ttl-seconds*) (content-cache-min-tokens *default-content-cache-min-tokens*) google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name persona-source-name checkpoint-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p cached-content-name cached-content-key cached-content-metadata (turns-since-cache-reload 0))
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
@@ -107,7 +135,8 @@ configuration, instructions, or preloaded memory."
      resolved-context
      (lambda ()
       (maybe-auto-initialize-startup-chatbot resolved-context)
-      (let* ((chosen-model (or model
+      (let* ((backend (normalize-chatbot-backend backend "chatbot"))
+             (chosen-model (or model
                                (backend-default-model backend)))
              (bot (make-instance 'chatbot
                                  :persona-name persona-name
@@ -149,11 +178,13 @@ configuration, instructions, or preloaded memory."
             (setf (chatbot-mcp-servers bot) startup-servers))
           (when startup-status
             (setf (chatbot-mcp-startup-status bot) startup-status)))
+        (register-initial-subordinate-conversations bot)
         (make-instance 'conversation
                        :chatbot bot
                        :cached-content-name cached-content-name
                        :cached-content-key cached-content-key
-                       :cached-content-metadata cached-content-metadata)))
+                       :cached-content-metadata cached-content-metadata
+                       :turns-since-cache-reload turns-since-cache-reload)))
      :default-conversation-compatibility-p nil
      :legacy-function-seam-compatibility-p nil)))
 
@@ -424,6 +455,8 @@ Use NEW-CHAT instead when no persona should be loaded."
         (getf restoration :cached-content-key)
         (conversation-cached-content-metadata conversation)
         (getf restoration :cached-content-metadata)
+        (conversation-turns-since-cache-reload conversation)
+        (getf restoration :turns-since-cache-reload 0)
         (conversation-messages conversation)
         (getf restoration :history))
   conversation)
@@ -479,7 +512,8 @@ Use NEW-CHAT instead when no persona should be loaded."
                          :runtime-context (getf restoration :runtime-context)
                          :cached-content-name (getf restoration :cached-content-name)
                          :cached-content-key (getf restoration :cached-content-key)
-                         :cached-content-metadata (getf restoration :cached-content-metadata)))))
+                         :cached-content-metadata (getf restoration :cached-content-metadata)
+                         :turns-since-cache-reload (getf restoration :turns-since-cache-reload 0)))))
     (apply-restored-chatbot-state (conversation-chatbot restored-conv)
                                  restoration
                                  persona-source-name)

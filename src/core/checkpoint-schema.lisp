@@ -226,6 +226,7 @@
           :cached-content-name (or (conversation-cached-content-name conversation) "")
           :cached-content-key (or (conversation-cached-content-key conversation) "")
           :cached-content-metadata (or (conversation-cached-content-metadata conversation) nil)
+          :turns-since-cache-reload (conversation-turns-since-cache-reload conversation)
           :messages (conversation-messages conversation))))
 
 (defun decode-persisted-conversation-state (state &key runtime-context append-recovery-handshake-p)
@@ -309,5 +310,6 @@
                                     nil
                                     key))
           :cached-content-metadata (get-string-plist-value state "cachedContentMetadata")
+          :turns-since-cache-reload (or (get-string-plist-value state "turnsSinceCacheReload") 0)
           :history (maybe-append-recovery-handshake history append-recovery-handshake-p)
           :runtime-context runtime-context)))

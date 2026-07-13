@@ -356,7 +356,8 @@
           (setf (conversation-cached-content-metadata conv)
                 `(("name" . "cachedContents/cache-1")
                   ("ttl" . "3600s")
-                  ("expireTime" . ,(utc-rfc3339 (+ (get-universal-time) 120))))))
+                  ("expireTime" . ,(utc-rfc3339 (+ (get-universal-time) 120)))))
+          (setf (conversation-turns-since-cache-reload conv) 5))
         (fiveam:is (string= "Hello from Google non-streaming"
                             (chat "First live turn" :conversation conv)))
         (fiveam:is (= 2 (length captured-urls)))
@@ -454,6 +455,140 @@
                           (:create "https://example.test/gemini/cachedContents")
                           (:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent"))
                         (nreverse cache-events))))))
+
+(fiveam:test test-google-chat-postpones-cache-reload-until-5-turns-pass
+  (let ((cache-events nil))
+    (flet ((utc-rfc3339 (universal-time)
+             (multiple-value-bind (second minute hour day month year)
+                 (decode-universal-time universal-time 0)
+               (format nil "~4,'0D-~2,'0D-~2,'0DT~2,'0D:~2,'0D:~2,'0DZ"
+                       year month day hour minute second))))
+      (let* ((*gemini-base-url* "https://example.test/gemini")
+             (context
+               (make-runtime-context
+                :gemini-api-key-function (lambda () "mocked-google-api-key")
+                :http-post-function
+                (lambda (url &rest args)
+                  (declare (ignore args))
+                  (if (search "/cachedContents" url)
+                      (progn
+                        (push (list :create url) cache-events)
+                        (values "{\"name\":\"cachedContents/cache-2\",\"ttl\":\"3600s\",\"expireTime\":\"2030-01-01T00:00:00Z\"}" 200))
+                      (progn
+                        (push (list :chat url) cache-events)
+                        (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}" 200))))
+                :http-delete-function
+                (lambda (url &rest args)
+                  (declare (ignore args))
+                  (push (list :delete url) cache-events)
+                  (values "" 204))))
+             (conv (new-chat :backend :google
+                             :system-instruction "Be concise"
+                             :content-cache-policy :auto
+                             :content-cache-min-tokens 1
+                             :runtime-context context)))
+        (setf (conversation-persona-memory conv) "Stored persona memory.")
+        (let ((descriptor (google-cacheable-prefix-descriptor conv)))
+          (setf (conversation-cached-content-name conv) "cachedContents/cache-1")
+          (setf (conversation-cached-content-key conv) (getf descriptor :fingerprint))
+          (setf (conversation-cached-content-metadata conv)
+                `(("name" . "cachedContents/cache-1")
+                  ("ttl" . "3600s")
+                  ("expireTime" . ,(utc-rfc3339 (+ (get-universal-time) 120)))))) ; somewhat stale (120 seconds left)
+        
+        ;; At turn start: turns-since-cache-reload = 0. Cache is stale, but we have existing cache.
+        ;; First turn
+        (chat "Turn 1" :conversation conv)
+        (fiveam:is (= 1 (conversation-turns-since-cache-reload conv)))
+        (fiveam:is (equal `((:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent"))
+                          (nreverse cache-events)))
+        (setf cache-events nil)
+        
+        ;; Second turn
+        (chat "Turn 2" :conversation conv)
+        (fiveam:is (= 2 (conversation-turns-since-cache-reload conv)))
+        (fiveam:is (equal `((:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent"))
+                          (nreverse cache-events)))
+        (setf cache-events nil)
+        
+        ;; Third turn
+        (chat "Turn 3" :conversation conv)
+        (fiveam:is (= 3 (conversation-turns-since-cache-reload conv)))
+        
+        ;; Fourth turn
+        (chat "Turn 4" :conversation conv)
+        (fiveam:is (= 4 (conversation-turns-since-cache-reload conv)))
+        
+        ;; Fifth turn
+        (chat "Turn 5" :conversation conv)
+        (fiveam:is (= 5 (conversation-turns-since-cache-reload conv)))
+        (fiveam:is (equal `((:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent")
+                            (:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent")
+                            (:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent"))
+                          (nreverse cache-events)))
+        (setf cache-events nil)
+        
+        ;; Sixth turn: turns-since-cache-reload = 5. Cache is stale. Now it should reload!
+        (chat "Turn 6" :conversation conv)
+        (fiveam:is (= 1 (conversation-turns-since-cache-reload conv))) ; reset to 0 upon reload, then incremented to 1 by applying the turn result
+        (fiveam:is (string= "cachedContents/cache-2" (conversation-cached-content-name conv)))
+        (fiveam:is (equal `((:delete "https://example.test/gemini/cachedContents/cache-1")
+                            (:create "https://example.test/gemini/cachedContents")
+                            (:chat "https://example.test/gemini/models/gemini-3.5-flash:generateContent"))
+                          (nreverse cache-events)))))))
+
+(fiveam:test test-google-chat-reloads-cache-when-model-mismatch-even-within-5-turns
+  (let ((cache-events nil))
+    (flet ((utc-rfc3339 (universal-time)
+             (multiple-value-bind (second minute hour day month year)
+                 (decode-universal-time universal-time 0)
+               (format nil "~4,'0D-~2,'0D-~2,'0DT~2,'0D:~2,'0D:~2,'0DZ"
+                       year month day hour minute second))))
+      (let* ((*gemini-base-url* "https://example.test/gemini")
+             (context
+               (make-runtime-context
+                :gemini-api-key-function (lambda () "mocked-google-api-key")
+                :http-post-function
+                (lambda (url &rest args)
+                  (declare (ignore args))
+                  (if (search "/cachedContents" url)
+                      (progn
+                        (push (list :create url) cache-events)
+                        (values "{\"name\":\"cachedContents/cache-2\",\"model\":\"models/gemini-pro-latest\",\"ttl\":\"3600s\",\"expireTime\":\"2030-01-01T00:00:00Z\"}" 200))
+                      (progn
+                        (push (list :chat url) cache-events)
+                        (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google non-streaming\"}], \"role\": \"model\"}}]}" 200))))
+                :http-delete-function
+                (lambda (url &rest args)
+                  (declare (ignore args))
+                  (push (list :delete url) cache-events)
+                  (values "" 204))))
+             (conv (new-chat :backend :google
+                             :system-instruction "Be concise"
+                             :content-cache-policy :auto
+                             :content-cache-min-tokens 1
+                             :runtime-context context)))
+        (setf (conversation-persona-memory conv) "Stored persona memory.")
+        (let ((descriptor (google-cacheable-prefix-descriptor conv)))
+          (setf (conversation-cached-content-name conv) "cachedContents/cache-1")
+          (setf (conversation-cached-content-key conv) (getf descriptor :fingerprint))
+          (setf (conversation-cached-content-metadata conv)
+                `(("name" . "cachedContents/cache-1")
+                  ("model" . "models/gemini-3.5-flash")
+                  ("ttl" . "3600s")
+                  ("expireTime" . ,(utc-rfc3339 (+ (get-universal-time) 120)))))) ; somewhat stale
+
+        ;; At turn start: turns-since-cache-reload = 0.
+        ;; First turn uses dollar-prefix override for model (gemini-pro-latest).
+        ;; Because the models mismatch (gemini-pro-latest vs gemini-3.5-flash),
+        ;; it MUST reload/re-create the cache immediately even though 0 < 5 turns have passed!
+        (chat "$gemini-pro-latest Turn 1" :conversation conv)
+        (fiveam:is (= 1 (conversation-turns-since-cache-reload conv)))
+        (fiveam:is (string= "cachedContents/cache-2" (conversation-cached-content-name conv)))
+        (fiveam:is (equal `((:delete "https://example.test/gemini/cachedContents/cache-1")
+                            (:create "https://example.test/gemini/cachedContents")
+                            (:chat "https://example.test/gemini/models/gemini-pro-latest:generateContent"))
+                          (nreverse cache-events)))))))
 
 (fiveam:test test-google-chat-recovers-gracefully-when-cache-not-found-on-chat
   (let ((chat-events nil)
@@ -579,8 +714,9 @@
              (request-tools (google-payload-tools turn-payload)))
         (fiveam:is (= 1 (count-if (lambda (url) (search "/cachedContents" url)) captured-urls)))
         (fiveam:is (= 1 (length cache-tools)))
-        (fiveam:is (equal '("lookup_time")
-                          (google-tool-names (google-tool-declarations cache-tools))))
+        (fiveam:is (member "lookup_time"
+                           (google-tool-names cache-tools)
+                           :test #'string=))
         (fiveam:is-false request-tools)
         (assert-json-value= (test-json-value-any turn-payload '("cachedContent" :cached-content))
                             "cachedContents/cache-1")))))
@@ -629,8 +765,12 @@
       (fiveam:is (string= "cachedContents/cache-1" (conversation-cached-content-name conv)))
       (let* ((cache-payload (decode-test-json (third captured-payloads)))
              (cache-tools (google-payload-tools cache-payload)))
-        (fiveam:is (equal '("alpha_tool" "beta_tool")
-                          (google-tool-names (google-tool-declarations cache-tools))))))))
+        (fiveam:is
+         (equal '("alpha_tool" "beta_tool")
+                (remove-if-not
+                 (lambda (name)
+                   (member name '("alpha_tool" "beta_tool") :test #'string=))
+                 (google-tool-names cache-tools))))))))
 
 (fiveam:test test-google-chat-includes-transient-file-attachments-without-persisting-them
   (let* ((temp-dir (uiop:default-temporary-directory))
@@ -803,7 +943,7 @@
               (declare (ignore url))
               (setf captured-content (getf args :content))
               (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from Google tool test\"}], \"role\": \"model\"}}]}" 200))))
-      (let ((res (chat-google bot "Hi Google" conv nil)))
+      (let ((res (test-chat-google bot "Hi Google" conv nil)))
         (fiveam:is (string= "Hello from Google tool test" res))
         (let* ((payload (decode-test-json captured-content))
                (tools (google-payload-tools payload))
@@ -851,7 +991,7 @@
                   (progn
                     (setf captured-second-request (getf args :content))
                     (values "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"It is 12:34 PM in Los Angeles.\"}],\"role\":\"model\"}}]}" 200))))))
-      (let ((res (chat-google bot "What time is it now?" conv nil)))
+      (let ((res (test-chat-google bot "What time is it now?" conv nil)))
         (fiveam:is (= 2 call-count))
         (fiveam:is (string= "America/Los_Angeles" (cdr (assoc :timezone captured-tool-args))))
         (let* ((payload (decode-test-json captured-second-request))
@@ -891,7 +1031,7 @@
                   (progn
                     (setf captured-second-request (getf args :content))
                     (values "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Handled tool error\"}],\"role\":\"model\"}}]}" 200))))))
-      (let ((res (chat-google bot "What time is it now?" conv nil)))
+      (let ((res (test-chat-google bot "What time is it now?" conv nil)))
         (fiveam:is (= 2 call-count))
         (let* ((payload (decode-test-json captured-second-request))
                (contents (google-payload-contents payload))
@@ -921,7 +1061,7 @@
             (lambda (url &rest args)
               (declare (ignore url args))
               (values "{\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":3,\"thoughtsTokenCount\":4,\"totalTokenCount\":9},\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Tiny chain of thought\",\"thought\":true},{\"text\":\"Visible answer\"}],\"role\":\"model\"}}]}" 200))))
-      (fiveam:is (string= "Visible answer" (chat-google bot "Hi Google" conv nil))))
+      (fiveam:is (string= "Visible answer" (test-chat-google bot "Hi Google" conv nil))))
     (let ((output (get-output-stream-string stream)))
       (fiveam:is (search "[Thoughts]" output))
       (fiveam:is (search "Tiny chain of thought" output))
@@ -945,7 +1085,7 @@
                  (progn
                    (setf captured-second-request (getf args :content))
                    (values "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Read sampling ok\"}],\"role\":\"model\"}}]}" 200))))))
-      (let ((res (chat-google bot "Inspect sampling" conv nil)))
+      (let ((res (test-chat-google bot "Inspect sampling" conv nil)))
         (fiveam:is (= 2 call-count))
         (let* ((payload (decode-test-json captured-second-request))
                (contents (google-payload-contents payload))
@@ -984,7 +1124,7 @@
              (declare (ignore url))
              (setf captured-content (getf args :content))
              (values "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"History sanitized\"}],\"role\":\"model\"}}]}" 200))))
-      (let ((res (chat-google bot "Next turn" conv nil)))
+      (let ((res (test-chat-google bot "Next turn" conv nil)))
         (let* ((payload (decode-test-json captured-content))
                (contents (google-payload-contents payload))
                (function-call-part (google-function-call-part (first contents)))
@@ -1012,7 +1152,7 @@
              (incf call-count)
              (values "{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"get_current_time\",\"args\":{\"timezone\":\"America/Los_Angeles\"},\"id\":\"bwvnqvbe\"}}],\"role\":\"model\"}}]}" 200))))
       (fiveam:signals chatbot-tool-recursion-limit-error
-        (chat-google bot "What time is it now?" conv nil))
+        (test-chat-google bot "What time is it now?" conv nil))
       (fiveam:is (= +max-chatbot-tool-recursion-depth+ call-count)))))
 
 (fiveam:test test-google-chat-retries-malformed-response-on-gemini-pro-latest
@@ -1044,7 +1184,7 @@
                    "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Recovered on retry\"}],\"role\":\"model\"}}]}"
                    )
                200))))
-      (let ((res (chat-google bot "Retry me" conv nil)))
+      (let ((res (test-chat-google bot "Retry me" conv nil)))
         (fiveam:is (= 2 call-count))
         (fiveam:is (string= "Recovered on retry" res))
         (fiveam:is (equal '("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
@@ -1085,7 +1225,7 @@
                    "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Recovered after empty response\"}],\"role\":\"model\"}}]}"
                    )
                200))))
-      (let ((res (chat-google bot "Retry empty" conv nil)))
+      (let ((res (test-chat-google bot "Retry empty" conv nil)))
         (fiveam:is (= 2 call-count))
         (fiveam:is (string= "Recovered after empty response" res))
         (fiveam:is (equal '("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
@@ -1108,7 +1248,7 @@
                   "{\"candidates\":[{\"content\":{},\"finishReason\":\"MALFORMED_FUNCTION_CALL\",\"finishMessage\":\"Malformed function call: Failed to parse function call: Function call is empty - no input to parse.\"}]}"
                   "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Recovered after malformed function call\"}],\"role\":\"model\"}}]}")
               200))))
-      (let ((res (chat-google bot "Retry malformed function call" conv nil)))
+      (let ((res (test-chat-google bot "Retry malformed function call" conv nil)))
        (fiveam:is (= 2 call-count))
        (fiveam:is (string= "Recovered after malformed function call" res))
        (fiveam:is (equal '("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"

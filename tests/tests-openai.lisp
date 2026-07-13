@@ -6,12 +6,17 @@
 (fiveam:test test-openai-api-key-resolution
   (let ((*openai-api-key* "my-explicit-key"))
     (fiveam:is (string= "my-explicit-key" (openai-api-key))))
-  (let ((*openai-api-key* nil)
-        (*getenv-function* (lambda (name)
-                             (if (string= name "OPENAI_API_KEY")
-                                 "my-env-key"
-                                 nil))))
-    (fiveam:is (string= "my-env-key" (openai-api-key)))))
+  (let* ((*openai-api-key* nil)
+         (context
+           (make-runtime-context
+            :getenv-function (lambda (name)
+                               (if (string= name "OPENAI_API_KEY")
+                                   "my-env-key"
+                                   nil)))))
+    (call-with-runtime-context
+     context
+     (lambda ()
+       (fiveam:is (string= "my-env-key" (openai-api-key)))))))
 
 (fiveam:test test-openai-chat-flow
   (let ((captured-payloads nil))
@@ -429,12 +434,17 @@ data: [DONE]")
 (fiveam:test test-lm-studio-api-key-resolution
   (let ((*lm-studio-api-key* "explicit-lm-key"))
     (fiveam:is (string= "explicit-lm-key" (lm-studio-api-key))))
-  (let ((*lm-studio-api-key* nil)
-        (*getenv-function* (lambda (name)
-                             (if (string= name "LM_API_TOKEN")
-                                 "env-lm-key"
-                                 nil))))
-    (fiveam:is (string= "env-lm-key" (lm-studio-api-key)))))
+  (let* ((*lm-studio-api-key* nil)
+         (context
+           (make-runtime-context
+            :getenv-function (lambda (name)
+                               (if (string= name "LM_API_TOKEN")
+                                   "env-lm-key"
+                                   nil)))))
+    (call-with-runtime-context
+     context
+     (lambda ()
+       (fiveam:is (string= "env-lm-key" (lm-studio-api-key)))))))
 
 (fiveam:test test-lm-studio-default-api-key-is-configurable
   (let ((*lm-studio-api-key* nil)
@@ -982,12 +992,7 @@ data: [DONE]")
            (setf (chatbot-filesystem-tools-p (conversation-chatbot conv)) t)
            (setf (chatbot-filesystem-root-directory (conversation-chatbot conv)) root)
            (setf (chatbot-filesystem-allowlist-path (conversation-chatbot conv)) allowlist-path)
-           (let ((*filesystem-access-approval-function*
-                 (lambda (ignored-bot directory tool-name)
-                   (declare (ignore ignored-bot))
-                   (setf prompted-directory (list (namestring directory) tool-name))
-                   t))
-                 (*http-post-function*
+           (let ((*http-post-function*
                  (lambda (url &rest args)
                    (declare (ignore url))
                    (incf call-count)
@@ -1004,6 +1009,14 @@ data: [DONE]")
 data: [DONE]")
                                200))))
                  (*openai-api-key* "test-key"))
+             (setf (chatbot-runtime-context (conversation-chatbot conv))
+                   (make-runtime-context
+                    :filesystem-access-approval-function
+                    (lambda (ignored-bot directory tool-name)
+                      (declare (ignore ignored-bot))
+                      (setf prompted-directory (list (namestring directory) tool-name))
+                      t)
+                    :http-post-function *http-post-function*))
              (let ((res (chat "Read approved file" :conversation conv)))
                (fiveam:is (string= "Done" res))
                (fiveam:is (equal (list (namestring (uiop:ensure-directory-pathname (truename outside-dir)))
