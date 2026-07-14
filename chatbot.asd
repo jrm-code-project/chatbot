@@ -17,6 +17,7 @@
                "str"
                "trivial-timeout"
                "uiop")
+  :weakly-depends-on ("llambda")
   :in-order-to ((test-op (test-op "chatbot/tests")))
   :components
   ((:module "src"
@@ -71,6 +72,7 @@
      (:file "backend-openai"     :pathname "backends/backend-openai" :depends-on ("package" "backend-registry" "vars" "data" "http-utils" "text-utils" "payloads" "openai-payloads" "mcp" "tool-execution" "turn-runner"))
      (:file "backend-google"     :pathname "backends/backend-google" :depends-on ("package" "backend-registry" "vars" "data" "logging" "http-utils" "payloads" "google-payloads" "google-caching" "mcp" "tool-execution" "turn-runner"))
      (:file "chat"               :pathname "core/chat" :depends-on ("package" "backend-registry" "vars" "data" "attachments" "conversations" "chat-entry" "backend-gemini" "backend-openai" "backend-google"))
+     (:file "backend-llambda-loader" :pathname "backends/backend-llambda-loader" :depends-on ("chat"))
      (:file "test-runner"        :pathname "core/test-runner" :depends-on ("package"))
      (:file "round-robin"        :pathname "orchestration/round-robin" :depends-on ("package" "data" "attachments" "prompt-decoration" "text-utils" "chat"))
      (:file "sandbox-personas"   :pathname "orchestration/sandbox-personas" :depends-on ("package" "data" "conversations" "prompt-decoration" "text-utils" "chat"))

@@ -2276,7 +2276,9 @@ After fence.")
 (fiveam:test test-chat-backend-registry
   (fiveam:is (eq 'equal (hash-table-test *chat-backends*)))
   (dolist (backend '(:gemini :google :openai :lm-studio))
-    (fiveam:is-true (gethash backend *chat-backends*))))
+    (fiveam:is-true (gethash backend *chat-backends*)))
+  (when (asdf:find-system "llambda/chatbot" nil)
+    (fiveam:is-true (gethash :llambda *chat-backends*))))
 
 (fiveam:test test-registered-chat-backend-receives-turn-arguments
   (let* ((*chat-backends* (make-hash-table :test 'equal))
