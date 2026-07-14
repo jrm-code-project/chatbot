@@ -303,12 +303,23 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
       (:execution-profile . ((:backend . ,(string-downcase (symbol-name (chatbot-backend sub-bot))))
                              (:model . ,(or (chatbot-model sub-bot) "default")))))))
 
-(defun parse-subordinate-control-response (response)
-  "Parses one strict subordinate control RESPONSE JSON payload."
-  (let* ((payload (parse-structured-json-response-or-error
-                   response
-                   :context "subordinate control response"))
-         (context "subordinate control response"))
+(defun parse-subordinate-control-response (response &key backend)
+  "Parses subordinate control RESPONSE, accepting raw text from :LLAMBDA."
+  (let* ((context "subordinate control response")
+         (payload
+           (handler-case
+               (parse-structured-json-response-or-error response :context context)
+             (malformed-json-error (condition)
+               (unless (eq backend :llambda)
+                 (error condition))
+               (let ((reply (string-trim
+                             '(#\Space #\Tab #\Return #\Linefeed)
+                             response)))
+                 (when (string= reply "")
+                   (error "Invalid ~A payload: reply must be a non-empty string."
+                          context))
+                 (return-from parse-subordinate-control-response
+                   (list :reply reply :spawn nil)))))))
     (unless (json-object-alist-p payload)
       (error "Invalid ~A payload: expected a JSON object." context))
     (ensure-json-object-only-keys payload '("reply" "spawn") '() context)
@@ -408,8 +419,10 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
      task-key
      (lambda ()
        (let* ((response (chat prompt :conversation sub-conv))
-              (control (parse-subordinate-control-response response))
               (sub-bot (conversation-chatbot sub-conv))
+              (control (parse-subordinate-control-response
+                        response
+                        :backend (chatbot-backend sub-bot)))
               (spawn-msg (maybe-execute-subordinate-spawn-request sub-bot
                                                                   (getf control :spawn))))
          (save-minion-state sub-conv)

@@ -33,6 +33,19 @@
     (fiveam:is (string= "done" (getf control :reply)))
     (fiveam:is (null (getf control :spawn)))))
 
+(fiveam:test test-parse-subordinate-control-response-accepts-llambda-raw-text
+  (let ((control (parse-subordinate-control-response
+                  "  Local inference result.  "
+                  :backend :llambda)))
+    (fiveam:is (string= "Local inference result." (getf control :reply)))
+    (fiveam:is (null (getf control :spawn)))))
+
+(fiveam:test test-parse-subordinate-control-response-rejects-other-raw-text
+  (fiveam:signals malformed-json-error
+    (parse-subordinate-control-response
+     "Local inference result."
+     :backend :gemini)))
+
 (defun test-openai-subordinate-stream (reply &key spawn)
   "Returns one OpenAI-compatible SSE stream whose content is a structured subordinate reply."
   (format nil

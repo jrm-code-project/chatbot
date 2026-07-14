@@ -260,8 +260,10 @@
      task-key
      (lambda ()
        (let* ((response (chat prompt :conversation conversation))
-              (control (parse-subordinate-control-response response))
               (sub-bot (conversation-chatbot conversation))
+              (control (parse-subordinate-control-response
+                        response
+                        :backend (chatbot-backend sub-bot)))
               (spawn-msg (maybe-execute-subordinate-spawn-request sub-bot
                                                                   (getf control :spawn))))
          (save-minion-state conversation)
