@@ -447,6 +447,14 @@
      (fiveam:is (search "[Tokens] prompt: 2" output))
      (fiveam:is (string= "Shared reply" callback-text)))))
 
+(fiveam:test test-emit-chat-response-text-prints-separators
+  (let ((stream (make-string-output-stream)))
+    (let ((*standard-output* stream))
+      (emit-chat-response-text "Hello model"))
+    (let ((output (string-trim '(#\Space #\Tab #\Newline #\Return) (get-output-stream-string stream))))
+      (fiveam:is (alexandria:starts-with-subseq "---" output))
+      (fiveam:is (alexandria:ends-with-subseq "---" output)))))
+
 (fiveam:test test-emit-chat-response-text-prints-short-thoughts
   (reset-global-token-grand-totals)
   (let ((stream (make-string-output-stream)))

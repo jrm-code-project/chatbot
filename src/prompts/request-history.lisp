@@ -137,7 +137,9 @@ Accepted signatures:
 (defun emit-chat-response-text (text &key callback usage thought-text)
   "Formats TEXT for display, writes token USAGE when present, optionally calls CALLBACK, and returns TEXT."
   (let ((sanitized-text (sanitize-chat-response-text text)))
+    (write-line "---" *standard-output*)
     (format-paragraphs sanitized-text :width 80)
+    (write-line "---" *standard-output*)
     (when usage
       (write-turn-token-summary usage :thought-text thought-text))
     (when callback
