@@ -151,7 +151,7 @@
    (checkpoint-name
    :initarg :checkpoint-name
    :accessor chatbot-checkpoint-name
-   :initform nil
+   :initform "DefaultConversation"
    :documentation "Optional explicit persistence identifier used for checkpoint filenames and restore identity.")
    (model
     :initarg :model

@@ -179,8 +179,7 @@
   "Returns CONVERSATION serialized to the shared persisted-state schema."
   (let ((bot (conversation-chatbot conversation)))
     (list :name (or name
-                    (chatbot-checkpoint-name bot)
-                    (chatbot-persona-name bot))
+                    (chatbot-checkpoint-name bot))
           :persona-name (or (chatbot-persona-name bot) "")
           :persona-source-name (or (chatbot-persona-source-name bot) "")
           :backend (string-downcase (symbol-name (chatbot-backend bot)))

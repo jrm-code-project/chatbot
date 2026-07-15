@@ -2289,6 +2289,24 @@
                                  (uiop:read-file-string nested-file-path)))))
       (uiop:delete-directory-tree sub-dir :validate t :if-does-not-exist :ignore))))
 
+(fiveam:test test-checkpoint-name-validation-and-defaults
+  (let* ((conv1 (new-chat))
+         (bot1 (conversation-chatbot conv1))
+         (conv2 (new-chat :persona-name "Bob"))
+         (bot2 (conversation-chatbot conv2))
+         (conv3 (new-chat :checkpoint-name "TaskX"))
+         (bot3 (conversation-chatbot conv3)))
+    (fiveam:is (string= "DefaultConversation" (chatbot-checkpoint-name bot1)))
+    (fiveam:is (string= "DefaultConversation" (conversation-checkpoint-name conv1)))
+    (fiveam:is (string= "Bob" (chatbot-checkpoint-name bot2)))
+    (fiveam:is (string= "Bob" (conversation-checkpoint-name conv2)))
+    (fiveam:is (string= "TaskX" (chatbot-checkpoint-name bot3)))
+    (fiveam:is (string= "TaskX" (conversation-checkpoint-name conv3)))
+    ;; Verify error is thrown if checkpoint name is empty/nil
+    (setf (chatbot-checkpoint-name bot1) nil)
+    (fiveam:signals error (conversation-checkpoint-name conv1))
+    (fiveam:signals error (save-minion-state conv1))))
+
 (fiveam:test test-chat-checkpoint-for-default-conversation
   (let* ((custom-context (make-runtime-context))
          (*default-conversation* (new-chat :backend :google :runtime-context custom-context))

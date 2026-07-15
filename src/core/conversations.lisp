@@ -141,7 +141,7 @@ configuration, instructions, or preloaded memory."
              (bot (make-instance 'chatbot
                                  :persona-name persona-name
                                  :persona-source-name persona-source-name
-                                 :checkpoint-name (or checkpoint-name persona-name)
+                                 :checkpoint-name (or checkpoint-name persona-name "DefaultConversation")
                                  :model chosen-model
                                  :backend backend
                                  :system-instruction system-instruction
@@ -292,20 +292,21 @@ Use NEW-CHAT instead when no persona should be loaded."
 
 (defun conversation-checkpoint-name (conversation)
   "Returns the persistence name used when checkpointing CONVERSATION."
-  (or (chatbot-checkpoint-name (conversation-chatbot conversation))
-      (chatbot-persona-name (conversation-chatbot conversation))
-      "DefaultConversation"))
+  (let ((name (chatbot-checkpoint-name (conversation-chatbot conversation))))
+    (unless (and name (stringp name) (string/= name ""))
+      (error "Conversation chatbot is missing an explicit checkpoint name identifier."))
+    name))
 
 (defun save-minion-state (conversation &key checkpoint-name)
   "Serializes the critical state and telemetry of CONVERSATION to disk."
   (let* ((bot (conversation-chatbot conversation))
          (name (or checkpoint-name
-                  (chatbot-checkpoint-name bot)
-                  (chatbot-persona-name bot))))
-    (when name
-      (let* ((dir (minions-data-directory))
-             (file-path (merge-pathnames (format nil "~A.json" name) dir))
-             (state-plist (conversation-persistence-state conversation :name name)))
+                   (chatbot-checkpoint-name bot))))
+    (unless (and name (stringp name) (string/= name ""))
+      (error "Attempted to save minion state without a valid checkpoint name."))
+    (let* ((dir (minions-data-directory))
+           (file-path (merge-pathnames (format nil "~A.json" name) dir))
+           (state-plist (conversation-persistence-state conversation :name name)))
         (ensure-directories-exist file-path)
         (with-open-file (stream file-path
                               :direction :output
@@ -314,7 +315,7 @@ Use NEW-CHAT instead when no persona should be loaded."
           (write-string (cl-json:encode-json-to-string state-plist) stream))
         (log-message :info "Freeze-dried minion state"
                      :context `(("name" . ,name) ("file" . ,(namestring file-path))))
-        (namestring file-path)))))
+        (namestring file-path))))
 
 (defun checkpoint-conversation-after-chat (conversation)
   "Persists CONVERSATION using the standard post-chat checkpoint naming policy."
