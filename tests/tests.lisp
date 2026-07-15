@@ -219,7 +219,7 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
   "Returns text values from MESSAGE content parts."
   (mapcar (lambda (part)
             (test-json-value-any part '(:text "text")))
-          (or (message-content-parts message) '())))
+          (message-content-parts message)))
 
 (defun message-all-texts (message)
   "Returns all human-readable text strings carried by MESSAGE."
