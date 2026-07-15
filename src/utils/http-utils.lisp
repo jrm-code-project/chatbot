@@ -120,14 +120,60 @@
 (defun delete-web-request (url &key headers connect-timeout read-timeout)
   "Logs and sends an outbound HTTP DELETE request."
   (let ((connect-timeout (or connect-timeout
-                            (current-http-connect-timeout)))
+                             (current-http-connect-timeout)))
         (read-timeout (or read-timeout
-                         (current-http-read-timeout))))
+                          (current-http-read-timeout))))
     (log-message :info "HTTP DELETE request"
-                :context `(("url" . ,(sanitize-url-for-log url))))
+                 :context `(("url" . ,(sanitize-url-for-log url))))
     (let ((http-delete-function (current-http-delete-function)))
       (with-exponential-backoff-retry (:max-retries 3 :base-delay-ms 100)
         (funcall http-delete-function url
-                :headers headers
-                :connect-timeout connect-timeout
-                :read-timeout read-timeout)))))
+                 :headers headers
+                 :connect-timeout connect-timeout
+                 :read-timeout read-timeout)))))
+
+(defun classify-http-response (status body)
+  "Classifies an HTTP response status and body, returning a reason keyword:
+  - :not-found
+  - :permission-denied
+  - :invalid-argument
+  - :other"
+  (let ((status-num (or status 0))
+        (body-str (string-downcase (or body ""))))
+    (cond
+      ((or (eql status-num 404)
+           (search "cachedcontent not found" body-str)
+           (search "cached content not found" body-str)
+           (and (search "permission_denied" body-str) (search "not found" body-str))
+           (and (search "permission denied" body-str) (search "not found" body-str)))
+       :not-found)
+      ((or (eql status-num 403)
+           (search "permission_denied" body-str)
+           (search "permission denied" body-str))
+       :permission-denied)
+      ((or (eql status-num 400)
+           (search "invalid argument" body-str))
+       :invalid-argument)
+      (t :other))))
+
+(defun classify-http-error (condition)
+  "Analyzes CONDITION (which can be a Dexador HTTP error or generic Lisp error) and returns a plist:
+  (:status <http-status> :body <body> :reason <reason-keyword>)."
+  (let ((status nil)
+        (body nil))
+    (typecase condition
+      (dexador:http-request-failed
+       (setf status (dexador:response-status condition)
+             body (dexador:response-body condition)))
+      (error
+       ;; Fallback: attempt to parse printed message if we don't have a direct Dexador condition object
+       (let ((msg (string-downcase (princ-to-string condition))))
+         (setf body msg)
+         (cond
+           ((search "404" msg) (setf status 404))
+           ((search "403" msg) (setf status 403))
+           ((search "400" msg) (setf status 400))))))
+
+    (list :status status
+          :body body
+          :reason (classify-http-response status body))))

@@ -3010,3 +3010,24 @@ data: [DONE]")
          (fiveam:signals error
            (get-web-request "https://api.test/get"))
          (fiveam:is (= 1 get-call-count)))))))
+
+(fiveam:test test-http-error-classification
+  ;; 1. Check classifying successful or other raw responses
+  (fiveam:is (eq :other (classify-http-response 200 "OK")))
+  (fiveam:is (eq :not-found (classify-http-response 404 "Not Found")))
+  (fiveam:is (eq :permission-denied (classify-http-response 403 "Forbidden")))
+  (fiveam:is (eq :invalid-argument (classify-http-response 400 "Bad Request")))
+
+  ;; 2. Check Google-specific cachedContent response strings
+  (fiveam:is (eq :not-found (classify-http-response 403 "{\"error\":{\"message\":\"CachedContent not found\"}}")))
+  (fiveam:is (eq :not-found (classify-http-response 403 "PERMISSION_DENIED and not found")))
+
+  ;; 3. Check classifying conditions/errors
+  (let ((err-404 (make-condition 'simple-error :format-control "API request failed with 404"))
+        (err-403-not-found (make-condition 'simple-error :format-control "API request failed with 403 (PERMISSION_DENIED: CachedContent not found)")))
+    (let ((c-404 (classify-http-error err-404))
+          (c-403-nf (classify-http-error err-403-not-found)))
+      (fiveam:is (= 404 (getf c-404 :status)))
+      (fiveam:is (eq :not-found (getf c-404 :reason)))
+      (fiveam:is (= 403 (getf c-403-nf :status)))
+      (fiveam:is (eq :not-found (getf c-403-nf :reason))))))

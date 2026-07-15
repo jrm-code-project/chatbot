@@ -313,27 +313,16 @@
 
 (defun google-content-cache-missing-text-p (text)
   "Returns true when TEXT describes an already-absent cachedContents resource."
-  (let ((message (string-downcase (or text ""))))
-    (or (search "cachedcontent not found" message)
-       (search "cached content not found" message)
-       (search "\"message\": \"cachedcontent not found" message)
-       (and (search "permission_denied" message)
-            (search "not found" message))
-       (and (search "permission denied" message)
-            (search "not found" message)))))
+  (eq (classify-http-response 403 text) :not-found))
 
 (defun google-content-cache-missing-condition-p (condition)
   "Returns true when CONDITION represents an already-absent cachedContents resource."
-  (google-content-cache-missing-text-p (princ-to-string condition)))
+  (eq (getf (classify-http-error condition) :reason) :not-found))
 
 (defun google-caching-error-p (condition)
   "Returns true when CONDITION describes a missing Google cache or permission-denied error."
-  (let ((msg (string-downcase (princ-to-string condition))))
-    (or (google-content-cache-missing-condition-p condition)
-        (search "cachedcontent" msg)
-        (search "cached content" msg)
-        (search "permission_denied" msg)
-        (search "permission denied" msg))))
+  (member (getf (classify-http-error condition) :reason)
+          '(:not-found :permission-denied)))
 
 (defun delete-google-content-cache (cached-content-name &key missing-ok-p)
   "Deletes CACHED-CONTENT-NAME and returns true when the API succeeds.
