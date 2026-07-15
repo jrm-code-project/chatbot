@@ -80,6 +80,30 @@
       (when (uiop:directory-exists-p mock-home)
        (uiop:delete-directory-tree mock-home :validate t)))))
 
+(fiveam:test test-resolve-persona-startup-spec-handles-resolution-and-fallback
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-startup-spec/" temp-dir))
+         (existing-dir (merge-pathnames ".Personas/Grog/" mock-home)))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+           ;; 1. Missing persona with skip-persona-restore
+           (let ((spec (handler-bind ((persona-directory-not-found
+                                       (lambda (condition)
+                                         (declare (ignore condition))
+                                         (invoke-restart 'skip-persona-restore))))
+                         (resolve-persona-startup-spec "Grog"))))
+             (fiveam:is-false (getf spec :directory))
+             (fiveam:is-true (getf spec :fallback-p)))
+           
+           ;; 2. Existing persona
+           (ensure-directories-exist existing-dir)
+           (let ((spec (resolve-persona-startup-spec "Grog")))
+             (fiveam:is (equal (uiop:ensure-directory-pathname existing-dir)
+                               (getf spec :directory)))
+             (fiveam:is-false (getf spec :fallback-p))))
+      (when (uiop:directory-exists-p mock-home)
+        (uiop:delete-directory-tree mock-home :validate t)))))
+
 (fiveam:test test-new-chat-persona-can-recover-by-creating-missing-directory
   (let* ((temp-dir (uiop:default-temporary-directory))
         (mock-home (merge-pathnames "mock-home-create-persona-chat/" temp-dir))

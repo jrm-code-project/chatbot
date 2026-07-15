@@ -193,8 +193,10 @@ configuration, instructions, or preloaded memory."
 The persona's configuration is read from ~/.Personas/<persona-name>/config.lisp
 and the system instructions are loaded from the persona's system-instruction file set.
 Use NEW-CHAT instead when no persona should be loaded."
-  (let ((persona-dir (resolve-persona-directory persona-name)))
-    (if (null persona-dir)
+  (let* ((spec (resolve-persona-startup-spec persona-name))
+         (persona-dir (getf spec :directory))
+         (fallback-p (getf spec :fallback-p)))
+    (if fallback-p
         (progn
          (log-message :warn "Skipping restore for missing persona"
                       :context `(("persona" . ,(princ-to-string persona-name))))

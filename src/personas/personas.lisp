@@ -80,6 +80,14 @@
                              (get-user-homedir-pathname)))
             (signal-persona-directory-not-found persona-name-or-directory)))))
 
+(defun resolve-persona-startup-spec (persona-name)
+  "Resolves the directory path for PERSONA-NAME, handling missing-persona recovery policy.
+Returns a plist: (:directory <directory-path-or-nil> :fallback-p <boolean>)."
+  (let ((persona-dir (resolve-persona-directory persona-name)))
+    (if (null persona-dir)
+        (list :directory nil :fallback-p t)
+        (list :directory persona-dir :fallback-p nil))))
+
 (defun persona-compressed-memory-path (persona-dir)
   "Returns the compressed-memory.txt pathname for PERSONA-DIR."
   (merge-pathnames "compressed-memory.txt" persona-dir))
