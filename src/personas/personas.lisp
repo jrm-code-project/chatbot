@@ -254,6 +254,26 @@ Returns a plist: (:directory <directory-path-or-nil> :fallback-p <boolean>)."
             entity-type
             observations)))
 
+(defun persona-memory-entity-summary-lines (entity)
+  "Returns a list of concise summary lines for ENTITY, with one observation per line."
+  (let* ((name (or (mcp-val :name entity) "Unnamed entity"))
+         (entity-type (or (mcp-val :entity-type entity)
+                          (mcp-val "entityType" entity)))
+         (observations (remove ""
+                               (mapcar #'princ-to-string
+                                       (json-array-elements (mcp-val :observations entity)))
+                               :test #'string=)))
+    (if observations
+        (mapcar (lambda (obs)
+                  (format nil "- ~A~@[ (~A)~]: ~A"
+                          name
+                          entity-type
+                          obs))
+                observations)
+        (list (format nil "- ~A~@[ (~A)~]"
+                      name
+                      entity-type)))))
+
 (defun persona-memory-relation-summary-line (relation)
   "Returns a concise one-line summary for RELATION."
   (format nil "- ~A -~A-> ~A"
@@ -271,7 +291,7 @@ Returns a plist: (:directory <directory-path-or-nil> :fallback-p <boolean>)."
            (remove nil
                    (list (when entities
                            (format nil "Entities:~%~{~A~^~%~}"
-                                   (mapcar #'persona-memory-entity-summary-line entities)))
+                                   (mapcan #'persona-memory-entity-summary-lines entities)))
                          (when relations
                            (format nil "Relations:~%~{~A~^~%~}"
                                    (mapcar #'persona-memory-relation-summary-line relations)))))))

@@ -1012,7 +1012,7 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
        (let ((*user-homedir-pathname-function* (lambda () mock-home)))
          (fiveam:is (equal compressed-path
                            (save-compressed-persona-memory "persona-compressed-memory-graph")))
-         (fiveam:is (string= (format nil "Entities:~%- Joe (person): likes Lisp; uses Emacs~%- SBCL (tool): fast compiler~%~%Relations:~%- Joe -uses-> SBCL")
+         (fiveam:is (string= (format nil "Entities:~%- Joe (person): likes Lisp~%- Joe (person): uses Emacs~%- SBCL (tool): fast compiler~%~%Relations:~%- Joe -uses-> SBCL")
                              (uiop:read-file-string compressed-path))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
