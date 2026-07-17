@@ -337,3 +337,20 @@
 
 (register-chat-backend :openai #'openai-chat-backend-handler)
 (register-chat-backend :lm-studio #'openai-chat-backend-handler)
+
+(defun openai-string->embedding-vector (text &key (model "text-embedding-3-small") api-key base-url)
+  "Calls the OpenAI embeddings API to generate an embedding vector for TEXT.
+Returns a vector of floats."
+  (let* ((resolved-api-key (or api-key (openai-api-key)))
+         (resolved-base-url (or base-url *openai-base-url*))
+         (headers (openai-request-headers resolved-api-key))
+         (url (concatenate 'string resolved-base-url "/embeddings"))
+         (payload (cl-json:encode-json-to-string
+                   `((:input . ,text)
+                     (:model . ,model))))
+         (response-json (post-web-request url headers payload)))
+    (let* ((response (cl-json:decode-json-from-string response-json))
+           (data-list (cdr (assoc :data response)))
+           (first-item (first data-list))
+           (embedding (cdr (assoc :embedding first-item))))
+      (coerce embedding 'vector))))

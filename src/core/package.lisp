@@ -104,4 +104,5 @@
            "*SCREENSHOT-PATH*"
            "*SCREENSHOT-PATH-1*"
            "*SCREENSHOT-PROMPT*"
-           "STRING->EMBEDDING-VECTOR"))
+           "STRING->EMBEDDING-VECTOR"
+           "OPENAI-STRING->EMBEDDING-VECTOR"))

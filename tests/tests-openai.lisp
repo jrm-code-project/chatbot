@@ -1039,3 +1039,25 @@ data: [DONE]")
     (fiveam:is (search "part 1" (openai-normalize-message-content parts-list)))
     (fiveam:is (search "part 2" (openai-normalize-message-content parts-list)))
     (fiveam:is (search "part 1" (openai-normalize-message-content (coerce parts-vector 'vector))))))
+
+(fiveam:test test-openai-string-to-embedding-vector
+  (let ((captured-url nil)
+        (captured-payload nil)
+        (captured-headers nil))
+    (let* ((context (make-runtime-context
+                     :http-post-function
+                     (lambda (url &rest args)
+                       (setf captured-url url)
+                       (setf captured-payload (getf args :content))
+                       (setf captured-headers (getf args :headers))
+                       (values "{\"object\": \"list\", \"data\": [{\"object\": \"embedding\", \"index\": 0, \"embedding\": [0.05, -0.15, 0.42]}], \"model\": \"text-embedding-3-small\"}" 200)))))
+      (call-with-runtime-context context
+        (lambda ()
+          (let ((*openai-api-key* "mocked-openai-embedding-key"))
+            (let ((vec (openai-string->embedding-vector "test message" :model "text-embedding-3-small")))
+              (fiveam:is (equalp #(0.05 -0.15 0.42) vec))
+              (fiveam:is (string= "https://api.openai.com/v1/embeddings" captured-url))
+              (let ((decoded (cl-json:decode-json-from-string captured-payload)))
+                (fiveam:is (string= "text-embedding-3-small" (cdr (assoc :model decoded))))
+                (fiveam:is (string= "test message" (cdr (assoc :input decoded)))))
+              (fiveam:is (string= "Bearer mocked-openai-embedding-key" (cdr (assoc "Authorization" captured-headers :test #'string=)))))))))))
