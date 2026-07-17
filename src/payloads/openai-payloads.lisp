@@ -66,7 +66,7 @@ Converts any Gemini/Google-style nested parts or non-string structures into clea
                                         (openai-role-for-message role)
                                         (acons "content" normalized-content clean-msg))
                                  message)))
-                         (append (persona-memory-messages persona-memory)
+                         (append ;(persona-memory-messages persona-memory)
                                  (persona-diary-messages persona-diary-entries)
                                  messages)))
         (current-user-message (openai-live-user-message chatbot input file-attachments)))
@@ -87,3 +87,4 @@ Converts any Gemini/Google-style nested parts or non-string structures into clea
       (mapcar (lambda (pair)
                 (translate-mcp-tool-to-openai (cdr pair)))
               mcp-tools))))
+

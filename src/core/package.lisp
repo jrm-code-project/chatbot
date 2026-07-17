@@ -103,4 +103,5 @@
            "+PLANNER-SYSTEM-INSTRUCTION+"
            "*SCREENSHOT-PATH*"
            "*SCREENSHOT-PATH-1*"
-           "*SCREENSHOT-PROMPT*"))
+           "*SCREENSHOT-PROMPT*"
+           "STRING->EMBEDDING-VECTOR"))

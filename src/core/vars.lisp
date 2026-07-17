@@ -276,6 +276,9 @@ Unknown backends fall back to the Gemini default."
 (defparameter *http-delete-function* #'dexador:delete
   "Function used to perform HTTP DELETE requests.")
 
+(defvar *last-interaction-model-call-duration* nil
+  "The accumulated duration (in seconds) of model calls during the current interaction.")
+
 (defun eager-mcp-startup-enabled-p ()
   "Returns true when eager shared MCP startup is enabled via environment."
   (let ((value (funcall *getenv-function* "CHATBOT_EAGER_MCP_STARTUP")))

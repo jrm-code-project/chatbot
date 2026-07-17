@@ -86,7 +86,7 @@
 (defun generate-content-cacheable-prefix-contents (chatbot persona-memory persona-diary-entries)
   "Returns the reusable generateContent prefix contents implied by CHATBOT preload."
   (mapcar #'history-message->generate-content-message
-          (append (persona-memory-messages persona-memory)
+          (append ;(persona-memory-messages persona-memory)
                   (persona-diary-messages persona-diary-entries))))
 
 (defun build-generate-content-request-contents (messages input &key chatbot persona-memory persona-diary-entries file-attachments effective-model omit-preloaded-history-p)

@@ -2125,6 +2125,17 @@ After fence.")
     (fiveam:is (search "[Thoughts]" output))
     (fiveam:is (search "Visible thought" output))))
 
+(fiveam:test test-write-turn-token-summary-prints-speed-metric
+  (reset-global-token-grand-totals)
+  (let ((*last-interaction-model-call-duration* 2.5))
+    (let ((output (with-output-to-string (s)
+                    (write-turn-token-summary
+                     '(("total_input_tokens" . 10)
+                       ("total_output_tokens" . 25)
+                       ("total_tokens" . 35))
+                     :stream s))))
+      (fiveam:is (search "[Speed] 10.00 tokens/s (25 tokens in 2.500s)" output)))))
+
 (fiveam:test test-write-turn-token-summary-accumulates-process-wide-grand-totals
   (reset-global-token-grand-totals)
   (let ((first-output (with-output-to-string (s)

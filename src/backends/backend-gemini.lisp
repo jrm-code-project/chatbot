@@ -426,3 +426,23 @@
                :return-turn-result-p t))
 
 (register-chat-backend :gemini #'gemini-chat-backend-handler)
+
+(defun string->embedding-vector (text &key (model "text-embedding-004") api-key)
+  "Calls the Gemini embedContent API to generate an embedding vector for TEXT.
+Returns a vector of floats."
+  (let* ((resolved-api-key (or api-key (gemini-api-key)))
+         (headers (list (cons "x-goog-api-key" resolved-api-key)
+                        (cons "Content-Type" "application/json")))
+         ;; Ensure model name is properly prefixed with models/ if not already present
+         (full-model-name (if (search "models/" model)
+                              model
+                              (concatenate 'string "models/" model)))
+         (url (format nil "~A/~A:embedContent" *gemini-base-url* full-model-name))
+         (payload (cl-json:encode-json-to-string
+                   `((:model . ,full-model-name)
+                     (:content . ((:parts . ,(vector `((:text . ,text)))))))))
+         (response-json (post-web-request url headers payload)))
+    (let* ((response (cl-json:decode-json-from-string response-json))
+           (embedding (cdr (assoc :embedding response)))
+           (values-list (cdr (assoc :values embedding))))
+      (coerce values-list 'vector))))

@@ -605,3 +605,14 @@
     (fiveam:is (member "hyperspecSearch"
                        (google-tool-names google-tools)
                        :test #'string=))))
+
+(fiveam:test test-persona-diary-messages-keeps-only-most-recent-8
+  (let* ((entries (loop for i from 1 to 12
+                        collect `((:filename . ,(format nil "~D.txt" i))
+                                  (:content . ,(format nil "Diary entry ~D." i)))))
+         (messages (persona-diary-messages entries)))
+    (fiveam:is (= 8 (length messages)))
+    (fiveam:is (string= (format nil "[Diary: 5.txt]~%Diary entry 5.")
+                        (cdr (assoc "content" (first messages) :test #'string=))))
+    (fiveam:is (string= (format nil "[Diary: 12.txt]~%Diary entry 12.")
+                        (cdr (assoc "content" (car (last messages)) :test #'string=))))))

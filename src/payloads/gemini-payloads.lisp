@@ -50,7 +50,7 @@
 
 (defun build-initial-interaction-input (messages input &key chatbot persona-memory persona-diary-entries file-attachments effective-model)
   "Builds the first-turn Interactions API input with any preloaded history."
-  (let* ((history-messages (append (persona-memory-messages persona-memory)
+  (let* ((history-messages (append ;(persona-memory-messages persona-memory)
                                    (persona-diary-messages persona-diary-entries)))
          (request-input (interaction-live-user-input-parts chatbot
                                                           input

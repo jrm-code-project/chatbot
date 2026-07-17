@@ -202,16 +202,18 @@ Accepted signatures:
         content)))
 
 (defun persona-diary-messages (entries)
-  "Returns provider-neutral synthetic history representing ordered diary ENTRIES."
+  "Returns provider-neutral synthetic history representing ordered diary ENTRIES.
+Uses only the most recent (last) 8 diary entries."
   (when entries
-    (mapcar (lambda (entry)
-              (list (cons "role" "model")
-                    (cons "content" (persona-diary-entry-message-text entry))))
-            entries)))
+    (let ((recent-entries (last entries 8)))
+      (mapcar (lambda (entry)
+                (list (cons "role" "model")
+                      (cons "content" (persona-diary-entry-message-text entry))))
+              recent-entries))))
 
 (defun build-request-history-messages (messages input &key chatbot persona-memory persona-diary-entries effective-model)
   "Builds request history by prepending persona preload ahead of ordinary MESSAGES and INPUT."
-  (append (persona-memory-messages persona-memory)
+  (append ;(persona-memory-messages persona-memory)
           (persona-diary-messages persona-diary-entries)
           (append-user-input-to-conversation-messages
            messages

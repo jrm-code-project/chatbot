@@ -303,6 +303,14 @@
                (getf grand-totals :thought)
                (getf grand-totals :cached)
                (getf grand-totals :total))
+       (when (and completion
+                  *last-interaction-model-call-duration*
+                  (> *last-interaction-model-call-duration* 0))
+         (let ((tokens-per-sec (/ completion *last-interaction-model-call-duration*)))
+           (format stream "[Speed] ~,2F tokens/s (~D tokens in ~,3Fs)~%"
+                   tokens-per-sec
+                   completion
+                   *last-interaction-model-call-duration*)))
        (when (and thought
                   (< thought 16)
                   thought-text)

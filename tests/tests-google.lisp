@@ -1254,3 +1254,25 @@
        (fiveam:is (equal '("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
                            "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-latest:generateContent")
                          (nreverse captured-urls)))))))
+
+(fiveam:test test-string-to-embedding-vector
+  (let ((captured-url nil)
+        (captured-payload nil)
+        (captured-headers nil))
+    (let* ((context (make-runtime-context
+                     :gemini-api-key-function (lambda () "mocked-embedding-key")
+                     :http-post-function
+                     (lambda (url &rest args)
+                       (setf captured-url url)
+                       (setf captured-payload (getf args :content))
+                       (setf captured-headers (getf args :headers))
+                       (values "{\"embedding\": {\"values\": [0.1, -0.2, 0.35]}}" 200)))))
+      (call-with-runtime-context context
+        (lambda ()
+          (let ((vec (string->embedding-vector "test message" :model "text-embedding-004")))
+            (fiveam:is (equalp #(0.1 -0.2 0.35) vec))
+            (fiveam:is (string= "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent" captured-url))
+            (let ((decoded (cl-json:decode-json-from-string captured-payload)))
+              (fiveam:is (string= "models/text-embedding-004" (cdr (assoc :model decoded)))))
+            (fiveam:is (search "test message" captured-payload))
+            (fiveam:is (string= "mocked-embedding-key" (cdr (assoc "x-goog-api-key" captured-headers :test #'string=))))))))))

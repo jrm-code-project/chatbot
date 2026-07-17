@@ -53,7 +53,12 @@ either recurse through the supplied STEP function or return the final turn resul
   (labels ((run-step (state recursion-depth)
              (ensure-chatbot-tool-recursion-depth backend recursion-depth)
              (handler-case
-                 (let ((outcome (funcall submit-turn state recursion-depth)))
+                 (let* ((start-time (get-internal-real-time))
+                        (outcome (funcall submit-turn state recursion-depth))
+                        (end-time (get-internal-real-time))
+                        (duration (/ (- end-time start-time) (float internal-time-units-per-second))))
+                   (when *last-interaction-model-call-duration*
+                     (incf *last-interaction-model-call-duration* duration))
                    (case (provider-turn-outcome-kind outcome)
                      (:retry
                       (unless retry-turn

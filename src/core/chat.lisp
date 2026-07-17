@@ -29,7 +29,8 @@
 (defun dispatch-chat-turn (conversation input callback
                            &key file-attachments effective-model effective-generation-config)
   "Dispatches one prepared chat turn for CONVERSATION's backend."
-  (let* ((bot (conversation-chatbot conversation))
+  (let* ((*last-interaction-model-call-duration* 0.0)
+         (bot (conversation-chatbot conversation))
          (result
            (invoke-chat-backend-turn bot
                                      conversation
