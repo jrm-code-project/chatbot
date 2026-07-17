@@ -1263,3 +1263,36 @@
               (fiveam:is (string= "models/text-embedding-004" (cdr (assoc :model decoded)))))
             (fiveam:is (search "test message" captured-payload))
             (fiveam:is (string= "mocked-embedding-key" (cdr (assoc "x-goog-api-key" captured-headers :test #'string=))))))))))
+
+(fiveam:test test-persona-vector-database
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-vector-db/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "persona-vector-db/" personas-dir))
+         (memory-path (merge-pathnames "memory.json" test-persona-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s memory-path :direction :output :if-exists :supersede)
+      (write-string "{\"entities\":[{\"name\":\"Joe\",\"entityType\":\"person\",\"observations\":[\"likes Lisp\"]},{\"name\":\"SBCL\",\"entityType\":\"tool\",\"observations\":[\"fast\"]}]}" s))
+    (unwind-protect
+         (let* ((context (make-runtime-context
+                          :gemini-api-key-function (lambda () "mocked-embedding-key")
+                          :http-post-function
+                          (lambda (url &rest args)
+                            (declare (ignore url args))
+                            (values "{\"embedding\": {\"values\": [0.5, 0.5]}}" 200)))))
+           (call-with-runtime-context context
+             (lambda ()
+               (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+                 ;; 1. Test creation
+                 (let ((db (create-persona-vector-database "persona-vector-db")))
+                   (fiveam:is (= 2 (length db)))
+                   (fiveam:is (equalp #(0.5 0.5) (car (first db))))
+                   (fiveam:is (string= "- Joe (person): likes Lisp" (cdr (first db))))
+                   
+                   ;; 2. Test search
+                   (let ((results (search-persona-vector-database "Lisp" db)))
+                     (fiveam:is (= 2 (length results)))
+                     ;; Cosine similarity between two [0.5, 0.5] vectors is approximately 1.0
+                     (fiveam:is (< (abs (- 1.0 (car (first results)))) 1e-5))
+                     (fiveam:is (string= "- Joe (person): likes Lisp" (cdr (first results))))))))))
+      (uiop:delete-directory-tree mock-home :validate t))))

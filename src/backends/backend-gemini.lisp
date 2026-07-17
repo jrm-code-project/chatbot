@@ -446,3 +446,53 @@ Returns a vector of floats."
            (embedding (cdr (assoc :embedding response)))
            (values-list (cdr (assoc :values embedding))))
       (coerce values-list 'vector))))
+
+(defun vector-dot-product (v1 v2)
+  "Calculates the dot product of two vectors."
+  (loop for x across v1
+        for y across v2
+        sum (* x y)))
+
+(defun vector-magnitude (v)
+  "Calculates the magnitude (Euclidean norm) of a vector."
+  (sqrt (loop for x across v sum (* x x))))
+
+(defun cosine-similarity (v1 v2)
+  "Calculates the cosine similarity between two vectors."
+  (let ((mag1 (vector-magnitude v1))
+        (mag2 (vector-magnitude v2)))
+    (if (and (> mag1 0) (> mag2 0))
+        (/ (vector-dot-product v1 v2) (* mag1 mag2))
+        0.0)))
+
+(defun create-persona-vector-database (persona-name-or-directory &key (model "text-embedding-004") api-key)
+  "Loads the persona's memory.json, generates persona-memory-entity-summary-lines,
+and indexes each line by its Gemini embedding. Returns a giant alist mapping (embedding-vector . line-string)."
+  (let* ((persona-dir (resolve-persona-directory persona-name-or-directory))
+         (memory-json-path (or (persona-memory-json-path persona-dir)
+                               (error "Persona ~A does not contain memory.json."
+                                      persona-name-or-directory)))
+         (records (persona-memory-json-records memory-json-path))
+         (entities (safe-getf records :entities))
+         ;; Extract all lines using persona-memory-entity-summary-lines
+         (lines (remove-duplicates
+                 (mapcan #'persona-memory-entity-summary-lines entities)
+                 :test #'string=)))
+    (mapcar (lambda (line)
+              (let ((embedding (string->embedding-vector line :model model :api-key api-key)))
+                (cons embedding line)))
+            lines)))
+
+(defun search-persona-vector-database (query db &key (model "text-embedding-004") api-key)
+  "Takes a QUERY prompt, gets its Gemini embedding, calculates cosine similarity
+across the DB alist, and returns the top 8 results as a sorted alist of (similarity . line-string)."
+  (let* ((query-embedding (string->embedding-vector query :model model :api-key api-key))
+         (scored-lines
+           (mapcar (lambda (pair)
+                     (let* ((embedding (car pair))
+                            (line (cdr pair))
+                            (score (cosine-similarity query-embedding embedding)))
+                       (cons score line)))
+                   db))
+         (sorted-lines (stable-sort scored-lines #'> :key #'car)))
+    (subseq sorted-lines 0 (min 8 (length sorted-lines)))))
