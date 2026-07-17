@@ -56,19 +56,12 @@
 (fiveam:test test-initial-interaction-payload-includes-preloaded-messages
   (let ((bot (make-instance 'chatbot :model "gemini-3.5-flash")))
     (let* ((payload (make-interaction-payload bot "Hello"
-                                             :messages nil
-                                             :persona-memory "Stored persona memory."
-                                             :stream t))
-           (input (mcp-val "input" payload))
-           (first-step (aref input 0))
-           (second-step (aref input 1))
-           (third-step (aref input 2)))
-      (fiveam:is (= 3 (length input)))
-      (assert-json-field= first-step "type" "user_input")
-      (assert-json-field= second-step "type" "model_output")
-      (assert-json-field= third-step "type" "user_input")
-      (assert-json-field= (aref (mcp-val "content" second-step) 0) "text" "Stored persona memory.")
-      (assert-json-field= (aref (mcp-val "content" third-step) 0) "text" "Hello"))))
+                                              :messages nil
+                                              :persona-memory "Stored persona memory."
+                                              :stream t))
+           (input (mcp-val "input" payload)))
+       (fiveam:is (stringp input))
+       (fiveam:is (string= "Hello" input)))))
 
 (fiveam:test test-resolve-chat-input-files-expands-directories-wildcards-and-deduplicates
   (let* ((temp-dir (uiop:default-temporary-directory))
@@ -335,22 +328,22 @@
                                               ((:filename . "2.txt") (:content . "Second diary entry.")))
                      :stream t))
            (input (cdr (assoc "input" payload :test #'string=)))
-           (third-step (aref input 2))
-           (fourth-step (aref input 3))
-           (fifth-step (aref input 4)))
-      (fiveam:is (= 5 (length input)))
-      (fiveam:is (string= "model_output" (cdr (assoc "type" third-step :test #'string=))))
+           (first-step (aref input 0))
+           (second-step (aref input 1))
+           (third-step (aref input 2)))
+      (fiveam:is (= 3 (length input)))
+      (fiveam:is (string= "model_output" (cdr (assoc "type" first-step :test #'string=))))
       (fiveam:is (string= (format nil "[Diary: 1.txt]~%First diary entry.")
                           (cdr (assoc "text"
-                                      (aref (cdr (assoc "content" third-step :test #'string=)) 0)
+                                      (aref (cdr (assoc "content" first-step :test #'string=)) 0)
                                       :test #'string=))))
       (fiveam:is (string= (format nil "[Diary: 2.txt]~%Second diary entry.")
                           (cdr (assoc "text"
-                                      (aref (cdr (assoc "content" fourth-step :test #'string=)) 0)
+                                      (aref (cdr (assoc "content" second-step :test #'string=)) 0)
                                       :test #'string=))))
       (fiveam:is (string= "Hello"
                           (cdr (assoc "text"
-                                      (aref (cdr (assoc "content" fifth-step :test #'string=)) 0)
+                                      (aref (cdr (assoc "content" third-step :test #'string=)) 0)
                                       :test #'string=)))))))
 
 (fiveam:test test-initial-interaction-payload-prefixes-current-input-with-timestamp

@@ -175,14 +175,10 @@ data: [DONE]")
         (assert-role/content-sequence
          first-messages
          '(("system" "Be helpful")
-           ("user" "Please concisely summarize your knowledge graph.")
-           ("assistant" "Stored persona memory.")
            ("user" "First live turn")))
         (assert-role/content-sequence
          second-messages
          '(("system" "Be helpful")
-           ("user" "Please concisely summarize your knowledge graph.")
-           ("assistant" "Stored persona memory.")
            ("user" "First live turn")
            ("assistant" "Hello OpenAI")
            ("user" "Second live turn")))
@@ -425,8 +421,6 @@ data: [DONE]")
         (assert-role/content-sequence
          messages
          `(("system" "Be helpful")
-           ("user" "Please concisely summarize your knowledge graph.")
-           ("assistant" "Stored persona memory.")
            ("assistant" ,(format nil "[Diary: 1.txt]~%First diary entry."))
            ("assistant" ,(format nil "[Diary: 2.txt]~%Second diary entry."))
            ("user" "First live turn")))))))

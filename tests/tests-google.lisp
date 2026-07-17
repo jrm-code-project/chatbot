@@ -145,26 +145,14 @@
              (first-contents (google-payload-contents first-payload))
              (second-payload (decode-test-json (second captured-payloads)))
              (second-contents (google-payload-contents second-payload)))
-        (fiveam:is (= 3 (length first-contents)))
-        (assert-google-message-texts (first first-contents)
-                                    "user"
-                                    '("Please concisely summarize your knowledge graph."))
-        (assert-google-message-texts (second first-contents)
-                                    "model"
-                                    '("Stored persona memory."))
-        (assert-google-message-texts (third first-contents) "user" '("First live turn"))
-        (fiveam:is (= 5 (length second-contents)))
-        (assert-google-message-texts (first second-contents)
-                                    "user"
-                                    '("Please concisely summarize your knowledge graph."))
+        (fiveam:is (= 1 (length first-contents)))
+        (assert-google-message-texts (first first-contents) "user" '("First live turn"))
+        (fiveam:is (= 3 (length second-contents)))
+        (assert-google-message-texts (first second-contents) "user" '("First live turn"))
         (assert-google-message-texts (second second-contents)
                                     "model"
-                                    '("Stored persona memory."))
-        (assert-google-message-texts (third second-contents) "user" '("First live turn"))
-        (assert-google-message-texts (fourth second-contents)
-                                    "model"
                                     '("Hello from Google non-streaming"))
-        (assert-google-message-texts (fifth second-contents) "user" '("Second live turn"))
+        (assert-google-message-texts (third second-contents) "user" '("Second live turn"))
         (fiveam:is (= 4 (length (conversation-messages conv))))
         (fiveam:is (string= "Stored persona memory."
                            (conversation-persona-memory conv)))))))
@@ -885,12 +873,11 @@
                                 (conversation-persona-memory conv)))
             (chat "First live turn" :conversation conv)
             (let* ((payload (decode-test-json captured-content))
-                   (contents (google-payload-contents payload))
-                   (preloaded-model-msg (second contents)))
-              (fiveam:is (= 3 (length contents)))
-              (assert-google-message-texts preloaded-model-msg
-                                           "model"
-                                           '("Stored persona memory.")))))
+                   (contents (google-payload-contents payload)))
+              (fiveam:is (= 1 (length contents)))
+              (assert-google-message-texts (first contents)
+                                           "user"
+                                           '("First live turn")))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
 (fiveam:test test-google-chat-includes-preloaded-diary-history
@@ -913,14 +900,14 @@
       (chat "First live turn" :conversation conv)
       (let* ((payload (decode-test-json captured-content))
             (contents (google-payload-contents payload)))
-       (fiveam:is (= 5 (length contents)))
-       (assert-google-message-texts (third contents)
+       (fiveam:is (= 3 (length contents)))
+       (assert-google-message-texts (first contents)
                                     "model"
                                     (list (format nil "[Diary: 1.txt]~%First diary entry.")))
-       (assert-google-message-texts (fourth contents)
+       (assert-google-message-texts (second contents)
                                     "model"
                                     (list (format nil "[Diary: 2.txt]~%Second diary entry.")))
-       (assert-google-message-texts (fifth contents)
+       (assert-google-message-texts (third contents)
                                     "user"
                                     '("First live turn"))))))
 
