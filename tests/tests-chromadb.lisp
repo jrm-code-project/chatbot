@@ -330,3 +330,55 @@
           (fiveam:is (not (null (search "gemini-2.5-flash" (first urls-called)))))
           ;; Assert that the final result returned is from the stronger model
           (fiveam:is (string= "I am a stronger model response!" (chat-turn-result-text response))))))))
+
+(fiveam:def-test test-chroma-knowledge-graph-sync ()
+  "Verifies that successful execution of add_observations and create_entities syncs to the ChromaDB <persona>_Memory collection."
+  (let* ((bot (make-instance 'chatbot :persona-name "V"))
+         (context (make-test-backend-runtime-context nil))
+         (urls-called nil)
+         (added-docs nil))
+    ;; Mock HTTP GET for ChromaDB heartbeat/get-collection
+    (setf (runtime-context-http-get-function context)
+          (lambda (url &rest args)
+            (declare (ignore args))
+            (cond
+              ((search "/heartbeat" url)
+               "{\"nanosecond heartbeat\": 1718218128310}")
+              ((search "/collections/V_Memory" url)
+               "{\"name\": \"V_Memory\", \"id\": \"v-memory-uuid-456\", \"metadata\": null}")
+              (t (error "Unexpected GET URL: ~A" url)))))
+    ;; Mock HTTP POST for embedding generator, complete-sentence generator, and ChromaDB add
+    (setf (runtime-context-http-post-function context)
+          (lambda (url &rest args)
+            (push url urls-called)
+            (let ((content (getf args :content)))
+              (cond
+                ;; 1. Embedding generator
+                ((search "embedContent" url)
+                 "{\"embedding\": {\"values\": [0.5, 0.5, 0.5]}}")
+                ;; 2. Complete-sentence generator (stateless generateContent)
+                ((search "generateContent" url)
+                 "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"V likes Common Lisp.\"}]}}]}" )
+                ;; 3. ChromaDB record add
+                ((search "/collections/" url)
+                 (let ((parsed (cl-json:decode-json-from-string content)))
+                   (push (coerce (cdr (assoc :documents parsed)) 'list) added-docs))
+                 "{\"status\": \"success\"}")
+                (t (error "Unexpected POST URL: ~A" url))))))
+    (call-with-runtime-context context
+      (lambda ()
+        (let ((*execute-mcp-tool-function*
+                (lambda (server tool-name arguments)
+                  (declare (ignore server tool-name arguments))
+                  "ok")))
+          ;; Test case 1: execute add_observations
+          (let ((args '((:observations . #(((:entity--name . "V") (:contents . #("Likes Common Lisp"))))))))
+            (execute-chatbot-tool bot :mcp "add_observations" args)
+            (fiveam:is (= 1 (length added-docs)))
+            (fiveam:is (string= "V likes Common Lisp." (first (first added-docs)))))
+          ;; Test case 2: execute create_entities
+          (setf added-docs nil)
+          (let ((args '((:entities . #(((:name . "V") (:entity--type . "Persona") (:observations . #("Likes Common Lisp"))))))))
+            (execute-chatbot-tool bot :mcp "create_entities" args)
+            (fiveam:is (= 1 (length added-docs)))
+            (fiveam:is (string= "V likes Common Lisp." (first (first added-docs))))))))))

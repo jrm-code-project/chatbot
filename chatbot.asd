@@ -55,7 +55,7 @@
      (:file "agentic-loops"      :pathname "orchestration/agentic-loops" :depends-on ("package" "vars" "data" "logging" "agentic-loop-startup"))
      (:file "agentic-loop-tools" :pathname "mcp/agentic-loop-tools" :depends-on ("package" "vars" "data" "mcp" "tool-arguments" "agentic-loops"))
      (:file "builtin-registrations" :pathname "mcp/builtin-registrations" :depends-on ("package" "vars" "data" "json-utils" "builtin-dispatch" "mcp" "tool-arguments" "filesystem-tools" "chatbot-state-tools" "eval-grounding-tools" "git-tools" "planner-minion-tools" "agentic-loops" "agentic-loop-tools"))
-     (:file "tool-execution"     :pathname "mcp/tool-execution" :depends-on ("package" "vars" "data" "json-utils" "builtin-tools" "builtin-dispatch" "mcp-dispatch" "tool-registry" "mcp" "tool-arguments" "filesystem-tools" "chatbot-state-tools" "eval-grounding-tools" "git-tools" "planner-minion-tools" "agentic-loops" "agentic-loop-tools" "builtin-registrations"))
+     (:file "tool-execution"     :pathname "mcp/tool-execution" :depends-on ("package" "vars" "data" "json-utils" "builtin-tools" "builtin-dispatch" "mcp-dispatch" "tool-registry" "mcp" "tool-arguments" "filesystem-tools" "chatbot-state-tools" "eval-grounding-tools" "git-tools" "planner-minion-tools" "agentic-loops" "agentic-loop-tools" "builtin-registrations" "chromadb"))
      (:file "attachment-paths"   :pathname "attachments/attachment-paths" :depends-on ("package" "vars"))
      (:file "attachment-mime"    :pathname "attachments/attachment-mime" :depends-on ("package"))
      (:file "prompt-decoration"  :pathname "prompts/prompt-decoration" :depends-on ("package" "data" "chromadb"))
