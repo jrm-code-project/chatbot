@@ -14,15 +14,16 @@
   (chatbot-gemini-fallback-to-google-p bot))
 
 (defun retry-gemini-turn-on-google-gemini-pro-latest (bot input conversation callback
-                                                           &key file-attachments effective-generation-config
+                                                           &key file-attachments effective-model effective-generation-config
                                                              return-turn-result-p
                                                              (recursion-depth 0))
-  "Resubmits a Gemini turn through the Google backend on gemini-pro-latest."
+  "Resubmits a Gemini turn through the Google backend on a stronger model."
   (retry-on-google-gemini-pro-latest bot
                                      input
                                      conversation
                                      callback
                                      :file-attachments file-attachments
+                                     :effective-model effective-model
                                      :effective-generation-config effective-generation-config
                                      :return-turn-result-p return-turn-result-p
                                      :recursion-depth recursion-depth))

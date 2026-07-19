@@ -67,21 +67,25 @@
 
 (defun retry-on-google-gemini-pro-latest (bot input conversation callback
                                             &key file-attachments request-contents history-messages
+                                              effective-model
                                               effective-generation-config
                                               return-turn-result-p
                                               (recursion-depth 0))
-  "Resubmits the current turn through the Google backend on gemini-pro-latest."
+  "Resubmits the current turn through the Google backend on a stronger model."
   (declare (ignore request-contents history-messages))
-  (chat-google bot
-               input
-               conversation
-               callback
-               :file-attachments file-attachments
-               :effective-model +google-gemini-model-override-model+
-               :effective-generation-config effective-generation-config
-               :malformed-response-fallback-attempted-p t
-               :return-turn-result-p return-turn-result-p
-               :recursion-depth recursion-depth))
+  (let* ((current-model (or effective-model (chatbot-model bot)))
+         (stronger (stronger-model current-model)))
+    (chat-google bot
+                 input
+                 conversation
+                 callback
+                 :file-attachments file-attachments
+                 :effective-model stronger
+                 :effective-generation-config effective-generation-config
+                 :malformed-response-fallback-attempted-p t
+                 :return-turn-result-p return-turn-result-p
+                 :recursion-depth recursion-depth
+                 :bypass-cache-p t)))
 
 (defun google-request-state (bot input conversation file-attachments effective-model effective-generation-config
                               &key request-contents history-messages malformed-response-fallback-attempted-p cached-content-name bypass-cache-p)

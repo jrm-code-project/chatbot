@@ -294,3 +294,32 @@
   (fiveam:is (string= "models/gemini-pro-latest" (stronger-model "models/gemini-pro-latest")))
   ;; Model name is case-insensitive during matching but returned in standard format
   (fiveam:is (string= "gemini-2.5-flash" (stronger-model "GEMINI-1.5-FLASH"))))
+
+(fiveam:def-test test-google-chat-retries-empty-response-on-stronger-model ()
+  "Verifies that when a Google backend response is empty, it is retried on a stronger model."
+  (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-1.5-flash"))
+         (context (make-test-backend-runtime-context nil))
+         (urls-called nil))
+    (setf (runtime-context-http-post-function context)
+          (lambda (url &rest args)
+            (declare (ignore args))
+            (push url urls-called)
+            (cond
+              ;; First call is gemini-1.5-flash -> return empty text
+              ((search "gemini-1.5-flash" url)
+               "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"\"}]}}]}")
+              ;; Second call should be gemini-2.5-flash (stronger model!) -> return valid response
+              ((search "gemini-2.5-flash" url)
+               "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"I am a stronger model response!\"}]}}]}")
+              (t (error "Unexpected model URL: ~A" url)))))
+    (call-with-runtime-context context
+      (lambda ()
+        (multiple-value-bind (response status)
+            (chat-google bot "Hello" (new-chat :backend :google :model "gemini-1.5-flash") nil :return-turn-result-p t)
+          (declare (ignore status))
+          ;; Assert that both the weak and stronger model URLs were called in order
+          (fiveam:is (= 2 (length urls-called)))
+          (fiveam:is (not (null (search "gemini-1.5-flash" (second urls-called)))))
+          (fiveam:is (not (null (search "gemini-2.5-flash" (first urls-called)))))
+          ;; Assert that the final result returned is from the stronger model
+          (fiveam:is (string= "I am a stronger model response!" (chat-turn-result-text response))))))))
