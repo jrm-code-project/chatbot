@@ -58,7 +58,7 @@
      (:file "tool-execution"     :pathname "mcp/tool-execution" :depends-on ("package" "vars" "data" "json-utils" "builtin-tools" "builtin-dispatch" "mcp-dispatch" "tool-registry" "mcp" "tool-arguments" "filesystem-tools" "chatbot-state-tools" "eval-grounding-tools" "git-tools" "planner-minion-tools" "agentic-loops" "agentic-loop-tools" "builtin-registrations"))
      (:file "attachment-paths"   :pathname "attachments/attachment-paths" :depends-on ("package" "vars"))
      (:file "attachment-mime"    :pathname "attachments/attachment-mime" :depends-on ("package"))
-     (:file "prompt-decoration"  :pathname "prompts/prompt-decoration" :depends-on ("package" "data"))
+     (:file "prompt-decoration"  :pathname "prompts/prompt-decoration" :depends-on ("package" "data" "chromadb"))
      (:file "request-history"    :pathname "prompts/request-history" :depends-on ("package" "data" "prompt-decoration"))
      (:file "attachments"        :pathname "attachments/attachments" :depends-on ("package" "attachment-paths" "attachment-mime"))
      (:file "payloads"           :pathname "payloads/payloads" :depends-on ("package" "data" "json-utils" "mcp" "attachments" "prompt-decoration" "request-history"))

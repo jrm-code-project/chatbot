@@ -202,3 +202,47 @@
           ;; Payload 3: delete
           (let ((p3 (nth 3 payloads)))
             (fiveam:is (equal '("id1") (coerce (cdr (assoc :ids p3)) 'list)))))))))
+
+(fiveam:def-test test-chroma-diary-prompt-injection-success ()
+  "Verifies that relevant diary entries are queried and injected into the user prompt."
+  (let* ((mock-get-called-p nil)
+         (mock-post-called-p nil)
+         (mock-embed-called-p nil)
+         (chatbot (make-instance 'chatbot :persona-name "V"))
+         (context (make-test-backend-runtime-context nil)))
+    ;; 1. Mock GET for heartbeat and get-collection
+    (setf (runtime-context-http-get-function context)
+          (lambda (url &rest args)
+            (declare (ignore args))
+            (setf mock-get-called-p t)
+            (cond
+              ((search "/heartbeat" url)
+               "{\"nanosecond heartbeat\": 1718218128310}")
+              ((search "/collections/V_Diary" url)
+               "{\"name\": \"V_Diary\", \"id\": \"v-diary-uuid-123\", \"metadata\": null}")
+              (t (error "Unexpected GET URL: ~A" url)))))
+    ;; 2. Mock POST for embedding generation and collection query
+    (setf (runtime-context-http-post-function context)
+          (lambda (url &rest args)
+            (setf mock-post-called-p t)
+            (cond
+              ((search "embedContent" url)
+               (setf mock-embed-called-p t)
+               "{\"embedding\": {\"values\": [0.1, 0.2, 0.3]}}")
+              ((search "/query" url)
+               "{\"ids\": [[\"diary-01\"]], \"documents\": [[\"This is V's secret entry text.\"]], \"metadatas\": [[{\"entry_number\": 1, \"date\": \"2026-07-19\", \"tone\": \"cynical\", \"topic\": \"K-machine\"}]]}")
+              (t (error "Unexpected POST URL: ~A" url)))))
+    (call-with-runtime-context context
+      (lambda ()
+        (let ((decorated (decorate-live-user-input chatbot "Help me with the K-machine!")))
+          (fiveam:is (not (null mock-get-called-p)))
+          (fiveam:is (not (null mock-post-called-p)))
+          (fiveam:is (not (null mock-embed-called-p)))
+          ;; Assert that the prompt contains our query and the transient injected context
+          (fiveam:is (not (null (search "Help me with the K-machine!" decorated))))
+          (fiveam:is (not (null (search "[Relevant Historical Diary Entries (Transient Context)]" decorated))))
+          (fiveam:is (not (null (search "Entry Number: 1" decorated))))
+          (fiveam:is (not (null (search "Date: 2026-07-19" decorated))))
+          (fiveam:is (not (null (search "Tone: cynical" decorated))))
+          (fiveam:is (not (null (search "Topic: K-machine" decorated))))
+          (fiveam:is (not (null (search "This is V's secret entry text." decorated)))))))))

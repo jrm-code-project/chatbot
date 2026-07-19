@@ -552,3 +552,41 @@ Returns a plist: (:directory <directory-path-or-nil> :fallback-p <boolean>)."
     (when entries
       (setf (conversation-persona-diary-entries conversation) entries))
     conversation))
+
+(defun save-persona-diary-entry (persona-name content &key entry-number date tone topic)
+  "Saves a new diary entry for the persona named PERSONA-NAME to both disk (under ~/.Personas/<persona>/Diary/<entry_number>.txt)
+and to the ChromaDB <persona>_Diary collection.
+If the ChromaDB collection does not exist, it will be created.
+Returns the response from the ChromaDB add operation."
+  (let* ((persona-dir (resolve-persona-directory persona-name))
+         (diary-dir (merge-pathnames "Diary/" persona-dir))
+         (filename (format nil "~D.txt" entry-number))
+         (file-path (merge-pathnames filename diary-dir)))
+    (ensure-directories-exist file-path)
+    (with-open-file (stream file-path :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-string content stream))
+    (log-message :info "Saved diary entry to disk"
+                 :context `(("path" . ,(namestring file-path))))
+    ;; If ChromaDB is alive, add to collection
+    (if (not (chroma-alive-p))
+        (progn
+          (log-message :info "ChromaDB not running. Skipping collection insert."
+                       :context `(("persona" . ,(string persona-name))))
+          (values nil :host-unavailable))
+        (let* ((collection-name (format nil "~A_Diary" (string persona-name)))
+               (collection (or (chroma-get-collection collection-name)
+                               (chroma-create-collection collection-name :get-or-create t))))
+          (if (null collection)
+              (progn
+                (log-message :warn "Could not create or get ChromaDB collection"
+                             :context `(("collection" . ,collection-name)))
+                nil)
+              (let ((collection-id (cdr (assoc :id collection)))
+                    (id (format nil "diary-~2,'0D" entry-number))
+                    (metadata `((:entry--number . ,entry-number)
+                                (:date . ,(or date ""))
+                                (:tone . ,(or tone ""))
+                                (:topic . ,(or topic "")))))
+                (chroma-add collection-id (list id)
+                            :documents (list content)
+                            :metadatas (list metadata))))))))
