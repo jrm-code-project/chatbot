@@ -207,9 +207,24 @@ If the given model is already the strongest model (or not recognized), returns i
                    "gemini-2.5-pro"
                    "gemini-pro-latest"))
          (pos (position clean-name models :test #'string-equal)))
-    (if (and pos (< pos (1- (length models))))
-        (let ((stronger (nth (1+ pos) models)))
-          (if prefix-p
-              (concatenate 'string "models/" stronger)
-              stronger))
-        model)))
+    (cond
+      ;; 1. If recognized in the explicit hierarchy, move up by 1 step
+      ((and pos (< pos (1- (length models))))
+       (let ((stronger (nth (1+ pos) models)))
+         (if prefix-p
+             (concatenate 'string "models/" stronger)
+             stronger)))
+      ;; 2. If not explicitly listed, but contains "flash", replace it with "pro"
+      ((search "flash" clean-name :test #'char-equal)
+       (let ((stronger (cl-ppcre:regex-replace-all "(?i)flash" clean-name "pro")))
+         (if prefix-p
+             (concatenate 'string "models/" stronger)
+             stronger)))
+      ;; 3. If it is another Gemini model, escalate to gemini-pro-latest
+      ((and (search "gemini" clean-name :test #'char-equal)
+            (not (string-equal clean-name "gemini-pro-latest")))
+       (if prefix-p
+           "models/gemini-pro-latest"
+           "gemini-pro-latest"))
+      ;; 4. Fallback - return as-is
+      (t model))))

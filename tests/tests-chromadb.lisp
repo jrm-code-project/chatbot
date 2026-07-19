@@ -293,7 +293,12 @@
   (fiveam:is (string= "models/gemini-2.5-flash" (stronger-model "models/gemini-1.5-flash")))
   (fiveam:is (string= "models/gemini-pro-latest" (stronger-model "models/gemini-pro-latest")))
   ;; Model name is case-insensitive during matching but returned in standard format
-  (fiveam:is (string= "gemini-2.5-flash" (stronger-model "GEMINI-1.5-FLASH"))))
+  (fiveam:is (string= "gemini-2.5-flash" (stronger-model "GEMINI-1.5-FLASH")))
+  ;; Dynamic heuristic tests for unlisted preview models (e.g. gemini-3-flash-preview)
+  (fiveam:is (string= "gemini-3-pro-preview" (stronger-model "gemini-3-flash-preview")))
+  (fiveam:is (string= "models/gemini-3-pro-preview" (stronger-model "models/gemini-3-flash-preview")))
+  (fiveam:is (string= "gemini-pro-latest" (stronger-model "gemini-3-pro-preview")))
+  (fiveam:is (string= "models/gemini-pro-latest" (stronger-model "models/gemini-3-pro-preview"))))
 
 (fiveam:def-test test-google-chat-retries-empty-response-on-stronger-model ()
   "Verifies that when a Google backend response is empty, it is retried on a stronger model."
@@ -307,10 +312,10 @@
             (cond
               ;; First call is gemini-1.5-flash -> return empty text
               ((search "gemini-1.5-flash" url)
-               "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"\"}]}}]}")
+               (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"\"}]}}]}" 200))
               ;; Second call should be gemini-2.5-flash (stronger model!) -> return valid response
               ((search "gemini-2.5-flash" url)
-               "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"I am a stronger model response!\"}]}}]}")
+               (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"I am a stronger model response!\"}]}}]}" 200))
               (t (error "Unexpected model URL: ~A" url)))))
     (call-with-runtime-context context
       (lambda ()

@@ -15,6 +15,7 @@
 
 (defun retry-gemini-turn-on-google-gemini-pro-latest (bot input conversation callback
                                                            &key file-attachments effective-model effective-generation-config
+                                                             use-stronger-model-p
                                                              return-turn-result-p
                                                              (recursion-depth 0))
   "Resubmits a Gemini turn through the Google backend on a stronger model."
@@ -25,6 +26,7 @@
                                      :file-attachments file-attachments
                                      :effective-model effective-model
                                      :effective-generation-config effective-generation-config
+                                     :use-stronger-model-p use-stronger-model-p
                                      :return-turn-result-p return-turn-result-p
                                      :recursion-depth recursion-depth))
 
@@ -283,8 +285,12 @@
     ((gemini-stream-state-function-calls-to-run stream-state)
      (gemini-tool-call-outcome state stream-state))
     ((gemini-response-retryable-p state stream-state)
-     (make-provider-turn-retry-outcome
-      :interaction-id (gemini-stream-state-current-interaction-id stream-state)))
+     (let ((reason (if (= 0 (length (gemini-stream-state-full-text stream-state)))
+                       :empty-response
+                       :malformed-response)))
+       (make-provider-turn-retry-outcome
+        :reason reason
+        :interaction-id (gemini-stream-state-current-interaction-id stream-state))))
     (t
      (make-provider-turn-final-outcome
       (coerce (gemini-stream-state-full-text stream-state) 'string)
@@ -361,16 +367,19 @@
              (submit-gemini-turn bot callback state))
            :retry-turn
            (lambda (state outcome current-depth step)
-             (declare (ignore outcome step))
-             (retry-gemini-turn-on-google-gemini-pro-latest
-              bot
-              (getf state :input)
-              conversation
-              callback
-              :file-attachments (getf state :file-attachments)
-              :effective-generation-config (getf state :effective-generation-config)
-              :return-turn-result-p t
-              :recursion-depth current-depth))
+             (declare (ignore step))
+             (let ((reason (getf outcome :reason)))
+               (retry-gemini-turn-on-google-gemini-pro-latest
+                bot
+                (getf state :input)
+                conversation
+                callback
+                :file-attachments (getf state :file-attachments)
+                :effective-model (getf state :effective-model)
+                :effective-generation-config (getf state :effective-generation-config)
+                :use-stronger-model-p (eq reason :empty-response)
+                :return-turn-result-p t
+                :recursion-depth current-depth)))
            :continue-with-tools
            (lambda (state outcome next-depth step)
              (continue-gemini-provider-tool-recursion

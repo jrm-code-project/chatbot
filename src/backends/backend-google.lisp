@@ -69,18 +69,21 @@
                                             &key file-attachments request-contents history-messages
                                               effective-model
                                               effective-generation-config
+                                              use-stronger-model-p
                                               return-turn-result-p
                                               (recursion-depth 0))
-  "Resubmits the current turn through the Google backend on a stronger model."
+  "Resubmits the current turn through the Google backend."
   (declare (ignore request-contents history-messages))
   (let* ((current-model (or effective-model (chatbot-model bot)))
-         (stronger (stronger-model current-model)))
+         (target-model (if use-stronger-model-p
+                           (stronger-model current-model)
+                           +google-gemini-model-override-model+)))
     (chat-google bot
                  input
                  conversation
                  callback
                  :file-attachments file-attachments
-                 :effective-model stronger
+                 :effective-model target-model
                  :effective-generation-config effective-generation-config
                  :malformed-response-fallback-attempted-p t
                  :return-turn-result-p return-turn-result-p
@@ -413,18 +416,21 @@
              (submit-google-turn bot nil state))
            :retry-turn
            (lambda (state outcome current-depth step)
-             (declare (ignore outcome step))
-             (retry-on-google-gemini-pro-latest
-              bot
-              (getf state :input)
-              conversation
-              callback
-              :file-attachments (getf state :file-attachments)
-              :request-contents (getf state :request-contents)
-              :history-messages (getf state :history-messages)
-              :effective-generation-config (getf state :effective-generation-config)
-              :return-turn-result-p t
-              :recursion-depth current-depth))
+             (declare (ignore step))
+             (let ((reason (getf outcome :reason)))
+               (retry-on-google-gemini-pro-latest
+                bot
+                (getf state :input)
+                conversation
+                callback
+                :file-attachments (getf state :file-attachments)
+                :request-contents (getf state :request-contents)
+                :history-messages (getf state :history-messages)
+                :effective-generation-config (getf state :effective-generation-config)
+                :effective-model (getf state :effective-model)
+                :use-stronger-model-p (eq reason :empty-response)
+                :return-turn-result-p t
+                :recursion-depth current-depth)))
            :continue-with-tools
            (lambda (state outcome next-depth step)
              (declare (ignore state))
