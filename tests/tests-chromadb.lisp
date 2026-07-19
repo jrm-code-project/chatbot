@@ -282,7 +282,9 @@
   "Verifies that stronger-model correctly moves up the Gemini model strength hierarchy."
   (fiveam:is (string= "gemini-2.5-flash" (stronger-model "gemini-1.5-flash")))
   (fiveam:is (string= "gemini-3.5-flash" (stronger-model "gemini-2.5-flash")))
-  (fiveam:is (string= "gemini-1.5-pro" (stronger-model "gemini-3.5-flash")))
+  (fiveam:is (string= "gemini-3-flash-preview" (stronger-model "gemini-3.5-flash")))
+  (fiveam:is (string= "gemini-flash-latest" (stronger-model "gemini-3-flash-preview")))
+  (fiveam:is (string= "gemini-1.5-pro" (stronger-model "gemini-flash-latest")))
   (fiveam:is (string= "gemini-2.5-pro" (stronger-model "gemini-1.5-pro")))
   (fiveam:is (string= "gemini-pro-latest" (stronger-model "gemini-2.5-pro")))
   ;; Strongest model remains as-is
@@ -294,11 +296,11 @@
   (fiveam:is (string= "models/gemini-pro-latest" (stronger-model "models/gemini-pro-latest")))
   ;; Model name is case-insensitive during matching but returned in standard format
   (fiveam:is (string= "gemini-2.5-flash" (stronger-model "GEMINI-1.5-FLASH")))
-  ;; Dynamic heuristic tests for unlisted preview models (e.g. gemini-3-flash-preview)
-  (fiveam:is (string= "gemini-3-pro-preview" (stronger-model "gemini-3-flash-preview")))
-  (fiveam:is (string= "models/gemini-3-pro-preview" (stronger-model "models/gemini-3-flash-preview")))
-  (fiveam:is (string= "gemini-pro-latest" (stronger-model "gemini-3-pro-preview")))
-  (fiveam:is (string= "models/gemini-pro-latest" (stronger-model "models/gemini-3-pro-preview"))))
+  ;; Dynamic heuristic tests for unlisted preview/future models
+  (fiveam:is (string= "gemini-4-pro-preview" (stronger-model "gemini-4-flash-preview")))
+  (fiveam:is (string= "models/gemini-4-pro-preview" (stronger-model "models/gemini-4-flash-preview")))
+  (fiveam:is (string= "gemini-pro-latest" (stronger-model "gemini-4-pro-preview")))
+  (fiveam:is (string= "models/gemini-pro-latest" (stronger-model "models/gemini-4-pro-preview"))))
 
 (fiveam:def-test test-google-chat-retries-empty-response-on-stronger-model ()
   "Verifies that when a Google backend response is empty, it is retried on a stronger model."

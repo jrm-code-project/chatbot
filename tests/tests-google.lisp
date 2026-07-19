@@ -1215,7 +1215,7 @@
         (fiveam:is (= 2 call-count))
         (fiveam:is (string= "Recovered after empty response" res))
         (fiveam:is (equal '("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
-                            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent")
+                            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent")
                           (nreverse captured-urls)))))))
 
 (fiveam:test test-google-chat-retries-malformed-function-call-on-gemini-pro-latest
