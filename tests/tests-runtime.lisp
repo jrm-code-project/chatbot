@@ -1819,7 +1819,7 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (fiveam:is (= 2 call-count))
         (fiveam:is (string= "Recovered from Gemini empty response" res))
         (fiveam:is (search "/interactions?alt=sse" (second captured-urls)))
-        (fiveam:is (search "/models/gemini-pro-latest:generateContent" (first captured-urls)))
+        (fiveam:is (search "/models/gemini-1.5-pro:generateContent" (first captured-urls)))
         (let ((google-payload (decode-test-json captured-google-payload)))
           (assert-google-message-texts (first (google-payload-contents google-payload))
                                        "user"

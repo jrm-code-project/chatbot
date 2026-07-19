@@ -356,8 +356,10 @@
 
 (defun chat-gemini (bot input conversation callback &key file-attachments effective-model effective-generation-config
                                                      return-turn-result-p
-                                                     (recursion-depth 0))
+                                                     (recursion-depth 0)
+                                                     bypass-cache-p)
   "Sends user input to the active conversation using the Gemini Interactions API."
+  (declare (ignore bypass-cache-p))
   (let ((result
           (run-provider-turn-loop
            :gemini
@@ -433,7 +435,8 @@
                :file-attachments file-attachments
                :effective-model effective-model
                :effective-generation-config effective-generation-config
-               :return-turn-result-p t))
+               :return-turn-result-p t
+               :bypass-cache-p (and effective-model t)))
 
 (register-chat-backend :gemini #'gemini-chat-backend-handler)
 

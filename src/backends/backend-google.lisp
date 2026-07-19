@@ -478,6 +478,7 @@
                :file-attachments file-attachments
                :effective-model effective-model
                :effective-generation-config effective-generation-config
-               :return-turn-result-p t))
+               :return-turn-result-p t
+               :bypass-cache-p (and effective-model t)))
 
 (register-chat-backend :google #'google-chat-backend-handler)

@@ -568,14 +568,13 @@
 
         ;; At turn start: turns-since-cache-reload = 0.
         ;; First turn uses dollar-prefix override for model (gemini-pro-latest).
-        ;; Because the models mismatch (gemini-pro-latest vs gemini-3.5-flash),
-        ;; it MUST reload/re-create the cache immediately even though 0 < 5 turns have passed!
+        ;; Under the dollar-prefix cache-bypass policy, using the elevated model
+        ;; must not use or replace the cache (meaning no create/delete events happen,
+        ;; and the cache name is untouched).
         (chat "$gemini-pro-latest Turn 1" :conversation conv)
         (fiveam:is (= 1 (conversation-turns-since-cache-reload conv)))
-        (fiveam:is (string= "cachedContents/cache-2" (conversation-cached-content-name conv)))
-        (fiveam:is (equal `((:delete "https://example.test/gemini/cachedContents/cache-1")
-                            (:create "https://example.test/gemini/cachedContents")
-                            (:chat "https://example.test/gemini/models/gemini-pro-latest:generateContent"))
+        (fiveam:is (string= "cachedContents/cache-1" (conversation-cached-content-name conv)))
+        (fiveam:is (equal `((:chat "https://example.test/gemini/models/gemini-pro-latest:generateContent"))
                           (nreverse cache-events)))))))
 
 (fiveam:test test-google-chat-recovers-gracefully-when-cache-not-found-on-chat
