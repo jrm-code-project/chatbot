@@ -52,6 +52,10 @@ also returns the effective model name to use for that turn."
   "The maximum allowed distance (e.g. squared L2) for a diary entry to be considered relevant.
 Smaller distances indicate higher similarity. A threshold of 0.5 corresponds to medium-high relevance.")
 
+(defvar *chroma-memory-relevance-threshold* 0.5
+  "The maximum allowed distance (e.g. squared L2) for a memory observation to be considered relevant.
+Smaller distances indicate higher similarity. A threshold of 0.5 corresponds to medium-high relevance.")
+
 (defun extract-chroma-query-results (query-resp)
   "Safely extracts a list of plists containing :document, :metadata, and :distance from a nested Chroma query response."
   (let ((docs-outer (cdr (assoc :documents query-resp)))
@@ -108,13 +112,52 @@ using QUERY-TEXT as the query, filtering out any that do not pass *chroma-diary-
                               ("error" . ,(princ-to-string e))))
       nil)))
 
+(defun get-relevant-memories-text (persona-name query-text)
+  "Retrieves up to 8 relevant memory observations from ChromaDB for the given PERSONA-NAME,
+using QUERY-TEXT as the query, filtering out any that do not pass *chroma-memory-relevance-threshold*."
+  (handler-case
+      (when (and persona-name (chroma-alive-p))
+        (let* ((collection-name (format nil "~A_Memory" (string persona-name)))
+               (collection (chroma-get-collection collection-name)))
+          (when collection
+            (let* ((collection-id (cdr (assoc :id collection)))
+                   ;; Generate embedding vector for the query text
+                   (query-vector (string->embedding-vector query-text :model "gemini-embedding-2"))
+                   ;; Query ChromaDB for top 8 results
+                   (query-resp (chroma-query collection-id (list query-vector) :n-results 8))
+                   (results (extract-chroma-query-results query-resp))
+                   ;; Filter results by relevance threshold
+                   (filtered-results (remove-if (lambda (res)
+                                                  (> (getf res :distance) *chroma-memory-relevance-threshold*))
+                                                results)))
+              (when filtered-results
+                (with-output-to-string (s)
+                  (format s "~%[Relevant Historical Memories (Transient Context)]~%")
+                  (dolist (res filtered-results)
+                    (let* ((doc (getf res :document))
+                           (meta (getf res :metadata))
+                           (entity (cdr (assoc :entity meta)))
+                           (entity-type (cdr (assoc :entity--type meta)))
+                           (dist (getf res :distance)))
+                      (format s "---~%")
+                      (when entity (format s "Entity: ~A~%" entity))
+                      (when entity-type (format s "Entity Type: ~A~%" entity-type))
+                      (when dist (format s "Relevance Distance: ~,3F~%" dist))
+                      (format s "Memory: ~A~%~%" doc)))))))))
+    (error (e)
+      (log-message :warn "Failed to fetch relevant memories"
+                   :context `(("persona" . ,persona-name)
+                              ("error" . ,(princ-to-string e))))
+      nil)))
+
 (defun decorate-live-user-input (chatbot input &key effective-model)
-  "Decorates string INPUT with transient prompt prefixes and relevant diary entries requested by CHATBOT."
+  "Decorates string INPUT with transient prompt prefixes and relevant diary entries/memories requested by CHATBOT."
   (if (and chatbot
            (stringp input))
       (let* ((parts nil)
              (persona (chatbot-persona-name chatbot))
-             (diary-text (and persona (get-relevant-diary-entries-text persona input))))
+             (diary-text (and persona (get-relevant-diary-entries-text persona input)))
+             (memory-text (and persona (get-relevant-memories-text persona input))))
         (when (chatbot-include-timestamp-p chatbot)
           (push (funcall *prompt-timestamp-function*) parts))
         (when (chatbot-include-model-p chatbot)
@@ -123,7 +166,12 @@ using QUERY-TEXT as the query, filtering out any that do not pass *chroma-diary-
                 parts))
         (let* ((prefix (if parts (format nil "~{~A~^ ~} " (reverse parts)) ""))
                (decorated (format nil "~A~A" prefix input)))
-          (if diary-text
-              (format nil "~A~%~A" decorated diary-text)
-              decorated)))
+          (cond
+            ((and diary-text memory-text)
+             (format nil "~A~%~A~%~A" decorated diary-text memory-text))
+            (diary-text
+             (format nil "~A~%~A" decorated diary-text))
+            (memory-text
+             (format nil "~A~%~A" decorated memory-text))
+            (t decorated))))
       input))

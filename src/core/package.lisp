@@ -118,6 +118,7 @@
            "*CHROMA-API-VERSION*"
            "*CHROMA-TOKEN*"
            "*CHROMA-DIARY-RELEVANCE-THRESHOLD*"
+           "*CHROMA-MEMORY-RELEVANCE-THRESHOLD*"
            "CHROMA-ALIVE-P"
            "CHROMA-HEARTBEAT"
            "CHROMA-VERSION"

@@ -382,3 +382,54 @@
             (execute-chatbot-tool bot :mcp "create_entities" args)
             (fiveam:is (= 1 (length added-docs)))
             (fiveam:is (string= "V likes Common Lisp." (first (first added-docs))))))))))
+
+(fiveam:def-test test-chroma-memory-prompt-injection-success ()
+  "Verifies that relevant memory observations are queried, filtered by threshold, and injected into the user prompt."
+  (let* ((mock-get-called-p nil)
+         (mock-post-called-p nil)
+         (mock-embed-called-p nil)
+         (chatbot (make-instance 'chatbot :persona-name "V"))
+         (context (make-test-backend-runtime-context nil)))
+    ;; Mock GET for heartbeat and V_Memory collection
+    (setf (runtime-context-http-get-function context)
+          (lambda (url &rest args)
+            (declare (ignore args))
+            (setf mock-get-called-p t)
+            (cond
+              ((search "/heartbeat" url)
+               "{\"nanosecond heartbeat\": 1718218128310}")
+              ((search "/collections/V_Memory" url)
+               "{\"name\": \"V_Memory\", \"id\": \"v-memory-uuid-789\", \"metadata\": null}")
+              ((search "/collections/V_Diary" url)
+               nil) ; return nil to only focus on memories injection in this test
+              (t (error "Unexpected GET URL: ~A" url)))))
+    ;; Mock POST for embedding generation and collection query
+    (setf (runtime-context-http-post-function context)
+          (lambda (url &rest args)
+            (setf mock-post-called-p t)
+            (cond
+              ((search "embedContent" url)
+               (setf mock-embed-called-p t)
+               "{\"embedding\": {\"values\": [0.1, 0.2, 0.3]}}")
+              ((search "/query" url)
+               "{\"ids\": [[\"mem-1\", \"mem-2\"]],
+                 \"distances\": [[0.1, 0.9]],
+                 \"documents\": [[\"V is a formidable ghost.\", \"Irrelevant observation fact.\"]],
+                 \"metadatas\": [[{\"entity\": \"V\", \"entity_type\": \"Persona\"}, {\"entity\": \"Other\", \"entity_type\": \"Thing\"}]]}")
+              (t (error "Unexpected POST URL: ~A" url)))))
+    (call-with-runtime-context context
+      (lambda ()
+        (let ((*chroma-memory-relevance-threshold* 0.5))
+          (let ((decorated (decorate-live-user-input chatbot "Tell me about V!")))
+            (fiveam:is (not (null mock-get-called-p)))
+            (fiveam:is (not (null mock-post-called-p)))
+            (fiveam:is (not (null mock-embed-called-p)))
+            ;; Assert that the prompt contains our query and the transient injected memories block
+            (fiveam:is (not (null (search "Tell me about V!" decorated))))
+            (fiveam:is (not (null (search "[Relevant Historical Memories (Transient Context)]" decorated))))
+            (fiveam:is (not (null (search "Entity: V" decorated))))
+            (fiveam:is (not (null (search "Entity Type: Persona" decorated))))
+            (fiveam:is (not (null (search "Relevance Distance: 0.1" decorated))))
+            (fiveam:is (not (null (search "Memory: V is a formidable ghost." decorated))))
+            ;; Assert that the irrelevant memory (distance 0.9 > 0.5) is filtered out
+            (fiveam:is (null (search "Irrelevant observation fact." decorated)))))))))
