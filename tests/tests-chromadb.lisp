@@ -246,3 +246,34 @@
           (fiveam:is (not (null (search "Tone: cynical" decorated))))
           (fiveam:is (not (null (search "Topic: K-machine" decorated))))
           (fiveam:is (not (null (search "This is V's secret entry text." decorated)))))))))
+
+(fiveam:def-test test-chroma-diary-prompt-injection-relevance-filtering ()
+  "Verifies that diary entries exceeding *chroma-diary-relevance-threshold* are filtered out."
+  (let* ((chatbot (make-instance 'chatbot :persona-name "V"))
+         (context (make-test-backend-runtime-context nil)))
+    ;; Mock GET for heartbeat and get-collection
+    (setf (runtime-context-http-get-function context)
+          (lambda (url &rest args)
+            (declare (ignore url args))
+            "{\"nanosecond heartbeat\": 1718218128310}"))
+    (setf (runtime-context-http-post-function context)
+          (lambda (url &rest args)
+            (declare (ignore args))
+            (cond
+              ((search "embedContent" url)
+               "{\"embedding\": {\"values\": [0.1, 0.2, 0.3]}}")
+              ((search "/query" url)
+               ;; Return two records: one highly relevant (distance 0.2), one irrelevant (distance 0.9)
+               "{\"ids\": [[\"diary-01\", \"diary-02\"]],
+                 \"distances\": [[0.2, 0.9]],
+                 \"documents\": [[\"Highly relevant doc.\", \"Irrelevant doc.\"]],
+                 \"metadatas\": [[{\"entry_number\": 1, \"topic\": \"Good Match\"}, {\"entry_number\": 2, \"topic\": \"Bad Match\"}]]}")
+              (t (error "Unexpected POST URL: ~A" url)))))
+    (call-with-runtime-context context
+      (lambda ()
+        (let ((*chroma-diary-relevance-threshold* 0.5))
+          (let ((decorated (decorate-live-user-input chatbot "Help me with the K-machine!")))
+            ;; highly relevant document (distance 0.2 <= 0.5) must be included
+            (fiveam:is (not (null (search "Highly relevant doc." decorated))))
+            ;; irrelevant document (distance 0.9 > 0.5) must be excluded
+            (fiveam:is (null (search "Irrelevant doc." decorated)))))))))

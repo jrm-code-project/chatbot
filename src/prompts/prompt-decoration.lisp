@@ -48,20 +48,27 @@ also returns the effective model name to use for that turn."
         (values (subseq input 1) +google-gemini-model-override-model+)
         (values input nil))))
 
+(defvar *chroma-diary-relevance-threshold* 0.5
+  "The maximum allowed distance (e.g. squared L2) for a diary entry to be considered relevant.
+Smaller distances indicate higher similarity. A threshold of 0.5 corresponds to medium-high relevance.")
+
 (defun extract-chroma-query-results (query-resp)
-  "Safely extracts a list of plists containing :document and :metadata from a nested Chroma query response."
+  "Safely extracts a list of plists containing :document, :metadata, and :distance from a nested Chroma query response."
   (let ((docs-outer (cdr (assoc :documents query-resp)))
-        (metas-outer (cdr (assoc :metadatas query-resp))))
+        (metas-outer (cdr (assoc :metadatas query-resp)))
+        (dists-outer (cdr (assoc :distances query-resp))))
     (when (and docs-outer (> (length docs-outer) 0))
       (let ((docs-inner (coerce (elt docs-outer 0) 'list))
-            (metas-inner (coerce (elt metas-outer 0) 'list)))
+            (metas-inner (coerce (elt metas-outer 0) 'list))
+            (dists-inner (if dists-outer (coerce (elt dists-outer 0) 'list) nil)))
         (loop for doc in docs-inner
               for meta in metas-inner
-              collect (list :document doc :metadata meta))))))
+              for dist = (if dists-inner (pop dists-inner) 0.0)
+              collect (list :document doc :metadata meta :distance dist))))))
 
 (defun get-relevant-diary-entries-text (persona-name query-text)
   "Retrieves up to 3 relevant diary entries from ChromaDB for the given PERSONA-NAME,
-using QUERY-TEXT as the query, and formats them as a clean text block."
+using QUERY-TEXT as the query, filtering out any that do not pass *chroma-diary-relevance-threshold*."
   (handler-case
       (when (and persona-name (chroma-alive-p))
         (let* ((collection-name (format nil "~A_Diary" (string persona-name)))
@@ -72,22 +79,28 @@ using QUERY-TEXT as the query, and formats them as a clean text block."
                    (query-vector (string->embedding-vector query-text :model "gemini-embedding-2"))
                    ;; Query ChromaDB for top 3 results
                    (query-resp (chroma-query collection-id (list query-vector) :n-results 3))
-                   (results (extract-chroma-query-results query-resp)))
-              (when results
+                   (results (extract-chroma-query-results query-resp))
+                   ;; Filter results by relevance threshold
+                   (filtered-results (remove-if (lambda (res)
+                                                  (> (getf res :distance) *chroma-diary-relevance-threshold*))
+                                                results)))
+              (when filtered-results
                 (with-output-to-string (s)
                   (format s "~%[Relevant Historical Diary Entries (Transient Context)]~%")
-                  (dolist (res results)
+                  (dolist (res filtered-results)
                     (let* ((doc (getf res :document))
                            (meta (getf res :metadata))
                            (num (cdr (assoc :entry--number meta)))
                            (date (cdr (assoc :date meta)))
                            (tone (cdr (assoc :tone meta)))
-                           (topic (cdr (assoc :topic meta))))
+                           (topic (cdr (assoc :topic meta)))
+                           (dist (getf res :distance)))
                       (format s "---~%")
                       (when num (format s "Entry Number: ~D~%" num))
                       (when date (format s "Date: ~A~%" date))
                       (when tone (format s "Tone: ~A~%" tone))
                       (when topic (format s "Topic: ~A~%" topic))
+                      (when dist (format s "Relevance Distance: ~,3F~%" dist))
                       (format s "Content:~%~A~%~%" doc)))))))))
     (error (e)
       (log-message :warn "Failed to fetch relevant diary entries"
