@@ -192,3 +192,24 @@
   (format-paragraphs text :width width :stream stream)
   (terpri stream)
   (terpri stream))
+
+(defun stronger-model (model)
+  "Given a Gemini MODEL name (as a string), returns a stronger Gemini model name.
+If the given model is already the strongest model (or not recognized), returns it as-is."
+  (unless (stringp model)
+    (error "Model must be a string, got: ~S" model))
+  (let* ((prefix-p (uiop:string-prefix-p "models/" model))
+         (clean-name (if prefix-p (subseq model 7) model))
+         (models '("gemini-1.5-flash"
+                   "gemini-2.5-flash"
+                   "gemini-3.5-flash"
+                   "gemini-1.5-pro"
+                   "gemini-2.5-pro"
+                   "gemini-pro-latest"))
+         (pos (position clean-name models :test #'string-equal)))
+    (if (and pos (< pos (1- (length models))))
+        (let ((stronger (nth (1+ pos) models)))
+          (if prefix-p
+              (concatenate 'string "models/" stronger)
+              stronger))
+        model)))

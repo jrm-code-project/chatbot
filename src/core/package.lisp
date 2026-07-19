@@ -110,6 +110,7 @@
            "CREATE-PERSONA-VECTOR-DATABASE"
            "SEARCH-PERSONA-VECTOR-DATABASE"
            "COSINE-SIMILARITY"
+           "STRONGER-MODEL"
            ;; ChromaDB Bindings
            "*CHROMA-HOST*"
            "*CHROMA-PORT*"

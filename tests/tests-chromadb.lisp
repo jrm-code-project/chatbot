@@ -277,3 +277,20 @@
             (fiveam:is (not (null (search "Highly relevant doc." decorated))))
             ;; irrelevant document (distance 0.9 > 0.5) must be excluded
             (fiveam:is (null (search "Irrelevant doc." decorated)))))))))
+
+(fiveam:def-test test-stronger-model ()
+  "Verifies that stronger-model correctly moves up the Gemini model strength hierarchy."
+  (fiveam:is (string= "gemini-2.5-flash" (stronger-model "gemini-1.5-flash")))
+  (fiveam:is (string= "gemini-3.5-flash" (stronger-model "gemini-2.5-flash")))
+  (fiveam:is (string= "gemini-1.5-pro" (stronger-model "gemini-3.5-flash")))
+  (fiveam:is (string= "gemini-2.5-pro" (stronger-model "gemini-1.5-pro")))
+  (fiveam:is (string= "gemini-pro-latest" (stronger-model "gemini-2.5-pro")))
+  ;; Strongest model remains as-is
+  (fiveam:is (string= "gemini-pro-latest" (stronger-model "gemini-pro-latest")))
+  ;; Unrecognized models return as-is
+  (fiveam:is (string= "unrecognized-model" (stronger-model "unrecognized-model")))
+  ;; Prefix models/ is correctly preserved
+  (fiveam:is (string= "models/gemini-2.5-flash" (stronger-model "models/gemini-1.5-flash")))
+  (fiveam:is (string= "models/gemini-pro-latest" (stronger-model "models/gemini-pro-latest")))
+  ;; Model name is case-insensitive during matching but returned in standard format
+  (fiveam:is (string= "gemini-2.5-flash" (stronger-model "GEMINI-1.5-FLASH"))))
