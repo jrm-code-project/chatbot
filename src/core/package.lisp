@@ -108,4 +108,21 @@
            "OPENAI-STRING->EMBEDDING-VECTOR"
            "CREATE-PERSONA-VECTOR-DATABASE"
            "SEARCH-PERSONA-VECTOR-DATABASE"
-           "COSINE-SIMILARITY"))
+           "COSINE-SIMILARITY"
+           ;; ChromaDB Bindings
+           "*CHROMA-HOST*"
+           "*CHROMA-PORT*"
+           "*CHROMA-SCHEME*"
+           "*CHROMA-API-VERSION*"
+           "*CHROMA-TOKEN*"
+           "CHROMA-ALIVE-P"
+           "CHROMA-HEARTBEAT"
+           "CHROMA-VERSION"
+           "CHROMA-LIST-COLLECTIONS"
+           "CHROMA-GET-COLLECTION"
+           "CHROMA-CREATE-COLLECTION"
+           "CHROMA-DELETE-COLLECTION"
+           "CHROMA-ADD"
+           "CHROMA-GET"
+           "CHROMA-QUERY"
+           "CHROMA-DELETE"))
