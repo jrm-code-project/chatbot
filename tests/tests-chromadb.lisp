@@ -376,9 +376,26 @@
             (execute-chatbot-tool bot :mcp "add_observations" args)
             (fiveam:is (= 1 (length added-docs)))
             (fiveam:is (string= "V likes Common Lisp." (first (first added-docs)))))
-          ;; Test case 2: execute create_entities
+          ;; Test case 2: execute create_entities with vectors
           (setf added-docs nil)
           (let ((args '((:entities . #(((:name . "V") (:entity--type . "Persona") (:observations . #("Likes Common Lisp"))))))))
+            (execute-chatbot-tool bot :mcp "create_entities" args)
+            (fiveam:is (= 1 (length added-docs)))
+            (fiveam:is (string= "V likes Common Lisp." (first (first added-docs)))))
+          ;; Test case 3: execute add_observations with parsed lists (representing JSON arrays decoded as lists)
+          (setf added-docs nil)
+          (let ((args '((:observations . (((:entity-name . "The Boss")
+                                           (:contents . "The Boss takes Pramipexole ER, 1.75mg (updated from 1.5mg) as part of his medication cocktail."))
+                                          ((:entity-name . "Pramipexole ER")
+                                           (:contents . "1.75 mg (updated from 1.5mg)")))))))
+            (execute-chatbot-tool bot :mcp "add_observations" args)
+            ;; Both observations should be synced, so we expect 2 added documents
+            (fiveam:is (= 2 (length added-docs)))
+            (fiveam:is (string= "V likes Common Lisp." (first (first added-docs))))
+            (fiveam:is (string= "V likes Common Lisp." (first (second added-docs)))))
+          ;; Test case 4: execute create_entities with parsed lists
+          (setf added-docs nil)
+          (let ((args '((:entities . (((:name . "V") (:entity--type . "Persona") (:observations . ("Likes Common Lisp"))))))))
             (execute-chatbot-tool bot :mcp "create_entities" args)
             (fiveam:is (= 1 (length added-docs)))
             (fiveam:is (string= "V likes Common Lisp." (first (first added-docs))))))))))

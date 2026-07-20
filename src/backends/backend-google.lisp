@@ -74,6 +74,10 @@
                                               (recursion-depth 0))
   "Resubmits the current turn through the Google backend."
   (declare (ignore request-contents history-messages))
+  ;; Trigger SWP State transition to :pro-sticky
+  (setf (conversation-swp-state conversation) :pro-sticky
+        (conversation-swp-streak conversation) 1)
+  (log-message :warn "SWP: Failover triggered. Entering :pro-sticky mode.")
   (let* ((current-model (or effective-model (chatbot-model bot)))
          (target-model (if use-stronger-model-p
                            (stronger-model current-model)
@@ -96,6 +100,7 @@
   (let* ((current-messages (conversation-messages conversation))
          (persona-memory (conversation-persona-memory conversation))
          (persona-diary-entries (conversation-persona-diary-entries conversation))
+         (decorated (decorate-live-user-input bot input :effective-model effective-model))
          (resolved-cached-content-name
            (and (not bypass-cache-p)
                 (or cached-content-name
@@ -109,10 +114,10 @@
           :cached-content-name resolved-cached-content-name
           :bypass-cache-p bypass-cache-p
           :history-messages (or history-messages
-                              (stateless-history-messages current-messages input))
+                              (stateless-history-messages current-messages decorated))
           :request-contents (or request-contents
                                (build-generate-content-request-contents current-messages
-                                                                        input
+                                                                        decorated
                                                                         :chatbot bot
                                                                         :persona-memory persona-memory
                                                                         :persona-diary-entries persona-diary-entries

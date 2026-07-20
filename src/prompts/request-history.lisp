@@ -116,7 +116,11 @@ Accepted signatures:
     (setf (conversation-cached-content-metadata target)
           (conversation-cached-content-metadata source))
     (setf (conversation-turns-since-cache-reload target)
-          (conversation-turns-since-cache-reload source))))
+          (conversation-turns-since-cache-reload source))
+    (setf (conversation-swp-state target)
+          (conversation-swp-state source))
+    (setf (conversation-swp-streak target)
+          (conversation-swp-streak source))))
 
 (defun apply-chat-turn-result (result &optional conversation)
   "Applies RESULT to CONVERSATION, defaulting to RESULT's target conversation."

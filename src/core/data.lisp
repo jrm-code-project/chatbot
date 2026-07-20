@@ -378,7 +378,22 @@
     :initarg :turns-since-cache-reload
     :accessor conversation-turns-since-cache-reload
     :initform 0
-    :documentation "Number of turns that have passed since the explicit Gemini content cache was last created or replaced.")))
+    :documentation "Number of turns that have passed since the explicit Gemini content cache was last created or replaced.")
+   (swp-state
+    :initarg :swp-state
+    :accessor conversation-swp-state
+    :initform :flash-warm
+    :documentation "Current Sticky Warmth Protocol state. One of :flash-warm, :pro-sticky, or :transition.")
+   (swp-streak
+    :initarg :swp-streak
+    :accessor conversation-swp-streak
+    :initform 0
+    :documentation "Number of turns spent in the current :pro-sticky state.")
+   (swp-max-streak
+    :initarg :swp-max-streak
+    :accessor conversation-swp-max-streak
+    :initform 5
+    :documentation "The maximum threshold of turns to remain locked in the :pro-sticky state before attempting a transition.")))
 
 (defclass round-robin-participant ()
   ((name

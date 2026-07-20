@@ -1780,18 +1780,18 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (fiveam:is (search "/models/gemini-3-flash-preview:generateContent" (first captured-urls)))
         (let ((gemini-payload (decode-test-json captured-gemini-payload))
               (google-payload (decode-test-json captured-google-payload)))
-          (assert-json-field= gemini-payload "input" "[08:46 gemini] [model: gemini-3.5-flash] Retry this")
+          (assert-json-field= gemini-payload "input" (format nil "Retry this~%~%=== Dynamic Context ===~%[08:46 seed] [model: gemini-3.5-flash]"))
           (assert-google-message-texts (first (google-payload-contents google-payload))
                                        "user"
-                                       '("[08:46 retry] [model: gemini-3-flash-preview] Retry this"))
+                                       (list (format nil "Retry this~%~%=== Dynamic Context ===~%[08:46 gemini] [model: gemini-3-flash-preview]")))
           (fiveam:is (notany (lambda (text)
                                (search "[model: gemini-3.5-flash] Retry this" text))
                              (google-payload-texts google-payload))))
         (fiveam:is (null (conversation-interaction-id conv)))
         (let ((stored-history (conversation-messages conv)))
           (assert-history-sequence stored-history
-                                   '(("user" "Retry this")
-                                     ("model" "Recovered from Gemini malformed response"))))))))
+                                   (list (list "user" (format nil "Retry this~%~%=== Dynamic Context ===~%[08:46 gemini] [model: gemini-3-flash-preview]"))
+                                         (list "model" "Recovered from Gemini malformed response"))))))))
 
 (fiveam:test test-gemini-chat-retries-empty-response-on-google-gemini-pro-latest
   (let ((conv (new-chat :backend :gemini))
@@ -3042,3 +3042,68 @@ data: [DONE]")
       (fiveam:is (eq :not-found (getf c-404 :reason)))
       (fiveam:is (= 403 (getf c-403-nf :status)))
       (fiveam:is (eq :not-found (getf c-403-nf :reason))))))
+
+(fiveam:test test-sticky-warmth-protocol-state-transitions
+  (let* ((chatbot (make-instance 'chatbot
+                                 :backend :google
+                                 :model "gemini-3.5-flash"))
+         (conv (make-instance 'conversation
+                              :chatbot chatbot
+                              :swp-max-streak 3))
+         (call-count 0)
+         (prompt-count 0))
+    ;; Mock the timestamp function and tool retrieval
+    (let* ((*prompt-timestamp-function* (lambda () (incf prompt-count) (format nil "[timestamp-~D]" prompt-count)))
+           (*get-all-mcp-tools-function* (lambda (bot) (declare (ignore bot)) nil))
+           (*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+           (*http-post-function*
+             (lambda (url &rest args)
+               (declare (ignore url args))
+               (incf call-count)
+               (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Response text\"}], \"role\": \"model\"}}]}" 200))))
+      
+      ;; 1. Baseline: Should start in :flash-warm
+      (fiveam:is (eq :flash-warm (conversation-swp-state conv)))
+      (fiveam:is (= 0 (conversation-swp-streak conv)))
+      
+      ;; Execute normal turn. Should stay in :flash-warm.
+      (let* ((state (chat-turn-prepared-state conv "User prompt 1" nil nil chatbot nil nil nil nil)))
+        (fiveam:is (null (getf state :effective-model)))
+        (chat "User prompt 1" :conversation conv)
+        (fiveam:is (eq :flash-warm (conversation-swp-state conv)))
+        (fiveam:is (= 0 (conversation-swp-streak conv))))
+      
+      ;; 2. Simulate failover transition to :pro-sticky by triggering retry
+      ;; We can do this by setting swp-state to :pro-sticky and swp-streak to 1 directly
+      ;; (simulating what retry-on-google-gemini-pro-latest does)
+      (setf (conversation-swp-state conv) :pro-sticky
+            (conversation-swp-streak conv) 1)
+      
+      ;; Turn 2 of Pro (Streak becomes 2)
+      (let* ((state (chat-turn-prepared-state conv "User prompt 2" nil nil chatbot nil nil nil nil)))
+        (fiveam:is (string= "gemini-3-flash-preview" (getf state :effective-model)))
+        (chat "User prompt 2" :conversation conv)
+        (fiveam:is (eq :pro-sticky (conversation-swp-state conv)))
+        (fiveam:is (= 2 (conversation-swp-streak conv))))
+      
+      ;; Turn 3 of Pro (Streak reaches 3, which is swp-max-streak, so transitions to :transition)
+      (let* ((state (chat-turn-prepared-state conv "User prompt 3" nil nil chatbot nil nil nil nil)))
+        (fiveam:is (string= "gemini-3-flash-preview" (getf state :effective-model)))
+        (chat "User prompt 3" :conversation conv)
+        ;; Now state should have transitioned to :transition
+        (fiveam:is (eq :transition (conversation-swp-state conv)))
+        (fiveam:is (= 0 (conversation-swp-streak conv))))
+      
+      ;; 4. In :transition state:
+      ;; If we send a complex/long prompt, we should stay in :transition on Pro
+      (let* ((state (chat-turn-prepared-state conv "This is a very long, high-risk prompt that should definitely stay on Pro model." nil nil chatbot nil nil nil nil)))
+        (fiveam:is (string= "gemini-3-flash-preview" (getf state :effective-model)))
+        (chat "This is a very long, high-risk prompt that should definitely stay on Pro model." :conversation conv)
+        (fiveam:is (eq :transition (conversation-swp-state conv))))
+      
+      ;; If we send a short, low-risk prompt, we should downgrade back to Flash and reset to :flash-warm
+      (let* ((state (chat-turn-prepared-state conv "ok" nil nil chatbot nil nil nil nil)))
+        (fiveam:is (null (getf state :effective-model)))
+        (chat "ok" :conversation conv)
+        (fiveam:is (eq :flash-warm (conversation-swp-state conv)))
+        (fiveam:is (= 0 (conversation-swp-streak conv)))))))

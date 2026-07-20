@@ -34,19 +34,21 @@
                                   &key messages persona-memory persona-diary-entries
                                     original-interaction-id current-interaction-id live-user-input)
   "Builds the provider-runner state for a Gemini Interactions turn."
-  (list :input input
-        :live-user-input (or live-user-input
-                             (and (stringp input) input))
-        :file-attachments file-attachments
-        :effective-model effective-model
-        :effective-generation-config effective-generation-config
-        :messages (or messages (conversation-messages conversation))
-        :persona-memory (or persona-memory (conversation-persona-memory conversation))
-        :persona-diary-entries (or persona-diary-entries (conversation-persona-diary-entries conversation))
-        :original-interaction-id (or original-interaction-id
-                                     (conversation-interaction-id conversation))
-        :current-interaction-id (or current-interaction-id
-                                    (conversation-interaction-id conversation))))
+  (let ((decorated (decorate-live-user-input (conversation-chatbot conversation) input
+                                             :effective-model effective-model)))
+    (list :input input
+          :live-user-input (or live-user-input
+                               (and (stringp decorated) decorated))
+          :file-attachments file-attachments
+          :effective-model effective-model
+          :effective-generation-config effective-generation-config
+          :messages (or messages (conversation-messages conversation))
+          :persona-memory (or persona-memory (conversation-persona-memory conversation))
+          :persona-diary-entries (or persona-diary-entries (conversation-persona-diary-entries conversation))
+          :original-interaction-id (or original-interaction-id
+                                       (conversation-interaction-id conversation))
+          :current-interaction-id (or current-interaction-id
+                                      (conversation-interaction-id conversation)))))
 
 (defun gemini-tool-result-message (id name args-str res-text tool-call)
   "Returns the Gemini Interactions function_result payload for a successful tool call."
@@ -307,18 +309,21 @@
 
 (defun gemini-turn-request-payload-json (bot state)
   "Returns the encoded Interactions request payload for STATE."
-  (cl-json:encode-json-to-string
-   (make-interaction-payload
-    bot
-    (getf state :input)
-    :messages (getf state :messages)
-    :persona-memory (getf state :persona-memory)
-    :persona-diary-entries (getf state :persona-diary-entries)
-    :previous-interaction-id (getf state :current-interaction-id)
-    :file-attachments (getf state :file-attachments)
-    :effective-model (getf state :effective-model)
-    :effective-generation-config (getf state :effective-generation-config)
-    :stream t)))
+  (let ((input (if (listp (getf state :input))
+                   (getf state :input)
+                   (getf state :live-user-input))))
+    (cl-json:encode-json-to-string
+     (make-interaction-payload
+      bot
+      input
+      :messages (getf state :messages)
+      :persona-memory (getf state :persona-memory)
+      :persona-diary-entries (getf state :persona-diary-entries)
+      :previous-interaction-id (getf state :current-interaction-id)
+      :file-attachments (getf state :file-attachments)
+      :effective-model (getf state :effective-model)
+      :effective-generation-config (getf state :effective-generation-config)
+      :stream t))))
 
 (defun gemini-turn-request-details (bot state)
   "Returns the request details plist for one Gemini Interactions turn."

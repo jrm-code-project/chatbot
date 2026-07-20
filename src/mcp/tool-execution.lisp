@@ -67,28 +67,44 @@ entries instead of aborting the full turn. If ERROR-BUILDER is NIL, errors are s
                                    tool-call)))))))
           tool-calls))
 
+(defun normalize-to-list (x)
+  "Ensures that X is returned as a list of elements. If X is a vector (but not a string), converts it to a list.
+If X is a list of alists, returns X as is.
+If X is a single alist, wraps X in a list.
+If X is a string, wraps X in a list.
+If X is nil, returns nil."
+  (cond
+    ((null x) nil)
+    ((stringp x) (list x))
+    ((vectorp x) (coerce x 'list))
+    ((listp x)
+     (if (and (consp (car x)) (not (consp (caar x))))
+         (list x)
+         x))
+    (t (list x))))
+
 (defun extract-observations-from-tool (tool-name arguments)
   "Extracts a list of plist records containing :entity-name, :entity-type, and :text (observation string)
 from the MCP arguments for create_entities and add_observations."
   (let ((results nil))
     (cond
       ((string-equal tool-name "create_entities")
-       (let ((entities (cdr (assoc :entities arguments))))
-         (loop for entity across (or (and (vectorp entities) entities) (list entities))
+       (let ((entities (normalize-to-list (cdr (assoc :entities arguments)))))
+         (loop for entity in entities
                do (let* ((name (cdr (assoc :name entity)))
                          (type (or (cdr (assoc :entity--type entity))
                                    (cdr (assoc :entity-type entity))))
-                         (obs (cdr (assoc :observations entity))))
-                    (loop for ob across (or (and (vectorp obs) obs) (list obs))
+                         (obs (normalize-to-list (cdr (assoc :observations entity)))))
+                    (loop for ob in obs
                           when (and (stringp ob) (string/= ob ""))
                           do (push (list :entity-name name :entity-type type :text ob) results))))))
       ((string-equal tool-name "add_observations")
-       (let ((observations (cdr (assoc :observations arguments))))
-         (loop for obs-entry across (or (and (vectorp observations) observations) (list observations))
+       (let ((observations (normalize-to-list (cdr (assoc :observations arguments)))))
+         (loop for obs-entry in observations
                do (let* ((name (or (cdr (assoc :entity--name obs-entry))
                                    (cdr (assoc :entity-name obs-entry))))
-                         (contents (cdr (assoc :contents obs-entry))))
-                    (loop for content across (or (and (vectorp contents) contents) (list contents))
+                         (contents (normalize-to-list (cdr (assoc :contents obs-entry)))))
+                    (loop for content in contents
                           when (and (stringp content) (string/= content ""))
                           do (push (list :entity-name name :text content) results)))))))
     (nreverse results)))

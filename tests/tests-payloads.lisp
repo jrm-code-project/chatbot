@@ -277,7 +277,7 @@
                         (cdr (assoc "content" (first request-messages) :test #'string=))))
     (fiveam:is (string= "Earlier answer"
                         (cdr (assoc "content" (second request-messages) :test #'string=))))
-    (fiveam:is (string= "[14:29 26-Jun-2026] Hello"
+    (fiveam:is (string= (format nil "Hello~%~%=== Dynamic Context ===~%[14:29 26-Jun-2026]")
                         (cdr (assoc "content" (third request-messages) :test #'string=))))
     (fiveam:is (= 2 (length stored-messages)))
     (fiveam:is (string= "Earlier question"
@@ -298,7 +298,7 @@
          (request-messages (build-request-history-messages stored-messages
                                                            "Hello"
                                                            :chatbot bot)))
-    (fiveam:is (string= "[14:29 26-Jun-2026] [model: gemini-3.5-flash] Hello"
+    (fiveam:is (string= (format nil "Hello~%~%=== Dynamic Context ===~%[14:29 26-Jun-2026] [model: gemini-3.5-flash]")
                         (cdr (assoc "content" (third request-messages) :test #'string=))))
     (fiveam:is (= 2 (length stored-messages)))
     (fiveam:is (string= "Earlier question"
@@ -314,7 +314,7 @@
                                                           "Hello"
                                                           :chatbot bot
                                                           :effective-model "gemini-pro-latest")))
-    (fiveam:is (string= "[model: gemini-pro-latest] Hello"
+    (fiveam:is (string= (format nil "Hello~%~%=== Dynamic Context ===~%[model: gemini-pro-latest]")
                        (cdr (assoc "content" (first request-messages) :test #'string=))))))
 
 (fiveam:test test-initial-interaction-payload-includes-diary-preload
@@ -353,7 +353,7 @@
          (*prompt-timestamp-function* (lambda () "[14:29 26-Jun-2026]"))
          (payload (make-interaction-payload bot "Hello" :messages nil :stream t))
          (input (cdr (assoc "input" payload :test #'string=))))
-    (fiveam:is (string= "[14:29 26-Jun-2026] Hello" input))))
+    (fiveam:is (string= (format nil "Hello~%~%=== Dynamic Context ===~%[14:29 26-Jun-2026]") input))))
 
 (fiveam:test test-initial-interaction-payload-prefixes-current-input-with-timestamp-and-model
   (let* ((bot (make-instance 'chatbot
@@ -363,7 +363,7 @@
          (*prompt-timestamp-function* (lambda () "[14:29 26-Jun-2026]"))
          (payload (make-interaction-payload bot "Hello" :messages nil :stream t))
          (input (cdr (assoc "input" payload :test #'string=))))
-    (fiveam:is (string= "[14:29 26-Jun-2026] [model: gemini-3.5-flash] Hello"
+    (fiveam:is (string= (format nil "Hello~%~%=== Dynamic Context ===~%[14:29 26-Jun-2026] [model: gemini-3.5-flash]")
                        input))))
 
 (fiveam:test test-sse-parsing

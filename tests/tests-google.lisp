@@ -1183,16 +1183,16 @@
                (stored-history (conversation-messages conv)))
           (assert-google-message-texts (first first-contents)
                                       "user"
-                                      '("[08:46 first] [model: gemini-3.5-flash] Retry me"))
+                                      (list (format nil "Retry me~%~%=== Dynamic Context ===~%[08:46 first] [model: gemini-3.5-flash]")))
           (assert-google-message-texts (first retry-contents)
                                       "user"
-                                      '("[08:46 retry] [model: gemini-pro-latest] Retry me"))
+                                      (list (format nil "Retry me~%~%=== Dynamic Context ===~%[08:46 retry] [model: gemini-pro-latest]")))
           (fiveam:is-false
            (search "[model: gemini-3.5-flash]"
                    (first (message-part-texts (first retry-contents)))))
           (assert-history-sequence stored-history
-                                   '(("user" "Retry me")
-                                     ("model" "Recovered on retry"))))))))
+                                   (list (list "user" (format nil "Retry me~%~%=== Dynamic Context ===~%[08:46 retry] [model: gemini-pro-latest]"))
+                                         (list "model" "Recovered on retry"))))))))
 
 (fiveam:test test-google-chat-retries-no-text-response-on-gemini-pro-latest
   (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))

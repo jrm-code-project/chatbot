@@ -9,13 +9,14 @@
   (let* ((system-inst (chatbot-system-instruction bot))
          (current-messages (conversation-messages conversation))
          (persona-memory (conversation-persona-memory conversation))
-         (persona-diary-entries (conversation-persona-diary-entries conversation)))
+         (persona-diary-entries (conversation-persona-diary-entries conversation))
+         (decorated (decorate-live-user-input bot input)))
     (list :input input
           :file-attachments file-attachments
           :effective-generation-config effective-generation-config
           :malformed-response-retry-attempted-p malformed-response-retry-attempted-p
           :history-messages (or history-messages
-                               (stateless-history-messages current-messages input))
+                               (stateless-history-messages current-messages decorated))
           :request-messages (or request-messages
                                 (build-openai-request-messages system-inst current-messages input
                                                                :chatbot bot

@@ -62,13 +62,21 @@
                           (when explicit-top-p-specified-p
                             (list :top-p top-p)))))
          (turn-conversation (clone-conversation conversation)))
-    (multiple-value-bind (effective-input effective-model)
+    (multiple-value-bind (effective-input prompt-override-model)
         (resolve-prompt-model-override bot input)
-      (list :turn-conversation turn-conversation
-           :effective-input effective-input
-            :effective-model effective-model
-            :file-attachments file-attachments
-            :effective-generation-config effective-generation-config))))
+      (let* ((effective-model
+               (if (null prompt-override-model)
+                   (multiple-value-bind (swp-model is-pro-p)
+                       (resolve-swp-effective-model turn-conversation effective-input (chatbot-model bot))
+                     (if is-pro-p
+                         swp-model
+                         nil))
+                   prompt-override-model)))
+        (list :turn-conversation turn-conversation
+              :effective-input effective-input
+              :effective-model effective-model
+              :file-attachments file-attachments
+              :effective-generation-config effective-generation-config)))))
 
 (defun chat-turn (input &key conversation callback file files
                        (temperature nil temperature-specified-p)

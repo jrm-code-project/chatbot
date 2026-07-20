@@ -48,6 +48,55 @@ also returns the effective model name to use for that turn."
         (values (subseq input 1) +google-gemini-model-override-model+)
         (values input nil))))
 
+(defun safe-swp-downgrade-prompt-p (input)
+  "Returns true when INPUT is a short, low-risk prompt suitable for downgrading from Pro to Flash.
+Criteria: length < 50 characters or word count < 10 words."
+  (and (stringp input)
+       (let ((trimmed (string-trim '(#\Space #\Tab #\Return #\Linefeed) input)))
+         (or (< (length trimmed) 50)
+             (< (length (cl-ppcre:split "\\s+" trimmed)) 10)))))
+
+(defun resolve-swp-effective-model (conversation input default-model)
+  "Processes SWP state transitions and returns the effective model name."
+  (let ((state (conversation-swp-state conversation))
+        (streak (conversation-swp-streak conversation))
+        (max-streak (conversation-swp-max-streak conversation)))
+    (cond
+      ((eq state :flash-warm)
+       ;; Baseline: use the default model
+       (values default-model nil))
+      
+      ((eq state :pro-sticky)
+       ;; We are locked to Pro. Increment streak.
+       (incf (conversation-swp-streak conversation))
+       (let ((current-streak (conversation-swp-streak conversation))
+             (target-model (or (stronger-model default-model)
+                               +google-gemini-model-override-model+)))
+         (log-message :info (format nil "SWP: Locked to Pro (turn ~D/~D)" current-streak max-streak))
+         ;; If we've reached the max streak, transition to :transition
+         (when (>= current-streak max-streak)
+           (setf (conversation-swp-state conversation) :transition
+                 (conversation-swp-streak conversation) 0)
+           (log-message :info "SWP: Streak limit reached. Transitioning to :transition."))
+         (values target-model t)))
+      
+      ((eq state :transition)
+       ;; Cooldown / Return phase: look for low-risk prompt
+       (if (safe-swp-downgrade-prompt-p input)
+           (progn
+             (setf (conversation-swp-state conversation) :flash-warm
+                   (conversation-swp-streak conversation) 0)
+             (log-message :info "SWP: Low-risk prompt detected. Downgrading to Flash (:flash-warm).")
+             (values default-model nil))
+           (progn
+             ;; Remain in :transition and continue on Pro
+             (let ((target-model (or (stronger-model default-model)
+                                     +google-gemini-model-override-model+)))
+               (log-message :info "SWP: High-risk prompt in :transition. Staying on Pro.")
+               (values target-model t)))))
+      
+      (t (values default-model nil)))))
+
 (defvar *chroma-diary-relevance-threshold* 0.5
   "The maximum allowed distance (e.g. squared L2) for a diary entry to be considered relevant.
 Smaller distances indicate higher similarity. A threshold of 0.5 corresponds to medium-high relevance.")
@@ -154,24 +203,28 @@ using QUERY-TEXT as the query, filtering out any that do not pass *chroma-memory
   "Decorates string INPUT with transient prompt prefixes and relevant diary entries/memories requested by CHATBOT."
   (if (and chatbot
            (stringp input))
-      (let* ((parts nil)
-             (persona (chatbot-persona-name chatbot))
-             (diary-text (and persona (get-relevant-diary-entries-text persona input)))
-             (memory-text (and persona (get-relevant-memories-text persona input))))
-        (when (chatbot-include-timestamp-p chatbot)
-          (push (funcall *prompt-timestamp-function*) parts))
-        (when (chatbot-include-model-p chatbot)
-          (push (format-prompt-model-indicator (or effective-model
-                                                  (chatbot-model chatbot)))
-                parts))
-        (let* ((prefix (if parts (format nil "~{~A~^ ~} " (reverse parts)) ""))
-               (decorated (format nil "~A~A" prefix input)))
-          (cond
-            ((and diary-text memory-text)
-             (format nil "~A~%~A~%~A" decorated diary-text memory-text))
-            (diary-text
-             (format nil "~A~%~A" decorated diary-text))
-            (memory-text
-             (format nil "~A~%~A" decorated memory-text))
-            (t decorated))))
+      (if (search "=== Dynamic Context ===" input)
+          input
+          (let* ((parts nil)
+                 (persona (chatbot-persona-name chatbot))
+                 (diary-text (and persona (get-relevant-diary-entries-text persona input)))
+                 (memory-text (and persona (get-relevant-memories-text persona input))))
+            (when (chatbot-include-timestamp-p chatbot)
+              (push (funcall *prompt-timestamp-function*) parts))
+            (when (chatbot-include-model-p chatbot)
+              (push (format-prompt-model-indicator (or effective-model
+                                                      (chatbot-model chatbot)))
+                    parts))
+            (let* ((suffix-parts nil))
+              (when parts
+                (push (format nil "~{~A~^ ~}" (reverse parts)) suffix-parts))
+              (when diary-text
+                (push diary-text suffix-parts))
+              (when memory-text
+                (push memory-text suffix-parts))
+              (if suffix-parts
+                  (format nil "~A~%~%=== Dynamic Context ===~%~{~A~^~%~%~}"
+                          input
+                          (nreverse suffix-parts))
+                  input))))
       input))
