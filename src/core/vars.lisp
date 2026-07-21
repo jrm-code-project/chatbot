@@ -314,6 +314,24 @@ CURRENT-ACTIVE-CONVERSATION with an explicit runtime context instead.")
     (setf (chatbot-model bot)
           (backend-default-model (chatbot-backend bot)))))
 
+(defun conversation-checkpoint-name (conversation)
+  "Returns the validated persistence name used when checkpointing CONVERSATION."
+  (let ((name (or (and (slot-boundp conversation 'checkpoint-name)
+                       (%conversation-checkpoint-name conversation))
+                  (chatbot-checkpoint-name (conversation-chatbot conversation)))))
+    (unless (and name (stringp name) (string/= name ""))
+      (error "Conversation is missing an explicit checkpoint name identifier."))
+    (let ((bot-name (chatbot-checkpoint-name (conversation-chatbot conversation))))
+      (unless (and bot-name (stringp bot-name) (string/= bot-name ""))
+        (error "Chatbot is missing an explicit checkpoint name identifier.")))
+    name))
+
+(defun (setf conversation-checkpoint-name) (new-value conversation)
+  "Sets the persistence name used when checkpointing CONVERSATION after validation."
+  (unless (and new-value (stringp new-value) (string/= new-value ""))
+    (error "Checkpoint name must be a non-empty string."))
+  (setf (%conversation-checkpoint-name conversation) new-value))
+
 (defun make-runtime-context (&key (mcp-config-path nil mcp-config-path-p)
                                   (startup-chatbot nil startup-chatbot-p)
                                   (auto-initialize-startup-mcp-servers-p nil auto-init-p)

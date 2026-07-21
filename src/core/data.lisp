@@ -334,6 +334,10 @@
     :initarg :chatbot
     :accessor conversation-chatbot
     :documentation "Reference to the chatbot instance powering this conversation.")
+   (checkpoint-name
+    :initarg :checkpoint-name
+    :accessor %conversation-checkpoint-name
+    :documentation "The explicit persistence identifier used for checkpoint filenames and restore identity.")
    (persona-memory
     :initarg :persona-memory
     :accessor conversation-persona-memory

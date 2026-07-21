@@ -181,6 +181,7 @@ configuration, instructions, or preloaded memory."
         (register-initial-subordinate-conversations bot)
         (make-instance 'conversation
                        :chatbot bot
+                       :checkpoint-name (or checkpoint-name persona-name "DefaultConversation")
                        :cached-content-name cached-content-name
                        :cached-content-key cached-content-key
                        :cached-content-metadata cached-content-metadata
@@ -291,13 +292,6 @@ Use NEW-CHAT instead when no persona should be loaded."
   (or *minions-data-directory*
       (configured-minions-data-directory)
       (default-minions-data-directory)))
-
-(defun conversation-checkpoint-name (conversation)
-  "Returns the persistence name used when checkpointing CONVERSATION."
-  (let ((name (chatbot-checkpoint-name (conversation-chatbot conversation))))
-    (unless (and name (stringp name) (string/= name ""))
-      (error "Conversation chatbot is missing an explicit checkpoint name identifier."))
-    name))
 
 (defun save-minion-state (conversation &key checkpoint-name)
   "Serializes the critical state and telemetry of CONVERSATION to disk."
@@ -448,6 +442,8 @@ Use NEW-CHAT instead when no persona should be loaded."
 
 (defun apply-restored-conversation-state (conversation restoration)
   "Applies persisted conversation state from RESTORATION onto CONVERSATION."
+  (setf (conversation-checkpoint-name conversation)
+        (getf restoration :checkpoint-name))
   (setf (conversation-interaction-id conversation)
         (getf restoration :interaction-id)
         (conversation-adaptive-context-pruning-max-tokens conversation)
