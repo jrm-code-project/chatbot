@@ -333,3 +333,99 @@
     (let* ((path (resolve-filesystem-tool-path bot pathname tool-name))
            (root (chatbot-filesystem-root-truename bot tool-name)))
       (delete-file-tool-result path root))))
+
+(defun execute-edit-file-tool (bot arguments tool-name)
+  "Runs the built-in editFile tool."
+  (let* ((raw-pathname (or (mcp-val "pathname" arguments)
+                           (mcp-val :pathname arguments)))
+         (new-content (or (mcp-val "newContent" arguments)
+                          (mcp-val :new-content arguments)))
+         (old-content (or (mcp-val "oldContent" arguments)
+                          (mcp-val :old-content arguments)))
+         (start-line (or (mcp-val "startLine" arguments)
+                         (mcp-val :start-line arguments)))
+         (end-line (or (mcp-val "endLine" arguments)
+                       (mcp-val :end-line arguments))))
+    (unless raw-pathname
+      (error 'mcp-tool-execution-error
+             :tool-name tool-name
+             :reason "pathname is required."))
+    (unless new-content
+      (error 'mcp-tool-execution-error
+             :tool-name tool-name
+             :reason "newContent is required."))
+    
+    (let* ((path (resolve-filesystem-tool-path bot raw-pathname tool-name))
+           (root (chatbot-filesystem-root-truename bot tool-name)))
+      (cond
+        ;; Mode 1: Search & Replace Block
+        ((and old-content (not start-line) (not end-line))
+         (let* ((file-content (uiop:read-file-string path))
+                (old-len (length old-content))
+                (matches nil)
+                (pos 0))
+           (loop
+             (let ((found (search old-content file-content :start2 pos)))
+               (if found
+                   (progn
+                     (push found matches)
+                     (setf pos (+ found old-len)))
+                   (return))))
+           (cond
+             ((null matches)
+              (error 'mcp-tool-execution-error
+                     :tool-name tool-name
+                     :reason "oldContent was not found in the file."))
+             ((> (length matches) 1)
+              (error 'mcp-tool-execution-error
+                     :tool-name tool-name
+                     :reason "oldContent appeared multiple times ambiguously."))
+             (t
+              ;; Exactly one match
+              (let* ((match-pos (first matches))
+                     (updated-content (concatenate 'string
+                                                   (subseq file-content 0 match-pos)
+                                                   new-content
+                                                   (subseq file-content (+ match-pos old-len)))))
+                (with-open-file (stream path :direction :output :if-exists :supersede)
+                  (write-string updated-content stream))
+                (format nil "Successfully replaced oldContent in: ~A" (enough-namestring path root)))))))
+        
+        ;; Mode 2: Line-Range Replacement
+        ((and start-line end-line (not old-content))
+         (let* ((start (normalize-builtin-tool-integer-argument start-line "startLine" tool-name))
+                (end (normalize-builtin-tool-integer-argument end-line "endLine" tool-name)))
+           (when (< start 1)
+             (error 'mcp-tool-execution-error
+                    :tool-name tool-name
+                    :reason "startLine must be >= 1."))
+           (when (< end start)
+             (error 'mcp-tool-execution-error
+                    :tool-name tool-name
+                    :reason "endLine must be >= startLine."))
+           (with-open-file (stream path :direction :input)
+             (let* ((eof-marker (gensym "EOF"))
+                    (lines (loop for line = (read-line stream nil eof-marker)
+                                 until (eq line eof-marker)
+                                 collect line))
+                    (line-count (length lines)))
+               (when (< line-count start)
+                 (error 'mcp-tool-execution-error
+                        :tool-name tool-name
+                        :reason (format nil "startLine ~D is past end of file (~D lines)."
+                                        start
+                                        line-count)))
+               (let* ((before-lines (subseq lines 0 (1- start)))
+                      (after-lines (subseq lines (min end line-count)))
+                      (new-lines (cl-ppcre:split "\\r?\\n" new-content))
+                      (all-lines (append before-lines new-lines after-lines))
+                      (lf-only-p (with-open-file (check path :direction :input)
+                                   (let ((str (uiop:read-file-string path)))
+                                     (not (search (format nil "~C~C" #\Return #\Linefeed) str))))))
+                 (write-file-tool-result path root all-lines lf-only-p t)
+                 (format nil "Successfully replaced lines ~D to ~D in: ~A" start end (enough-namestring path root)))))))
+        
+        (t
+         (error 'mcp-tool-execution-error
+                :tool-name tool-name
+                :reason "Invalid parameters: Provide either 'oldContent' or both 'startLine' and 'endLine' (but not both)."))))))

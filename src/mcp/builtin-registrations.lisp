@@ -102,6 +102,9 @@
 (define-builtin-tool "writeFile" (bot arguments)
   (execute-write-file-tool bot arguments tool-name))
 
+(define-builtin-tool "editFile" (bot arguments)
+  (execute-edit-file-tool bot arguments tool-name))
+
 (define-builtin-tool "deleteFile" (bot arguments)
   (execute-delete-file-tool bot arguments tool-name))
 

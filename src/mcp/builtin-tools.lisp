@@ -43,6 +43,23 @@
                                                   (:description . "Array of file lines to write in order.")))))
                       (:required . ("pathname" "useLfOnly" "endWithEol" "lines"))))))
 
+(defun builtin-edit-file-tool ()
+  "Returns the built-in editFile tool definition."
+  '((:name . "editFile")
+    (:description . "Surgically edits a file by exact match replacement or line-range replacement.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("pathname" . ((:type . "string")
+                                                     (:description . "Path to the file, relative to the persona directory or absolute within it.")))
+                                      ("newContent" . ((:type . "string")
+                                                       (:description . "The new replacement text, code block, or lines to insert.")))
+                                      ("oldContent" . ((:type . "string")
+                                                       (:description . "The exact block of existing code/text to find and replace (for Search & Replace mode).")))
+                                      ("startLine" . ((:type . "integer")
+                                                      (:description . "1-based starting line number (for Line-Range mode).")))
+                                      ("endLine" . ((:type . "integer")
+                                                    (:description . "1-based ending line number (for Line-Range mode).")))))
+                      (:required . ("pathname" "newContent"))))))
+
 (defun builtin-delete-file-tool ()
   "Returns the built-in deleteFile tool definition."
   '((:name . "deleteFile")
@@ -410,7 +427,8 @@
         (when (chatbot-filesystem-tools-p bot)
           (unless (chatbot-filesystem-read-only-p bot)
             (push (cons :built-in (builtin-delete-file-tool)) tools)
-            (push (cons :built-in (builtin-write-file-tool)) tools))
+            (push (cons :built-in (builtin-write-file-tool)) tools)
+            (push (cons :built-in (builtin-edit-file-tool)) tools))
           (push (cons :built-in (builtin-directory-tool)) tools)
           (push (cons :built-in (builtin-read-file-lines-tool)) tools))
         (when (or (chatbot-system-instruction-path bot)

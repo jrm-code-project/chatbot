@@ -2586,3 +2586,98 @@
        (uiop:delete-directory-tree filesystem-root-directory :validate t))
       (when (uiop:directory-exists-p filesystem-allowed-directory)
        (uiop:delete-directory-tree filesystem-allowed-directory :validate t)))))
+
+(fiveam:test test-execute-chatbot-tool-edit-file-search-replace
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "filesystem-tool-edit-file-search/" temp-dir))
+         (file-path (merge-pathnames "notes.txt" root))
+         (bot (make-instance 'chatbot
+                             :filesystem-tools-p t
+                             :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (unwind-protect
+         (progn
+           ;; 1. Write the initial file
+           (execute-chatbot-tool bot
+                                 :built-in
+                                 "writeFile"
+                                 `(("pathname" . "notes.txt")
+                                   ("useLfOnly" . t)
+                                   ("endWithEol" . t)
+                                   ("lines" . ,#("Line 1" "Line 2" "Line 3"))))
+           ;; 2. Run editFile in search & replace mode (exactly one match)
+           (execute-chatbot-tool bot
+                                 :built-in
+                                 "editFile"
+                                 `(("pathname" . "notes.txt")
+                                   ("oldContent" . "Line 2")
+                                   ("newContent" . "Line Two Updated")))
+           (fiveam:is (string= (format nil "Line 1~%Line Two Updated~%Line 3~%")
+                               (read-test-file-octets-as-string file-path))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-edit-file-search-replace-safety-checks
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "filesystem-tool-edit-file-safety/" temp-dir))
+         (bot (make-instance 'chatbot
+                             :filesystem-tools-p t
+                             :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (unwind-protect
+         (progn
+           ;; 1. Write initial file with duplicate text
+           (execute-chatbot-tool bot
+                                 :built-in
+                                 "writeFile"
+                                 `(("pathname" . "notes.txt")
+                                   ("useLfOnly" . t)
+                                   ("endWithEol" . t)
+                                   ("lines" . ,#("Line 1" "Duplicate text" "Line 3" "Duplicate text"))))
+           ;; 2. Attempt search & replace with ambiguous duplicates -> should fail
+           (fiveam:signals mcp-tool-execution-error
+             (execute-chatbot-tool bot
+                                   :built-in
+                                   "editFile"
+                                   `(("pathname" . "notes.txt")
+                                     ("oldContent" . "Duplicate text")
+                                     ("newContent" . "Single Replacement"))))
+           ;; 3. Attempt search & replace with missing text -> should fail
+           (fiveam:signals mcp-tool-execution-error
+             (execute-chatbot-tool bot
+                                   :built-in
+                                   "editFile"
+                                   `(("pathname" . "notes.txt")
+                                     ("oldContent" . "Missing text")
+                                     ("newContent" . "Single Replacement")))))
+      (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-edit-file-line-range
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (root (merge-pathnames "filesystem-tool-edit-file-range/" temp-dir))
+         (file-path (merge-pathnames "notes.txt" root))
+         (bot (make-instance 'chatbot
+                             :filesystem-tools-p t
+                             :filesystem-root-directory root)))
+    (ensure-directories-exist root)
+    (unwind-protect
+         (progn
+           ;; 1. Write initial file
+           (execute-chatbot-tool bot
+                                 :built-in
+                                 "writeFile"
+                                 `(("pathname" . "notes.txt")
+                                   ("useLfOnly" . t)
+                                   ("endWithEol" . t)
+                                   ("lines" . ,#("Line 1" "Line 2" "Line 3" "Line 4"))))
+           ;; 2. Edit line range 2 to 3
+           (execute-chatbot-tool bot
+                                 :built-in
+                                 "editFile"
+                                 `(("pathname" . "notes.txt")
+                                   ("startLine" . 2)
+                                   ("endLine" . 3)
+                                   ("newContent" . "New Line 2
+New Line 3")))
+           (fiveam:is (string= (format nil "Line 1~%New Line 2~%New Line 3~%Line 4~%")
+                               (read-test-file-octets-as-string file-path))))
+      (uiop:delete-directory-tree root :validate t))))
