@@ -12,6 +12,7 @@
          (persona-diary-entries (conversation-persona-diary-entries conversation))
          (decorated (decorate-live-user-input bot input)))
     (list :input input
+          :conversation conversation
           :file-attachments file-attachments
           :effective-generation-config effective-generation-config
           :malformed-response-retry-attempted-p malformed-response-retry-attempted-p
@@ -100,21 +101,30 @@
 (defun openai-request-target (bot)
   "Returns BOT's resolved backend, API key, base URL, and backend label."
   (let ((backend (chatbot-backend bot)))
-    (list :backend backend
-          :api-key (if (eq backend :lm-studio)
-                       (lm-studio-api-key)
-                       (openai-api-key))
-          :base-url (if (eq backend :lm-studio)
-                        (lm-studio-api-base-url)
-                        *openai-base-url*)
-          :backend-label (if (eq backend :lm-studio) "LM Studio" "OpenAI"))))
+    (cond
+      ((eq backend :lm-studio)
+       (list :backend backend
+             :api-key (lm-studio-api-key)
+             :base-url (lm-studio-api-base-url)
+             :backend-label "LM Studio"))
+      ((eq backend :grok)
+       (list :backend backend
+             :api-key (grok-api-key)
+             :base-url (grok-api-base-url)
+             :backend-label "Grok"))
+      (t
+       (list :backend backend
+             :api-key (openai-api-key)
+             :base-url *openai-base-url*
+             :backend-label "OpenAI")))))
 
 (defun openai-request-payload-alist (bot request-messages effective-generation-config)
   "Returns the chat completions payload alist for BOT."
   (let ((openai-tools (openai-request-tools bot)))
     (append (list (cons "model" (chatbot-model bot))
                   (cons "messages" request-messages)
-                  (cons "stream" t))
+                  (cons "stream" t)
+                  (cons "stream_options" (list (cons "include_usage" t))))
             (when (getf effective-generation-config :temperature)
               (list (cons "temperature" (getf effective-generation-config :temperature))))
             (when (getf effective-generation-config :top-p)
@@ -126,10 +136,13 @@
   "Returns the chat completions URL under BASE-URL."
   (concatenate 'string base-url "/chat/completions"))
 
-(defun openai-request-headers (api-key)
-  "Returns the standard OpenAI-compatible request headers for API-KEY."
-  (list (cons "Authorization" (concatenate 'string "Bearer " api-key))
-        (cons "Content-Type" "application/json")))
+(defun openai-request-headers (api-key &key grok-conv-id)
+  "Returns the standard OpenAI-compatible request headers for API-KEY, optionally including grok-conv-id."
+  (let ((headers (list (cons "Authorization" (concatenate 'string "Bearer " api-key))
+                       (cons "Content-Type" "application/json"))))
+    (if grok-conv-id
+        (cons (cons "x-grok-conv-id" grok-conv-id) headers)
+        headers)))
 
 (defun openai-empty-tool-call-entry ()
   "Returns a fresh mutable tool-call accumulator entry."
@@ -186,9 +199,10 @@
       (handle-openai-stream-delta delta callback full-text accumulated-tool-calls))))
 
 (defun collect-openai-stream-state (stream callback stream-read-timeout)
-  "Consumes STREAM and returns the accumulated full text and tool calls."
+  "Consumes STREAM and returns the accumulated full text, tool calls, and usage stats."
   (let ((full-text (make-array 0 :element-type 'character :fill-pointer 0 :adjustable t))
-        (accumulated-tool-calls (make-hash-table :test 'equal)))
+        (accumulated-tool-calls (make-hash-table :test 'equal))
+        (usage nil))
     (unwind-protect
          (loop for line = (read-sse-line stream
                                          :timeout-seconds stream-read-timeout
@@ -198,13 +212,17 @@
                               (alexandria:starts-with-subseq "data: [DONE]" line)))
                do (let ((event (parse-sse-event line)))
                     (when event
+                      (let ((found-usage (cdr (assoc :usage event))))
+                        (when found-usage
+                          (setf usage found-usage)))
                       (parse-openai-stream-event event
                                                  callback
                                                  full-text
                                                  accumulated-tool-calls))))
       (close stream))
     (list :text (coerce full-text 'string)
-          :accumulated-tool-calls accumulated-tool-calls)))
+          :accumulated-tool-calls accumulated-tool-calls
+          :usage usage)))
 
 (defun accumulated-openai-tool-calls (accumulated-tool-calls)
   "Returns ACCUMULATED-TOOL-CALLS as the list shape expected by provider outcomes."
@@ -222,20 +240,37 @@
            (string= text "")
            (markup-only-text-p text))))
 
+(defun normalize-openai-usage (raw-usage)
+  "Converts raw OpenAI/Grok usage alist into canonical chatbot usage keys."
+  (when raw-usage
+    (let* ((prompt-tokens (cdr (assoc :prompt--tokens raw-usage)))
+           (completion-tokens (cdr (assoc :completion--tokens raw-usage)))
+           (total-tokens (cdr (assoc :total--tokens raw-usage)))
+           (prompt-details (cdr (assoc :prompt--tokens--details raw-usage)))
+           (cached-tokens (and prompt-details
+                               (cdr (assoc :cached--tokens prompt-details)))))
+      (list (cons :total-input-tokens prompt-tokens)
+            (cons :total-output-tokens completion-tokens)
+            (cons :total-cached-tokens cached-tokens)
+            (cons :total-tokens total-tokens)))))
+
 (defun openai-stream-state->provider-outcome (state stream-state)
   "Returns the provider outcome implied by STREAM-STATE."
   (let* ((tool-calls (accumulated-openai-tool-calls
                      (getf stream-state :accumulated-tool-calls)))
-         (text (getf stream-state :text)))
+         (text (getf stream-state :text))
+         (raw-usage (getf stream-state :usage))
+         (normalized-usage (normalize-openai-usage raw-usage)))
     (if tool-calls
         (make-provider-turn-tool-outcome tool-calls
                                         :history-messages (getf state :history-messages)
                                         :request-messages (getf state :request-messages)
                                         :file-attachments (getf state :file-attachments)
-                                        :effective-generation-config (getf state :effective-generation-config))
+                                        :effective-generation-config (getf state :effective-generation-config)
+                                        :usage normalized-usage)
         (if (openai-final-text-retryable-p state text)
             (make-provider-turn-retry-outcome :reason :malformed-response)
-            (make-provider-turn-final-outcome text)))))
+            (make-provider-turn-final-outcome text :usage normalized-usage)))))
 
 (defun openai-api-key-or-error (request-target)
   "Returns REQUEST-TARGET's configured API key or signals when it is missing."
@@ -256,10 +291,15 @@
   (let* ((request-target (openai-request-target bot))
          (api-key (openai-api-key-or-error request-target))
          (backend (getf request-target :backend))
-         (read-timeout (backend-http-read-timeout backend)))
+         (read-timeout (backend-http-read-timeout backend))
+         (conversation (getf state :conversation))
+         (grok-conv-id (when (and (eq backend :grok) conversation)
+                         (or (conversation-interaction-id conversation)
+                             (setf (conversation-interaction-id conversation)
+                                   (generate-unique-grok-conv-id))))))
     (list :payload-json (openai-turn-request-payload-json bot state)
           :url (openai-request-url (getf request-target :base-url))
-          :headers (openai-request-headers api-key)
+          :headers (openai-request-headers api-key :grok-conv-id grok-conv-id)
           :http-read-timeout read-timeout
           :stream-read-timeout read-timeout)))
 
@@ -338,6 +378,7 @@
 
 (register-chat-backend :openai #'openai-chat-backend-handler)
 (register-chat-backend :lm-studio #'openai-chat-backend-handler)
+(register-chat-backend :grok #'openai-chat-backend-handler)
 
 (defun openai-string->embedding-vector (text &key (model "text-embedding-3-small") api-key base-url)
   "Calls the OpenAI embeddings API to generate an embedding vector for TEXT.

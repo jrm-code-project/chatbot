@@ -1061,3 +1061,138 @@ data: [DONE]")
                 (fiveam:is (string= "text-embedding-3-small" (cdr (assoc :model decoded))))
                 (fiveam:is (string= "test message" (cdr (assoc :input decoded)))))
               (fiveam:is (string= "Bearer mocked-openai-embedding-key" (cdr (assoc "Authorization" captured-headers :test #'string=)))))))))))
+
+(fiveam:test test-grok-api-key-resolution
+  ;; Test explicit key binding
+  (let ((*grok-api-key* "explicit-grok-key"))
+    (fiveam:is (string= "explicit-grok-key" (grok-api-key))))
+  
+  ;; Test environment fallback when file is absent
+  (let* ((*grok-api-key* nil)
+         (context
+           (make-runtime-context
+            :getenv-function (lambda (name)
+                               (cond
+                                 ((string= name "LOCALAPPDATA") nil)
+                                 ((string= name "GROK_API_KEY") "env-grok-key")
+                                 (t nil))))))
+    (call-with-runtime-context
+     context
+     (lambda ()
+       ;; Ensure mock home is empty so file probe fails
+       (let ((*user-homedir-pathname-function* (lambda () #p"/non-existent-home/")))
+         (fiveam:is (string= "env-grok-key" (grok-api-key)))))))
+
+  ;; Test AppData file resolution via LOCALAPPDATA
+  (let* ((*grok-api-key* nil)
+         (temp-dir (uiop:temporary-directory))
+         (appdata-dir (merge-pathnames "grok-mock-localappdata/" temp-dir))
+         (config-dir (merge-pathnames "config/X/" appdata-dir))
+         (key-file (merge-pathnames "api-key" config-dir)))
+    (ensure-directories-exist config-dir)
+    (with-open-file (s key-file :direction :output :if-exists :supersede)
+      (write-line "  file-grok-key-from-localappdata " s))
+    (unwind-protect
+         (let ((context
+                 (make-runtime-context
+                  :getenv-function (lambda (name)
+                                     (if (string= name "LOCALAPPDATA")
+                                         (namestring appdata-dir)
+                                         nil)))))
+           (call-with-runtime-context
+            context
+            (lambda ()
+              (fiveam:is (string= "file-grok-key-from-localappdata" (grok-api-key))))))
+      (uiop:delete-directory-tree appdata-dir :validate t))))
+
+(fiveam:test test-grok-api-base-url-normalization
+  (let ((*grok-base-url* "https://api.x.ai/"))
+    (fiveam:is (string= "https://api.x.ai/v1" (grok-api-base-url))))
+  (let ((*grok-base-url* "https://api.x.ai/v1"))
+    (fiveam:is (string= "https://api.x.ai/v1" (grok-api-base-url)))))
+
+(fiveam:test test-grok-chat-flow
+  (let (captured-url
+        captured-headers)
+    (let* ((*grok-api-key* "grok-test-token")
+           (*grok-base-url* "https://api.x.ai/")
+           (context (make-runtime-context
+                     :http-post-function
+                     (lambda (url &rest args)
+                       (setf captured-url url)
+                       (setf captured-headers (getf args :headers))
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"content\": \"Hello from Grok!\"}}]}
+data: [DONE]")
+                               200))))
+           (conv (new-chat :backend :grok :runtime-context context)))
+      (let ((res (chat "Who are you?" :conversation conv)))
+        (fiveam:is (string= "Hello from Grok!" res))
+        (fiveam:is (string= "https://api.x.ai/v1/chat/completions" captured-url))
+        (fiveam:is (string= "Bearer grok-test-token"
+                            (cdr (assoc "Authorization" captured-headers :test #'string=))))))))
+
+(fiveam:test test-grok-token-caching-session-routing
+  (let (captured-headers)
+    (let* ((*grok-api-key* "grok-test-token")
+           (*grok-base-url* "https://api.x.ai/")
+           (context (make-runtime-context
+                     :http-post-function
+                     (lambda (url &rest args)
+                       (declare (ignore url))
+                       (setf captured-headers (getf args :headers))
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"content\": \"hi\"}}]}
+data: [DONE]")
+                               200))))
+           (conv (new-chat :backend :grok :runtime-context context)))
+      ;; First turn: verify lazy generation of unique session ID
+      (fiveam:is (null (conversation-interaction-id conv)))
+      (let ((res (chat "Hello 1" :conversation conv)))
+        (fiveam:is (string= "hi" res))
+        (let ((session-id (conversation-interaction-id conv)))
+          (fiveam:is (not (null session-id)))
+          (fiveam:is (alexandria:starts-with-subseq "grok-session-" session-id))
+          (fiveam:is (string= session-id (cdr (assoc "x-grok-conv-id" captured-headers :test #'string=))))
+          
+          ;; Second turn: verify preservation and reuse of same session ID
+          (setf captured-headers nil)
+          (let ((res2 (chat "Hello 2" :conversation conv)))
+            (fiveam:is (string= "hi" res2))
+            (fiveam:is (string= session-id (conversation-interaction-id conv)))
+            (fiveam:is (string= session-id (cdr (assoc "x-grok-conv-id" captured-headers :test #'string=))))))))))
+
+(fiveam:test test-grok-streaming-usage-and-cache-reporting
+  (let (captured-headers
+        captured-payload)
+    (let* ((*grok-api-key* "grok-test-token")
+           (*grok-base-url* "https://api.x.ai/")
+           (context (make-runtime-context
+                     :http-post-function
+                     (lambda (url &rest args)
+                       (declare (ignore url))
+                       (setf captured-headers (getf args :headers))
+                       (setf captured-payload (getf args :content))
+                       ;; Emulate final usage block in streaming format with cached_tokens
+                       (values (make-string-input-stream
+                                "data: {\"choices\": [{\"delta\": {\"content\": \"Usage response\"}}]}
+data: {\"usage\": {\"prompt_tokens\": 125, \"completion_tokens\": 48, \"total_tokens\": 173, \"prompt_tokens_details\": {\"cached_tokens\": 98}}}
+data: [DONE]")
+                               200))))
+           (conv (new-chat :backend :grok :runtime-context context)))
+      (let ((res (chat "Test usage and cache" :conversation conv)))
+        (fiveam:is (string= "Usage response" res))
+        ;; Verify payload includes stream_options
+        (let ((decoded-payload (cl-json:decode-json-from-string captured-payload)))
+          (fiveam:is (not (null (assoc :stream--options decoded-payload))))
+          (fiveam:is-true (cdr (assoc :include--usage (cdr (assoc :stream--options decoded-payload))))))
+        ;; Verify usage can be normalized correctly
+        (let* ((raw-usage '((:prompt--tokens . 125)
+                            (:completion--tokens . 48)
+                            (:total--tokens . 173)
+                            (:prompt--tokens--details . ((:cached--tokens . 98)))))
+               (normalized (normalize-openai-usage raw-usage)))
+          (fiveam:is (= 125 (cdr (assoc :total-input-tokens normalized))))
+          (fiveam:is (= 48 (cdr (assoc :total-output-tokens normalized))))
+          (fiveam:is (= 98 (cdr (assoc :total-cached-tokens normalized))))
+          (fiveam:is (= 173 (cdr (assoc :total-tokens normalized)))))))))

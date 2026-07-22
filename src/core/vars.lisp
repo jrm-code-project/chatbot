@@ -44,6 +44,12 @@
 (defparameter *openai-api-key* nil
   "The API key for the OpenAI-compliant API. If nil, looks up the OPENAI_API_KEY environment variable.")
 
+(defparameter *grok-base-url* "https://api.x.ai/"
+  "The base REST endpoint for the Grok API.")
+
+(defparameter *grok-api-key* nil
+  "The API key for the Grok API. If nil, reads from AppData/Local/config/X/api-key or checks GROK_API_KEY environment variable.")
+
 (defparameter *getenv-function* #'uiop:getenv
   "Function used to read environment variables.")
 
@@ -142,7 +148,8 @@
   '((:gemini . "gemini-3.5-flash")
     (:google . "gemini-3.5-flash")
     (:openai . "gpt-4o")
-    (:lm-studio . "gemma-4-e4b-uncensored-hauhaucs-aggressive"))
+    (:lm-studio . "gemma-4-e4b-uncensored-hauhaucs-aggressive")
+    (:grok . "grok-2-latest"))
   "Default model names keyed by backend.")
 
 (defun backend-default-model (backend)
@@ -174,6 +181,36 @@ Unknown backends fall back to the Gemini default."
   "Returns the OpenAI API key. First checks *openai-api-key*, then the OPENAI_API_KEY environment variable."
   (or *openai-api-key*
       (funcall (current-getenv-function) "OPENAI_API_KEY")))
+
+(defun grok-api-key-file-path ()
+  "Constructs the target path for the Grok API key stored in AppData/Local/config/X/api-key."
+  (let* ((local-app-data (funcall (current-getenv-function) "LOCALAPPDATA"))
+         (home (funcall *user-homedir-pathname-function*)))
+    (if (and local-app-data (string/= local-app-data ""))
+        (merge-pathnames "config/X/api-key" (uiop:ensure-directory-pathname local-app-data))
+        (merge-pathnames "AppData/Local/config/X/api-key" home))))
+
+(defun grok-api-key ()
+  "Returns the Grok API key. First checks *grok-api-key*, then reads from AppData/Local/config/X/api-key,
+and falls back to the GROK_API_KEY environment variable."
+  (or *grok-api-key*
+      (let ((path (grok-api-key-file-path)))
+        (if (probe-file path)
+            (string-trim '(#\Space #\Tab #\Return #\Linefeed) (uiop:read-file-string path))
+            (funcall (current-getenv-function) "GROK_API_KEY")))))
+
+(defun grok-api-base-url ()
+  "Returns the normalized OpenAI-compatible Grok API base URL."
+  (let ((base-url (string-right-trim "/" *grok-base-url*)))
+    (if (alexandria:ends-with-subseq "/v1" base-url)
+        base-url
+        (concatenate 'string base-url "/v1"))))
+
+(defun generate-unique-grok-conv-id ()
+  "Generates a lightweight, unique session ID for Grok prefix caching."
+  (format nil "grok-session-~X-~X"
+          (get-universal-time)
+          (random #xFFFFFFFF)))
 
 (defparameter *lm-studio-base-url* "http://127.0.0.1:1234"
   "The host root for the local LM Studio API.")
