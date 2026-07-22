@@ -294,7 +294,7 @@ Use NEW-CHAT instead when no persona should be loaded."
       (default-minions-data-directory)))
 
 (defun save-minion-state (conversation &key checkpoint-name)
-  "Serializes the critical state and telemetry of CONVERSATION to disk."
+  "Serializes the critical state and telemetry of CONVERSATION to disk atomically."
   (let* ((bot (conversation-chatbot conversation))
          (name (or checkpoint-name
                    (chatbot-checkpoint-name bot))))
@@ -302,13 +302,15 @@ Use NEW-CHAT instead when no persona should be loaded."
       (error "Attempted to save minion state without a valid checkpoint name."))
     (let* ((dir (minions-data-directory))
            (file-path (merge-pathnames (format nil "~A.json" name) dir))
+           (tmp-path (make-pathname :type "tmp" :defaults file-path))
            (state-plist (conversation-persistence-state conversation :name name)))
-        (ensure-directories-exist file-path)
-        (with-open-file (stream file-path
+        (ensure-directories-exist tmp-path)
+        (with-open-file (stream tmp-path
                               :direction :output
                               :if-exists :supersede
-                               :if-does-not-exist :create)
+                              :if-does-not-exist :create)
           (write-string (cl-json:encode-json-to-string state-plist) stream))
+        (uiop:rename-file-overwriting-target tmp-path file-path)
         (log-message :info "Freeze-dried minion state"
                      :context `(("name" . ,name) ("file" . ,(namestring file-path))))
         (namestring file-path))))
