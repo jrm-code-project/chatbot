@@ -2,6 +2,35 @@
 
 (in-package "CHATBOT")
 
+(defun current-thread-object ()
+  "Returns the current thread object portably."
+  #+sbcl sb-thread:*current-thread*
+  #-sbcl :default-thread)
+
+(defvar *thread-active-conversations-map* (make-hash-table :test #'eq :synchronized t)
+  "Thread-safe synchronized map from thread to context-to-conversation alists.")
+(defvar *thread-active-planners-map* (make-hash-table :test #'eq :synchronized t)
+  "Thread-safe synchronized map from thread to context-to-planner alists.")
+(defvar *thread-active-planner-parents-map* (make-hash-table :test #'eq :synchronized t)
+  "Thread-safe synchronized map from thread to context-to-planner-parent alists.")
+
+(defun get-thread-context-value (thread-map context)
+  "Retrieves the thread-local value for CONTEXT from THREAD-MAP."
+  (let* ((thread (current-thread-object))
+         (context-alist (gethash thread thread-map)))
+    (cdr (assoc context context-alist))))
+
+(defun set-thread-context-value (thread-map context value)
+  "Stores the thread-local value for CONTEXT in THREAD-MAP."
+  (let* ((thread (current-thread-object))
+         (context-alist (gethash thread thread-map))
+         (entry (assoc context context-alist)))
+    (if entry
+        (setf (cdr entry) value)
+        (setf (gethash thread thread-map)
+              (cons (cons context value) context-alist)))
+    value))
+
 (defclass runtime-context ()
   ((mcp-config-path
     :initarg :mcp-config-path
@@ -120,19 +149,43 @@
     :documentation "Lock protecting unified worker-registry updates.")
    (active-conversation
     :initarg :active-conversation
-    :accessor runtime-context-active-conversation
+    :accessor %runtime-context-active-conversation
     :initform nil
     :documentation "Conversation currently being processed in this runtime context.")
    (active-planner
     :initarg :active-planner
-    :accessor runtime-context-active-planner
+    :accessor %runtime-context-active-planner
     :initform nil
     :documentation "Planner conversation currently intercepting chat turns in this runtime context.")
    (active-planner-parent-conversation
     :initarg :active-planner-parent-conversation
-    :accessor runtime-context-active-planner-parent-conversation
+    :accessor %runtime-context-active-planner-parent-conversation
     :initform nil
     :documentation "Parent conversation associated with the active planner in this runtime context.")))
+
+(defmethod runtime-context-active-conversation ((context runtime-context))
+  "Returns thread-local active conversation for CONTEXT."
+  (get-thread-context-value *thread-active-conversations-map* context))
+
+(defmethod (setf runtime-context-active-conversation) (value (context runtime-context))
+  "Sets thread-local active conversation for CONTEXT."
+  (set-thread-context-value *thread-active-conversations-map* context value))
+
+(defmethod runtime-context-active-planner ((context runtime-context))
+  "Returns thread-local active planner for CONTEXT."
+  (get-thread-context-value *thread-active-planners-map* context))
+
+(defmethod (setf runtime-context-active-planner) (value (context runtime-context))
+  "Sets thread-local active planner for CONTEXT."
+  (set-thread-context-value *thread-active-planners-map* context value))
+
+(defmethod runtime-context-active-planner-parent-conversation ((context runtime-context))
+  "Returns thread-local active planner parent for CONTEXT."
+  (get-thread-context-value *thread-active-planner-parents-map* context))
+
+(defmethod (setf runtime-context-active-planner-parent-conversation) (value (context runtime-context))
+  "Sets thread-local active planner parent for CONTEXT."
+  (set-thread-context-value *thread-active-planner-parents-map* context value))
 
 (defparameter +default-gemini-fallback-to-google-p+ nil
   "Authoritative default for the Gemini Interactions compatibility fallback.")

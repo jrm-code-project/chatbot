@@ -816,16 +816,16 @@ longer mirrored."
   "Sets the transient planner parent conversation for CONTEXT.")
 
 (defun call-with-runtime-context (context thunk
-                                &key
-                                  (default-conversation-compatibility-p t)
-                                  (legacy-function-seam-compatibility-p t))
+                                 &key
+                                   (default-conversation-compatibility-p t)
+                                   (legacy-function-seam-compatibility-p t))
   "Calls THUNK with the resolved runtime context active.
 Function seams and approval seams now resolve through the active runtime
 context directly. DEFAULT-CONVERSATION-COMPATIBILITY-P and
 LEGACY-FUNCTION-SEAM-COMPATIBILITY-P are retained for API compatibility but no
 longer mirror legacy ambient specials back into the runtime context."
   (declare (ignore default-conversation-compatibility-p
-                   legacy-function-seam-compatibility-p))
+                    legacy-function-seam-compatibility-p))
   (let ((resolved-context (resolve-runtime-context context)))
     (cond
       ((null resolved-context)
