@@ -88,6 +88,15 @@
                                                        (:description . "A single Lisp s-expression to read and evaluate.")))))
                       (:required . ("expression"))))))
 
+(defun builtin-shell-tool ()
+  "Returns the built-in shell tool definition."
+  '((:name . "shell")
+    (:description . "Executes a system shell command and returns the output (stdout, stderr, exit code).")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("command" . ((:type . "string")
+                                                    (:description . "The shell command string to execute.")))))
+                      (:required . ("command"))))))
+
 (defun builtin-web-search-tool ()
   "Returns the built-in webSearch tool definition."
   '((:name . "webSearch")
@@ -424,6 +433,8 @@
           (push (cons :built-in (builtin-web-search-tool)) tools))
         (when (chatbot-enable-eval-p bot)
           (push (cons :built-in (builtin-eval-tool)) tools))
+        (when (chatbot-enable-shell-p bot)
+          (push (cons :built-in (builtin-shell-tool)) tools))
         (when (chatbot-filesystem-tools-p bot)
           (unless (chatbot-filesystem-read-only-p bot)
             (push (cons :built-in (builtin-delete-file-tool)) tools)

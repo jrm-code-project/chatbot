@@ -561,6 +561,29 @@
                       (google-tool-names google-tools)
                       :test #'string=))))
 
+(fiveam:test test-payload-builders-include-shell-when-enabled
+  (let* ((bot (make-instance 'chatbot
+                            :model "gemini-3.5-flash"
+                            :enable-shell-p t))
+        (interaction-tools (interaction-request-tools bot))
+        (openai-tools (openai-request-tools bot))
+        (google-tools (generate-content-request-tools bot)))
+    (fiveam:is (find "shell"
+                    interaction-tools
+                    :test #'string=
+                    :key (lambda (tool)
+                           (cdr (assoc "name" tool :test #'string=)))))
+    (fiveam:is (find "shell"
+                    openai-tools
+                    :test #'string=
+                    :key (lambda (tool)
+                           (cdr (assoc "name"
+                                       (cdr (assoc "function" tool :test #'string=))
+                                       :test #'string=)))))
+    (fiveam:is (member "shell"
+                      (google-tool-names google-tools)
+                      :test #'string=))))
+
 (fiveam:test test-payload-builders-include-web-grounding-tools-when-enabled
   (let* ((bot (make-instance 'chatbot
                             :model "gemini-3.5-flash"

@@ -28,6 +28,9 @@
 (define-builtin-tool "eval" (bot arguments)
   (execute-eval-tool bot arguments tool-name))
 
+(define-builtin-tool "shell" (bot arguments)
+  (execute-shell-tool bot arguments tool-name))
+
 (define-builtin-tool "readSamplingParameters" (bot arguments)
   (declare (ignore arguments))
   (execute-read-sampling-parameters-tool bot))

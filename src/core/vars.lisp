@@ -86,6 +86,20 @@
 (defparameter *eval-approval-function* #'default-eval-approval-function
   "Function used to approve evaluation of a specific expression for the eval tool.")
 
+(defparameter *bypass-shell-approval-p* nil
+  "When T, bypasses interactive shell approval and automatically returns T.")
+
+(defun default-shell-approval-function (bot command tool-name)
+  "Prompts the user to approve executing COMMAND for TOOL-NAME."
+  (declare (ignore bot))
+  (or *bypass-shell-approval-p*
+      (progn
+        (format t "~&Shell command to execute: ~A~%" command)
+        (yes-or-no-p "Allow ~A to execute this command? " tool-name))))
+
+(defparameter *shell-approval-function* #'default-shell-approval-function
+  "Function used to approve running a specific shell command for the shell tool.")
+
 (defparameter *user-homedir-pathname-function* #'user-homedir-pathname
   "Function used to resolve the current user's home directory pathname.")
 

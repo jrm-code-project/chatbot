@@ -291,6 +291,11 @@
     :accessor chatbot-enable-eval-p
     :initform nil
     :documentation "Flag to enable the built-in eval tool for this chatbot.")
+   (enable-shell-p
+    :initarg :enable-shell-p
+    :accessor chatbot-enable-shell-p
+    :initform nil
+    :documentation "Flag to enable the built-in shell tool for this chatbot.")
    (enable-git-tools-p
     :initarg :enable-git-tools-p
     :accessor chatbot-enable-git-tools-p

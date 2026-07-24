@@ -778,6 +778,23 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
             (fiveam:is-true (chatbot-enable-eval-p bot))))
       (uiop:delete-directory-tree mock-home :validate t))))
 
+(fiveam:test test-persona-config-enables-shell-tool
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-shell-tool/" temp-dir))
+         (personas-dir (merge-pathnames ".Personas/" mock-home))
+         (test-persona-dir (merge-pathnames "persona-shell-tool/" personas-dir)))
+    (ensure-directories-exist test-persona-dir)
+    (with-open-file (s (merge-pathnames "config.lisp" test-persona-dir)
+                     :direction :output
+                     :if-exists :supersede)
+      (write-line "(:model \"gpt-4o\" :enable-shell t)" s))
+    (unwind-protect
+         (let ((*user-homedir-pathname-function* (lambda () mock-home)))
+           (let* ((conv (new-chat-persona "persona-shell-tool"))
+                 (bot (conversation-chatbot conv)))
+            (fiveam:is-true (chatbot-enable-shell-p bot))))
+      (uiop:delete-directory-tree mock-home :validate t))))
+
 (fiveam:test test-persona-loads-filesystem-allowlist
   (let* ((temp-dir (uiop:default-temporary-directory))
         (mock-home (merge-pathnames "mock-home-filesystem-allowlist/" temp-dir))

@@ -2372,6 +2372,7 @@
                                               :include-timestamp-p t
                                               :include-model-p t
                                               :enable-eval-p t
+                                              :enable-shell-p t
                                               :enable-git-tools-p t
                                               :filesystem-tools-p t
                                               :filesystem-root-directory filesystem-root-directory
@@ -2418,6 +2419,7 @@
              (fiveam:is-true (chatbot-include-timestamp-p r-bot))
              (fiveam:is-true (chatbot-include-model-p r-bot))
              (fiveam:is-true (chatbot-enable-eval-p r-bot))
+             (fiveam:is-true (chatbot-enable-shell-p r-bot))
              (fiveam:is-true (chatbot-enable-git-tools-p r-bot))
              (fiveam:is-true (chatbot-filesystem-tools-p r-bot))
              (fiveam:is (equal (chatbot-filesystem-root-directory bot)
@@ -2548,6 +2550,7 @@
             (setf (chatbot-include-timestamp-p bot) t)
             (setf (chatbot-include-model-p bot) t)
             (setf (chatbot-enable-eval-p bot) t)
+            (setf (chatbot-enable-shell-p bot) t)
             (setf (chatbot-enable-git-tools-p bot) t)
             (setf (chatbot-filesystem-tools-p bot) t)
             (setf (chatbot-filesystem-root-directory bot) filesystem-root-directory)
@@ -2571,6 +2574,7 @@
               (fiveam:is-true (chatbot-include-timestamp-p restored-bot))
               (fiveam:is-true (chatbot-include-model-p restored-bot))
               (fiveam:is-true (chatbot-enable-eval-p restored-bot))
+              (fiveam:is-true (chatbot-enable-shell-p restored-bot))
               (fiveam:is-true (chatbot-enable-git-tools-p restored-bot))
               (fiveam:is-true (chatbot-filesystem-tools-p restored-bot))
               (fiveam:is (equal filesystem-root-directory
@@ -2681,3 +2685,39 @@ New Line 3")))
            (fiveam:is (string= (format nil "Line 1~%New Line 2~%New Line 3~%Line 4~%")
                                (read-test-file-octets-as-string file-path))))
       (uiop:delete-directory-tree root :validate t))))
+
+(fiveam:test test-execute-chatbot-tool-shell-success
+  (let* ((*bypass-shell-approval-p* t)
+         (bot (make-instance 'chatbot
+                             :enable-shell-p t))
+         (result (execute-chatbot-tool bot
+                                       :built-in
+                                       "shell"
+                                       '(("command" . "echo hello")))))
+    (fiveam:is-true (stringp result))
+    (fiveam:is (not (null (search "[Shell Executed]" result))))
+    (fiveam:is (not (null (search "Command: echo hello" result))))
+    (fiveam:is (not (null (search "Exit Code: 0" result))))
+    (fiveam:is (not (null (search "hello" result))))))
+
+(fiveam:test test-execute-chatbot-tool-shell-disabled
+  (let* ((*bypass-shell-approval-p* t)
+         (bot (make-instance 'chatbot
+                             :enable-shell-p nil)))
+    (fiveam:signals mcp-tool-execution-error
+      (execute-chatbot-tool bot
+                            :built-in
+                            "shell"
+                            '(("command" . "echo hello"))))))
+
+(fiveam:test test-execute-chatbot-tool-shell-approval-denied
+  (let* ((*shell-approval-function* (lambda (&rest args)
+                                      (declare (ignore args))
+                                      nil))
+         (bot (make-instance 'chatbot
+                             :enable-shell-p t)))
+    (fiveam:signals mcp-tool-execution-error
+      (execute-chatbot-tool bot
+                            :built-in
+                            "shell"
+                            '(("command" . "echo hello"))))))

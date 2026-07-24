@@ -205,6 +205,7 @@
           :include-timestamp-p (chatbot-include-timestamp-p bot)
           :include-model-p (chatbot-include-model-p bot)
           :enable-eval-p (chatbot-enable-eval-p bot)
+          :enable-shell-p (chatbot-enable-shell-p bot)
           :enable-git-tools-p (chatbot-enable-git-tools-p bot)
           :filesystem-tools-p (chatbot-filesystem-tools-p bot)
           :filesystem-root-directory
@@ -271,6 +272,7 @@
           :include-timestamp-p (get-string-plist-value state "includeTimestampP")
           :include-model-p (get-string-plist-value state "includeModelP")
           :enable-eval-p (get-string-plist-value state "enableEvalP")
+          :enable-shell-p (get-string-plist-value state "enableShellP")
           :enable-git-tools-p (get-string-plist-value state "enableGitToolsP")
           :filesystem-tools-p (get-string-plist-value state "filesystemToolsP")
           :filesystem-root-directory
