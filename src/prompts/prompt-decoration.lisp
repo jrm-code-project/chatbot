@@ -125,7 +125,8 @@ using QUERY-TEXT as the query, filtering out any that do not pass *chroma-diary-
   (handler-case
       (when (and persona-name (chroma-alive-p))
         (let* ((collection-name (format nil "~A_Diary" (string persona-name)))
-               (collection (chroma-get-collection collection-name)))
+               (collection (or (chroma-get-collection collection-name)
+                               (chroma-create-collection collection-name :get-or-create t))))
           (when collection
             (let* ((collection-id (cdr (assoc :id collection)))
                    ;; Generate embedding vector for the query text
@@ -167,7 +168,8 @@ using QUERY-TEXT as the query, filtering out any that do not pass *chroma-memory
   (handler-case
       (when (and persona-name (chroma-alive-p))
         (let* ((collection-name (format nil "~A_Memory" (string persona-name)))
-               (collection (chroma-get-collection collection-name)))
+               (collection (or (chroma-get-collection collection-name)
+                               (chroma-create-collection collection-name :get-or-create t))))
           (when collection
             (let* ((collection-id (cdr (assoc :id collection)))
                    ;; Generate embedding vector for the query text

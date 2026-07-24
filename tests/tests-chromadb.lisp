@@ -450,3 +450,52 @@
             (fiveam:is (not (null (search "Memory: V is a formidable ghost." decorated))))
             ;; Assert that the irrelevant memory (distance 0.9 > 0.5) is filtered out
             (fiveam:is (null (search "Irrelevant observation fact." decorated)))))))))
+
+(fiveam:def-test test-chroma-automatic-collection-creation-on-query ()
+  "Verifies that when get-relevant-diary-entries-text and get-relevant-memories-text find their collections missing, they automatically create them."
+  (let* ((mock-get-called-p nil)
+         (created-collections nil)
+         (queried-collections nil)
+         (chatbot (make-instance 'chatbot :persona-name "V"))
+         (context (make-test-backend-runtime-context nil)))
+    ;; Mock GET: Return NIL for the collections to simulate they don't exist yet
+    (setf (runtime-context-http-get-function context)
+          (lambda (url &rest args)
+            (declare (ignore args))
+            (setf mock-get-called-p t)
+            (cond
+              ((search "/heartbeat" url)
+               "{\"nanosecond heartbeat\": 1718218128310}")
+              ((search "/collections/V_Diary" url)
+               nil)
+              ((search "/collections/V_Memory" url)
+               nil)
+              (t (error "Unexpected GET URL: ~A" url)))))
+    ;; Mock POST: Handle creation and queries
+    (setf (runtime-context-http-post-function context)
+          (lambda (url &rest args)
+            (cond
+              ((search "embedContent" url)
+               "{\"embedding\": {\"values\": [0.1, 0.2, 0.3]}}")
+              ((search "/query" url)
+               (push url queried-collections)
+               "{\"ids\": [[]], \"distances\": [[]], \"documents\": [[]], \"metadatas\": [[]]}")
+              ((search "/collections" url)
+               (let* ((content (getf args :content))
+                      (parsed (cl-json:decode-json-from-string content))
+                      (name (cdr (assoc :name parsed))))
+                 (push name created-collections)
+                 (format nil "{\"name\": \"~A\", \"id\": \"created-uuid-~A\", \"metadata\": null}" name name)))
+              (t (error "Unexpected POST URL: ~A" url)))))
+    (call-with-runtime-context context
+      (lambda ()
+        (let ((decorated (decorate-live-user-input chatbot "Tell me about V!")))
+          (declare (ignore decorated))
+          (fiveam:is (not (null mock-get-called-p)))
+          ;; Check that both collections were created
+          (fiveam:is (not (null (member "V_Diary" created-collections :test #'string=))))
+          (fiveam:is (not (null (member "V_Memory" created-collections :test #'string=))))
+          ;; Check that both collections were subsequently queried
+          (fiveam:is (= 2 (length queried-collections)))
+          (fiveam:is (not (null (search "created-uuid-V_Diary" (second queried-collections)))))
+          (fiveam:is (not (null (search "created-uuid-V_Memory" (first queried-collections))))))))))
