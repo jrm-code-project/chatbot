@@ -38,6 +38,8 @@
            "MAKE-RUNTIME-CONTEXT"
            "NEW-CHAT"
            "NEW-CHAT-PERSONA"
+           "COPY-CHATBOT"
+           "COPY-CONVERSATION"
            "SAVE-MINION-STATE"
            "CHATBOT-PLANNER-P"
            "LOAD-PLAN-TO-SYSTEM-INSTRUCTIONS"

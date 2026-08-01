@@ -954,6 +954,16 @@
                   :adaptive-context-pruning-max-tokens (metrics-adaptive-context-pruning-max-tokens old-metrics))
             initarg-overrides))))
 
+(defun copy-chatbot (bot &rest initarg-overrides)
+  "Functional, copy-on-write builder for CHATBOT.
+Returns a new, shallow copy of BOT with the specified slot overrides applied."
+  (apply #'clone-chatbot bot initarg-overrides))
+
+(defun copy-conversation (conversation &rest initarg-overrides)
+  "Functional, copy-on-write builder for CONVERSATION.
+Returns a new, shallow copy of CONVERSATION with the specified slot overrides applied."
+  (apply #'clone-conversation conversation initarg-overrides))
+
 (defun system-instruction-fence-line-p (line)
   "Returns true when LINE begins a Markdown triple-backtick fence."
   (alexandria:starts-with-subseq

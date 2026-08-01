@@ -2137,3 +2137,19 @@ data: [DONE]")
       (fiveam:is-true (sb-thread:thread-alive-p hung-thread)))
     (sleep 0.1)
     (fiveam:is-false (sb-thread:thread-alive-p hung-thread))))
+
+(fiveam:test test-copy-chatbot-and-conversation
+  "Verifies copy-chatbot and copy-conversation return perfect copy-on-write functional copies with specified overrides."
+  (let* ((bot (make-instance 'chatbot :model "gemini-1.5-flash" :backend :google))
+         (copied-bot (copy-chatbot bot :model "gemini-2.5-flash"))
+         (conv (make-instance 'conversation :chatbot bot :messages '(("role" . "user") ("content" . "hello"))))
+         (copied-conv (copy-conversation conv :messages '(("role" . "user") ("content" . "hello-copied")))))
+    ;; Verify copy-chatbot
+    (fiveam:is (string= "gemini-1.5-flash" (chatbot-model bot)))
+    (fiveam:is (string= "gemini-2.5-flash" (chatbot-model copied-bot)))
+    (fiveam:is (eq (chatbot-backend bot) (chatbot-backend copied-bot)))
+    
+    ;; Verify copy-conversation
+    (fiveam:is (equal '(("role" . "user") ("content" . "hello")) (conversation-messages conv)))
+    (fiveam:is (equal '(("role" . "user") ("content" . "hello-copied")) (conversation-messages copied-conv)))
+    (fiveam:is (eq (conversation-chatbot conv) (conversation-chatbot copied-conv)))))
