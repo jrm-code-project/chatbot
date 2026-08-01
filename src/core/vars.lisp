@@ -370,7 +370,7 @@ CURRENT-ACTIVE-CONVERSATION with an explicit runtime context instead.")
                                        content-cache-policy content-cache-ttl-seconds content-cache-min-tokens
                                        google-search-p web-tools-p code-execution-p enable-eval-p enable-shell-p enable-git-tools-p
                                        filesystem-tools-p filesystem-root-directory filesystem-allowed-directories
-                                       filesystem-allowlist-path filesystem-read-only-p scoped-directory
+                                       filesystem-allowlist-path filesystem-read-only-p scoped-directory inbox-s3-path
                                        mcp-servers mcp-startup-status
                                        subordinates parent-name (depth nil depth-supplied-p) token-budget spent-tokens planner-p
                                        task-journal task-journal-lock
@@ -418,7 +418,8 @@ CURRENT-ACTIVE-CONVERSATION with an explicit runtime context instead.")
                            :filesystem-allowed-directories filesystem-allowed-directories
                            :filesystem-allowlist-path filesystem-allowlist-path
                            :filesystem-read-only-p filesystem-read-only-p
-                           :scoped-directory scoped-directory)))
+                           :scoped-directory scoped-directory
+                           :inbox-s3-path inbox-s3-path)))
   (setf (slot-value bot 'mcp-state)
         (or mcp-state
             (make-instance 'chatbot-mcp-state

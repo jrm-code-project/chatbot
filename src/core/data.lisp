@@ -392,7 +392,12 @@
     :initarg :scoped-directory
     :accessor tool-config-scoped-directory
     :initform nil
-    :documentation "The localized sandbox directory where built-in filesystem tools may operate.")))
+    :documentation "The localized sandbox directory where built-in filesystem tools may operate.")
+   (inbox-s3-path
+    :initarg :inbox-s3-path
+    :accessor tool-config-inbox-s3-path
+    :initform nil
+    :documentation "Optional S3 URI prefix (e.g. \"s3://bucket/prefix/\") polled for inbound email notifications before each chat turn. NIL disables inbox polling for this chatbot.")))
 
 (defclass chatbot-mcp-state ()
   ((mcp-servers
@@ -722,6 +727,9 @@ are naturally shared across multiple conversation snapshots."
 (defmethod chatbot-scoped-directory ((bot chatbot)) (tool-config-scoped-directory (chatbot-tool-config bot)))
 (defmethod (setf chatbot-scoped-directory) (val (bot chatbot)) (setf (tool-config-scoped-directory (chatbot-tool-config bot)) val))
 
+(defmethod chatbot-inbox-s3-path ((bot chatbot)) (tool-config-inbox-s3-path (chatbot-tool-config bot)))
+(defmethod (setf chatbot-inbox-s3-path) (val (bot chatbot)) (setf (tool-config-inbox-s3-path (chatbot-tool-config bot)) val))
+
 (defmethod chatbot-mcp-servers ((bot chatbot)) (mcp-state-mcp-servers (chatbot-mcp-state bot)))
 (defmethod (setf chatbot-mcp-servers) (val (bot chatbot)) (setf (mcp-state-mcp-servers (chatbot-mcp-state bot)) val))
 
@@ -939,6 +947,7 @@ are naturally shared across multiple conversation snapshots."
                   :filesystem-allowlist-path (tool-config-filesystem-allowlist-path old-tool)
                   :filesystem-read-only-p (tool-config-filesystem-read-only-p old-tool)
                   :scoped-directory (tool-config-scoped-directory old-tool)
+                  :inbox-s3-path (tool-config-inbox-s3-path old-tool)
                   :mcp-servers (mcp-state-mcp-servers old-mcp)
                   :mcp-startup-status (mcp-state-mcp-startup-status old-mcp)
                   :subordinates (minion-state-subordinates old-minion)

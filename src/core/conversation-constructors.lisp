@@ -113,7 +113,7 @@
       :owner-bot bot)
      (chatbot-runtime-context bot))))
 
-(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p (content-cache-policy +default-content-cache-policy+) (content-cache-ttl-seconds *default-content-cache-ttl-seconds*) (content-cache-min-tokens *default-content-cache-min-tokens*) google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p enable-shell-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name persona-source-name checkpoint-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p cached-content-name cached-content-key cached-content-metadata (turns-since-cache-reload 0))
+(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p (content-cache-policy +default-content-cache-policy+) (content-cache-ttl-seconds *default-content-cache-ttl-seconds*) (content-cache-min-tokens *default-content-cache-min-tokens*) google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p enable-shell-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path inbox-s3-path (backend :gemini) runtime-context subordinates persona-name persona-source-name checkpoint-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p cached-content-name cached-content-key cached-content-metadata (turns-since-cache-reload 0))
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
@@ -151,6 +151,7 @@ configuration, instructions, or preloaded memory."
                                  :filesystem-root-directory (or scoped-directory filesystem-root-directory)
                                  :filesystem-allowed-directories filesystem-allowed-directories
                                  :filesystem-allowlist-path filesystem-allowlist-path
+                                 :inbox-s3-path inbox-s3-path
                                  :runtime-context resolved-context
                                  :subordinates subordinates
                                  :parent-name parent-name
@@ -218,6 +219,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                 (enable-eval-p (safe-getf config :enable-eval))
                 (config-enable-shell-p (safe-getf config :enable-shell))
                 (config-enable-git-tools-p (safe-getf config :enable-git-tools)) (config-filesystem-tools-p (safe-getf config :enable-filesystem-tools))
+                (inbox-s3-path (safe-getf config :inbox-s3-path))
                 (backend (persona-config-backend config))
                 (persona-runtime-context (persona-config-runtime-context config runtime-context)))
            (declare (ignore googleapi))
@@ -244,6 +246,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                                :filesystem-root-directory (or scoped-directory persona-dir)
                                :filesystem-allowed-directories (persona-filesystem-allowlist-directories persona-dir)
                                :filesystem-allowlist-path (persona-filesystem-allowlist-path persona-dir)
+                               :inbox-s3-path inbox-s3-path
                                :runtime-context persona-runtime-context
                                :subordinates (and load-configured-subordinates-p
                                                   (loop for sub-persona in (safe-getf config :subordinates)

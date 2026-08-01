@@ -61,7 +61,7 @@
                             (list :temperature temperature))
                           (when explicit-top-p-specified-p
                             (list :top-p top-p)))))
-         (turn-conversation (clone-conversation conversation)))
+         (turn-conversation (maybe-poll-persona-inbox (clone-conversation conversation))))
     (multiple-value-bind (effective-input prompt-override-model)
         (resolve-prompt-model-override bot input)
       (let* ((effective-model

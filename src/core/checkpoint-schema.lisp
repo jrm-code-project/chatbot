@@ -217,6 +217,7 @@
           :filesystem-read-only-p (chatbot-filesystem-read-only-p bot)
           :scoped-directory (and (chatbot-scoped-directory bot)
                                  (namestring (chatbot-scoped-directory bot)))
+          :inbox-s3-path (or (chatbot-inbox-s3-path bot) "")
           :system-instruction (persisted-system-instruction-value
                                (chatbot-system-instruction bot))
           :worker-kind (conversation-persistence-worker-kind conversation)
@@ -290,6 +291,8 @@
           :scoped-directory (and scoped-dir-str
                                  (not (empty-string-p scoped-dir-str))
                                  (uiop:ensure-directory-pathname scoped-dir-str))
+          :inbox-s3-path (let ((inbox-s3-path-str (get-string-plist-value state "inboxS3Path")))
+                           (if (empty-string-p inbox-s3-path-str) nil inbox-s3-path-str))
           :system-instruction
           (normalize-persisted-system-instruction
            (get-string-plist-value state "systemInstruction"))
