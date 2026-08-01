@@ -295,8 +295,11 @@
          (conversation (getf state :conversation))
          (grok-conv-id (when (and (eq backend :grok) conversation)
                          (or (conversation-interaction-id conversation)
-                             (setf (conversation-interaction-id conversation)
-                                   (generate-unique-grok-conv-id))))))
+                             (let* ((new-id (generate-unique-grok-conv-id))
+                                    (new-conv (copy-conversation conversation :interaction-id new-id)))
+                               ;; For backward-compatible bridge phase, update the conversation's internal slot
+                               (setf (conversation-interaction-id conversation) new-id)
+                               new-id)))))
     (list :payload-json (openai-turn-request-payload-json bot state)
           :url (openai-request-url (getf request-target :base-url))
           :headers (openai-request-headers api-key :grok-conv-id grok-conv-id)

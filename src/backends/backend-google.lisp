@@ -74,25 +74,27 @@
                                               (recursion-depth 0))
   "Resubmits the current turn through the Google backend."
   (declare (ignore request-contents history-messages))
-  ;; Trigger SWP State transition to :pro-sticky
-  (setf (conversation-swp-state conversation) :pro-sticky
-        (conversation-swp-streak conversation) 1)
-  (log-message :warn "SWP: Failover triggered. Entering :pro-sticky mode.")
-  (let* ((current-model (or effective-model (chatbot-model bot)))
-         (target-model (if use-stronger-model-p
-                           (stronger-model current-model)
-                           +google-gemini-model-override-model+)))
-    (chat-google bot
-                 input
-                 conversation
-                 callback
-                 :file-attachments file-attachments
-                 :effective-model target-model
-                 :effective-generation-config effective-generation-config
-                 :malformed-response-fallback-attempted-p t
-                 :return-turn-result-p return-turn-result-p
-                 :recursion-depth recursion-depth
-                 :bypass-cache-p t)))
+  ;; Trigger SWP State transition to :pro-sticky via copy-on-write
+  (let ((new-conv (copy-conversation conversation :swp-state :pro-sticky :swp-streak 1)))
+    ;; For backward-compatible bridge phase, update the conversation's internal slots
+    (setf (conversation-swp-state conversation) :pro-sticky
+          (conversation-swp-streak conversation) 1)
+    (log-message :warn "SWP: Failover triggered. Entering :pro-sticky mode.")
+    (let* ((current-model (or effective-model (chatbot-model bot)))
+           (target-model (if use-stronger-model-p
+                             (stronger-model current-model)
+                             +google-gemini-model-override-model+)))
+      (chat-google bot
+                   input
+                   conversation
+                   callback
+                   :file-attachments file-attachments
+                   :effective-model target-model
+                   :effective-generation-config effective-generation-config
+                   :malformed-response-fallback-attempted-p t
+                   :return-turn-result-p return-turn-result-p
+                   :recursion-depth recursion-depth
+                   :bypass-cache-p t))))
 
 (defun google-request-state (bot input conversation file-attachments effective-model effective-generation-config
                               &key request-contents history-messages malformed-response-fallback-attempted-p cached-content-name bypass-cache-p)
