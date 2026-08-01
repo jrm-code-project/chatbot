@@ -181,16 +181,37 @@ Sentence:" entity-name entity-type observation))
       (log-message :warn "Failed to sync knowledge graph observations to ChromaDB"
                    :context `(("error" . ,(princ-to-string e)))))))
 
+(defvar *tool-after-execution-hooks* nil
+  "List of hook functions called after successful tool execution.
+Each function is called with arguments (bot tool-name arguments result).")
+
+(defun register-tool-after-execution-hook (hook-fn)
+  "Registers HOOK-FN as a post-tool-execution hook."
+  (pushnew hook-fn *tool-after-execution-hooks*))
+
+(defun unregister-tool-after-execution-hook (hook-fn)
+  "Unregisters HOOK-FN from the post-tool-execution hooks."
+  (setf *tool-after-execution-hooks* (remove hook-fn *tool-after-execution-hooks*)))
+
+(defun sync-knowledge-graph-observations-hook (bot tool-name arguments result)
+  "Post-tool execution hook to sync knowledge graph observations to ChromaDB after successful execution."
+  (declare (ignore result))
+  (sync-knowledge-graph-observations bot tool-name arguments))
+
+(eval-when (:load-toplevel :execute)
+  (register-tool-after-execution-hook 'sync-knowledge-graph-observations-hook))
+
 (defun execute-chatbot-tool (bot source tool-name arguments)
   "Executes SOURCE as either a built-in or MCP tool for BOT."
   (call-with-runtime-context
    (chatbot-runtime-context bot)
    (lambda ()
-     (if (eq source :built-in)
-         (default-execute-builtin-chatbot-tool bot tool-name arguments)
-         (let ((result (execute-mcp-tool source tool-name arguments)))
-           ;; Sync observations to ChromaDB after successful execution
-           (sync-knowledge-graph-observations bot tool-name arguments)
-           result)))
+     (let ((result (if (eq source :built-in)
+                       (default-execute-builtin-chatbot-tool bot tool-name arguments)
+                       (execute-mcp-tool source tool-name arguments))))
+       ;; Execute post-execution hooks on success
+       (dolist (hook *tool-after-execution-hooks*)
+         (ignore-errors (funcall hook bot tool-name arguments result)))
+       result))
    :default-conversation-compatibility-p nil
    :legacy-function-seam-compatibility-p nil))

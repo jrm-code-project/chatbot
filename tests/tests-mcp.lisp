@@ -2783,3 +2783,34 @@ New Line 3")))
                             :built-in
                             "shell"
                             '(("command" . "echo hello"))))))
+
+(fiveam:test test-execute-chatbot-tool-after-execution-hooks
+  "Verifies that post-execution hooks are correctly registered, triggered on successful tool execution, and can be unregistered."
+  (let* ((*bypass-shell-approval-p* t)
+         (bot (make-instance 'chatbot :enable-shell-p t))
+         (hook-called-p nil)
+         (captured-bot nil)
+         (captured-tool nil)
+         (captured-args nil)
+         (captured-res nil)
+         (hook-fn (lambda (b tool args res)
+                    (setf hook-called-p t
+                          captured-bot b
+                          captured-tool tool
+                          captured-args args
+                          captured-res res))))
+    (register-tool-after-execution-hook hook-fn)
+    (unwind-protect
+         (progn
+           (let ((result (execute-chatbot-tool bot :built-in "shell" '(("command" . "echo test-hook")))))
+             (fiveam:is-true hook-called-p)
+             (fiveam:is (eq bot captured-bot))
+             (fiveam:is (string= "shell" captured-tool))
+             (fiveam:is (equal '(("command" . "echo test-hook")) captured-args))
+             (fiveam:is (string= result captured-res)))
+           ;; Unregister the hook and verify it is no longer called
+           (unregister-tool-after-execution-hook hook-fn)
+           (setf hook-called-p nil)
+           (execute-chatbot-tool bot :built-in "shell" '(("command" . "echo second-run")))
+           (fiveam:is-false hook-called-p))
+      (unregister-tool-after-execution-hook hook-fn))))
