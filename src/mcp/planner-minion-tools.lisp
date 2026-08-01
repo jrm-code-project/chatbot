@@ -260,6 +260,7 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
   (let* ((sub-conv
            (if persona-name
                (new-chat-persona persona-name
+                                 :checkpoint-name name
                                  :runtime-context (chatbot-runtime-context bot)
                                  :parent-name (chatbot-persona-name bot)
                                  :depth child-depth

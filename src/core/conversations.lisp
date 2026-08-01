@@ -189,7 +189,7 @@ configuration, instructions, or preloaded memory."
      :default-conversation-compatibility-p nil
      :legacy-function-seam-compatibility-p nil)))
 
-(defun new-chat-persona (persona-name &key runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory (web-tools-p nil web-tools-supplied-p) (enable-shell-p nil enable-shell-supplied-p) (enable-git-tools-p nil enable-git-tools-supplied-p) (filesystem-tools-p nil filesystem-tools-supplied-p) (filesystem-read-only-p nil filesystem-read-only-supplied-p) (planner-p nil planner-supplied-p) (load-configured-subordinates-p t))
+(defun new-chat-persona (persona-name &key checkpoint-name runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory (web-tools-p nil web-tools-supplied-p) (enable-shell-p nil enable-shell-supplied-p) (enable-git-tools-p nil enable-git-tools-supplied-p) (filesystem-tools-p nil filesystem-tools-supplied-p) (filesystem-read-only-p nil filesystem-read-only-supplied-p) (planner-p nil planner-supplied-p) (load-configured-subordinates-p t))
   "Creates a new chat session for a given chatbot persona.
 The persona's configuration is read from ~/.Personas/<persona-name>/config.lisp
 and the system instructions are loaded from the persona's system-instruction file set.
@@ -203,7 +203,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                       :context `(("persona" . ,(princ-to-string persona-name))))
          (new-chat :runtime-context runtime-context
                    :persona-source-name persona-name
-                   :checkpoint-name persona-name
+                   :checkpoint-name (or checkpoint-name persona-name)
                    :parent-name parent-name
                    :depth depth
                    :token-budget token-budget
@@ -238,6 +238,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                     (preload-persona-conversation-memory
                      (new-chat :backend backend
                                :model model
+                               :checkpoint-name (or checkpoint-name persona-name)
                                :system-instruction system-instruction
                                :system-instruction-path inst-path
                                :system-instruction-storage-kind (persona-system-instruction-storage-kind inst-path)
