@@ -2203,3 +2203,39 @@ data: [DONE]")
            (conv (make-instance 'conversation :chatbot bot :messages messages)))
       (fiveam:is (equal messages (conversation-messages conv)))
       (fiveam:is (typep (slot-value (%conversation-history conv) 'messages) 'history-node)))))
+
+(fiveam:test test-pure-swp-state-transitions
+  "Verifies that the extracted next-swp-state is a pure function that accurately models the SWP state machine."
+  (multiple-value-bind (state streak stronger-p)
+      (next-swp-state :flash-warm 0 3 "some query")
+    (fiveam:is (eq :flash-warm state))
+    (fiveam:is (= 0 streak))
+    (fiveam:is-false stronger-p))
+    
+  ;; Lock to Pro under streak limit
+  (multiple-value-bind (state streak stronger-p)
+      (next-swp-state :pro-sticky 1 3 "some query")
+    (fiveam:is (eq :pro-sticky state))
+    (fiveam:is (= 2 streak))
+    (fiveam:is-true stronger-p))
+
+  ;; Transition to cooldown phase when streak limit is reached
+  (multiple-value-bind (state streak stronger-p)
+      (next-swp-state :pro-sticky 2 3 "some query")
+    (fiveam:is (eq :transition state))
+    (fiveam:is (= 0 streak))
+    (fiveam:is-true stronger-p))
+
+  ;; Safe downgrade prompt in transition -> Flash Warm
+  (multiple-value-bind (state streak stronger-p)
+      (next-swp-state :transition 0 3 "short")
+    (fiveam:is (eq :flash-warm state))
+    (fiveam:is (= 0 streak))
+    (fiveam:is-false stronger-p))
+
+  ;; High-risk prompt in transition -> stay in Transition on Pro
+  (multiple-value-bind (state streak stronger-p)
+      (next-swp-state :transition 0 3 "a very long complex prompt with multiple instructions and file paths")
+    (fiveam:is (eq :transition state))
+    (fiveam:is (= 0 streak))
+    (fiveam:is-true stronger-p)))

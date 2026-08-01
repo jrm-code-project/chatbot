@@ -56,46 +56,55 @@ Criteria: length < 50 characters or word count < 10 words."
          (or (< (length trimmed) 50)
              (< (length (cl-ppcre:split "\\s+" trimmed)) 10)))))
 
+(defun next-swp-state (current-state current-streak max-streak input)
+  "Pure functional state transition table for the Sticky Warmth Protocol (SWP).
+Returns (values next-state next-streak use-stronger-p)."
+  (cond
+    ((eq current-state :flash-warm)
+     (values :flash-warm 0 nil))
+
+    ((eq current-state :pro-sticky)
+     (let ((next-streak (1+ current-streak)))
+       (if (>= next-streak max-streak)
+           (values :transition 0 t)
+           (values :pro-sticky next-streak t))))
+
+    ((eq current-state :transition)
+     (if (safe-swp-downgrade-prompt-p input)
+         (values :flash-warm 0 nil)
+         (values :transition 0 t)))
+
+    (t
+     (values :flash-warm 0 nil))))
+
 (defun resolve-swp-effective-model (conversation input default-model)
-  "Processes SWP state transitions and returns the effective model name."
+  "Processes SWP state transitions using next-swp-state and returns the effective model name."
   (let ((state (conversation-swp-state conversation))
         (streak (conversation-swp-streak conversation))
         (max-streak (conversation-swp-max-streak conversation)))
-    (cond
-      ((eq state :flash-warm)
-       ;; Baseline: use the default model
-       (values default-model nil))
-      
-      ((eq state :pro-sticky)
-       ;; We are locked to Pro. Increment streak.
-       (incf (conversation-swp-streak conversation))
-       (let ((current-streak (conversation-swp-streak conversation))
-             (target-model (or (stronger-model default-model)
-                               +google-gemini-model-override-model+)))
-         (log-message :info (format nil "SWP: Locked to Pro (turn ~D/~D)" current-streak max-streak))
-         ;; If we've reached the max streak, transition to :transition
-         (when (>= current-streak max-streak)
-           (setf (conversation-swp-state conversation) :transition
-                 (conversation-swp-streak conversation) 0)
+    (multiple-value-bind (next-state next-streak use-stronger-p)
+        (next-swp-state state streak max-streak input)
+      (let* ((target-model (if use-stronger-p
+                               (or (stronger-model default-model)
+                                   +google-gemini-model-override-model+)
+                               default-model))
+             (new-conv (copy-conversation conversation
+                                          :swp-state next-state
+                                          :swp-streak next-streak)))
+        ;; Perform logging based on transition results
+        (cond
+          ((and (eq state :pro-sticky) (eq next-state :pro-sticky))
+           (log-message :info (format nil "SWP: Locked to Pro (turn ~D/~D)" next-streak max-streak)))
+          ((and (eq state :pro-sticky) (eq next-state :transition))
            (log-message :info "SWP: Streak limit reached. Transitioning to :transition."))
-         (values target-model t)))
-      
-      ((eq state :transition)
-       ;; Cooldown / Return phase: look for low-risk prompt
-       (if (safe-swp-downgrade-prompt-p input)
-           (progn
-             (setf (conversation-swp-state conversation) :flash-warm
-                   (conversation-swp-streak conversation) 0)
-             (log-message :info "SWP: Low-risk prompt detected. Downgrading to Flash (:flash-warm).")
-             (values default-model nil))
-           (progn
-             ;; Remain in :transition and continue on Pro
-             (let ((target-model (or (stronger-model default-model)
-                                     +google-gemini-model-override-model+)))
-               (log-message :info "SWP: High-risk prompt in :transition. Staying on Pro.")
-               (values target-model t)))))
-      
-      (t (values default-model nil)))))
+          ((and (eq state :transition) (eq next-state :flash-warm))
+           (log-message :info "SWP: Low-risk prompt detected. Downgrading to Flash (:flash-warm)."))
+          ((and (eq state :transition) (eq next-state :transition))
+           (log-message :info "SWP: High-risk prompt in :transition. Staying on Pro.")))
+        ;; For backward-compatible bridge phase, update the conversation's internal slots
+        (setf (conversation-swp-state conversation) next-state
+              (conversation-swp-streak conversation) next-streak)
+        (values target-model use-stronger-p)))))
 
 (defvar *chroma-diary-relevance-threshold* 0.5
   "The maximum allowed distance (e.g. squared L2) for a diary entry to be considered relevant.
