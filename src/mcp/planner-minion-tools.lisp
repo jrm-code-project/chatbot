@@ -25,7 +25,9 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
           (or remaining-budget "unbounded")))
 
 (defun append-delegation-instructions (bot name depth remaining-budget)
-  (let* ((model (and (slot-boundp bot 'model) (chatbot-model bot)))
+  (let* ((model (and (slot-boundp bot 'llm-config)
+                     (slot-boundp (chatbot-llm-config bot) 'model)
+                     (chatbot-model bot)))
          (is-qwen (and (stringp model) (search "qwen" model :test #'char-equal)))
          (inst (if is-qwen
                    (format nil (concatenate 'string

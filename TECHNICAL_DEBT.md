@@ -2,7 +2,7 @@
 
 This document prioritizes the highest-value technical debt currently visible in the `chatbot` codebase. It focuses on debt that increases change risk, operational fragility, or maintenance cost.
 
-This register was refreshed on **2026-07-21** after a full codebase scan, test-system execution, and the integration of the "Sticky Warmth" Protocol and surgical `editFile` tool.
+This register was refreshed on **2026-07-31** after a full codebase scan, test-system execution, and the integration of the "Sticky Warmth" Protocol and surgical `editFile` tool.
 
 ## Priority scale
 
@@ -14,8 +14,6 @@ This register was refreshed on **2026-07-21** after a full codebase scan, test-s
 
 | Priority | Area | Debt | Evidence | Why it matters | Recommended direction |
 | --- | --- | --- | --- | --- | --- |
-| **P0** | Runtime context and configuration | **Legacy ambient globals still coexist with the newer runtime-context model.** | Deprecated ambient aliases live in `src/core/runtime-compatibility.lisp`; no-arg function seams and approval seams still rely on context-bridging logic to support older callers without explicit contexts. | Having two overlapping configuration and state models increases complexity, makes testing fragile, and risks state leakage or drift between context-bound and ambient specials. | Retire the legacy-global/runtime-context bridge entirely. Refactor all entry points to require or cleanly default a runtime-context argument, and remove the compatibility specials. |
-| **P0** | Core Data Models | **'God Object' Data Models.** | The `chatbot` and `conversation` classes are excessively large (40+ slots) and cross-cut multiple concerns (config, state, permissions, usage tracking). | Increases risk of unintended side-effects and makes it harder to isolate state and behavior. | Decompose `chatbot` and `conversation` into smaller, cohesive component objects. |
 | **P0** | MCP lifecycle | **Subprocess and thread lifecycle management is still fragile, even after recent shutdown hardening.** | `src/mcp/mcp-lifecycle.lisp` tracks stderr threads and manages subprocesses, but background threads (`Agentic-Loop-Worker-*` and server processes) still require manual termination and are prone to zombie states or leakage if an abnormal exit occurs. | Leaked threads and zombie subprocesses consume system resources, locks, and sockets, eventually leading to process exhaustion or connection failures under sustained use. | Wrap subprocess and thread lifecycles in a unified supervisor or context-manager structure that guarantees resource cleanup under all exit paths. |
 | **P0** | Source layout | **Core orchestration logic is still concentrated in a few very large hotspot files.** | `src/orchestration/agentic-loops.lisp` (~50 KB), `src/core/conversations.lisp` (~42 KB), `src/core/vars.lisp` (~36 KB), and `src/core/data.lisp` (~31 KB) contain mixed concerns. | Cross-cutting changes frequently conflict in these hotspot files, raising merge pressure and regression risk during concurrent feature development. | Split files by lifecycle phase and concern (e.g., separate agentic-loop startup, supervision, and monitoring; separate conversation constructors, compression, and persistence). |
 | **P0** | Checkpoint identity | **Checkpoint identity depends on persona metadata being stamped correctly on each conversation.** | `src/core/conversations.lisp` persists conversations under `chatbot-persona-name`, falling back to `"DefaultConversation"` when missing. `src/orchestration/sandbox-personas.lisp` manually patches this metadata during spawn. | A missed metadata assignment silently redirects persistence to the shared default checkpoint, leading to cross-persona state bleed and data corruption. | Move checkpoint identity into an explicit, validated persistence identifier set at construction time, and decouple it from incidental persona metadata. |
@@ -35,22 +33,30 @@ This register was refreshed on **2026-07-21** after a full codebase scan, test-s
 
 The following high-value technical debt items have been fully resolved and retired through recent architectural improvements:
 
-1. **"Sticky Warmth" Protocol (SWP) for Flash/Pro Failover (Resolved - July 2026)**
+1. **Legacy Ambient Globals & Compatibility Seams (Resolved - July 2026)**
+   * *The Debt*: Monolithic dynamic specials and ambient compatibility seams coexisted awkwardly with the newer, isolated `runtime-context` structures, leading to risk of state leakage, connection/socket pooling drift, and fragile test suites.
+   * *The Fix*: Fully retired the compatibility bridge, deleted `runtime-compatibility.lisp`, removed all 16 deprecated ambient specials, and refactored all config getters/setters (`current-*`) into lightweight, direct `defmethod`/`defun` context accessors.
+
+2. **'God Object' Data Models (Resolved - July 2026)**
+   * *The Debt*: Monolithic `chatbot` and `conversation` classes housed 40+ slots each, cross-cutting multiple distinct concerns (identities, LLM, prompt, cache, tools, MCP, minions) and increasing modification friction and regression risk.
+   * *The Fix*: Decomposed both massive classes into highly cohesive, dedicated component classes (e.g., `chatbot-identity`, `chatbot-llm-config`, `conversation-history`, etc.) managed via composition. Implemented complete backwards-compatible forwarding accessors and streamlined copy-constructor flatteners.
+
+3. **"Sticky Warmth" Protocol (SWP) for Flash/Pro Failover (Resolved - July 2026)**
    * *The Debt*: Previously, the client performed single-turn failovers from Flash to Pro and immediately bounced back. This triggered Pro's expensive cold-start ingestion fee on every transient failure, while completely trashing the context cache on both models.
    * *The Fix*: Implemented the **Sticky Warmth Protocol (SWP)** state machine (`:flash-warm`, `:pro-sticky`, and `:transition`). Successful failovers now lock the session to Pro for consecutive turns, allowing us to leverage Pro's warm-cached context rate. Downgrades back to Flash are safely deferred until a short, low-risk prompt is processed.
    
-2. **Identical History Preservation for Context Caching (Resolved - July 2026)**
+4. **Identical History Preservation for Context Caching (Resolved - July 2026)**
    * *The Debt*: Providers sent decorated user messages (with timestamps and memories) to the API but saved only raw messages in the conversation history. This meant the previous turn's message in the prompt prefix altered on every turn, completely invalidating Gemini's automatic context caching.
    * *The Fix*: Restructured prompt decoration to put raw user input at the very beginning of the turn's prompt, appending all dynamic, transient parts (timestamps, memories) in a trailing suffix block. Backends now save fully decorated user messages to the history so that prompt prefixes remain 100% identical and cacheable across consecutive turns.
 
-3. **High-Performance Surgical `editFile` Tool (Resolved - July 2026)**
+5. **High-Performance Surgical `editFile` Tool (Resolved - July 2026)**
    * *The Debt*: To make file modifications, we previously relied on reading, rewriting, and re-transmitting entire file contents. This was highly token-inefficient, slow, and prone to accidental deletions or formatting losses.
    * *The Fix*: Implemented the `editFile` built-in tool supporting both **Search & Replace Block Mode** (guaranteeing atomic, single-match correctness) and **Line-Range Mode** (surgically modifying specified lines while preserving line-ending formats). This tool enables precision, lightning-fast file updates with minimal token overhead.
 
-4. **ChromaDB KG Sync Type Safety (Resolved - July 2026)**
+6. **ChromaDB KG Sync Type Safety (Resolved - July 2026)**
    * *The Debt*: In `extract-observations-from-tool`, parsing JSON-decoded arrays of entities/observations assumed they would always be represented as vectors. When certain configurations decoded them as lists of alists, `loop ... across` raised a severe type error.
    * *The Fix*: Introduced the `normalize-to-list` utility function that safely coerces vectors, list-of-alists, single alists, single strings, and NIL into flat lists, allowing robust iteration via standard list loops.
 
-5. **Lisp Compilation Warning Elimination (Resolved - July 2026)**
+7. **Lisp Compilation Warning Elimination (Resolved - July 2026)**
    * *The Debt*: Stale accessor call sites (`chatbot-content-cache-ttl`), deprecated configuration parameters (`:content-cache-ttl`), unused bindings in test suites, and timezone type parsing notes created compilation noise.
    * *The Fix*: Cleaned all stale call sites, aligned all tests to the `-seconds` API, and resolved all unused test bindings. The repository is now completely warning-light during routine load and test executions.

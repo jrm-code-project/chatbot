@@ -349,8 +349,81 @@ CURRENT-ACTIVE-CONVERSATION with an explicit runtime context instead.")
   "Stores VALUE on CONTEXT through ACCESSOR using SETF."
   (set-runtime-context-accessor-value context accessor value))
 
-(defmethod initialize-instance :after ((bot chatbot) &key)
-  "Applies backend-sensitive defaults for chatbot instances created without an explicit model."
+(defmethod initialize-instance :after ((bot chatbot) &rest initargs &key
+                                       identity llm-config prompt-config cache-config tool-config mcp-state minion-state
+                                       persona-name persona-source-name checkpoint-name
+                                       model (backend nil backend-supplied-p) temperature top-p
+                                       system-instruction system-instruction-path system-instruction-storage-kind
+                                       include-timestamp-p include-model-p gemini-fallback-to-google-p
+                                       content-cache-policy content-cache-ttl-seconds content-cache-min-tokens
+                                       google-search-p web-tools-p code-execution-p enable-eval-p enable-shell-p enable-git-tools-p
+                                       filesystem-tools-p filesystem-root-directory filesystem-allowed-directories
+                                       filesystem-allowlist-path filesystem-read-only-p scoped-directory
+                                       mcp-servers mcp-startup-status
+                                       subordinates parent-name (depth nil depth-supplied-p) token-budget spent-tokens planner-p
+                                       task-journal task-journal-lock
+                                       &allow-other-keys)
+  (declare (ignore initargs))
+  (setf (slot-value bot 'identity)
+        (or identity
+            (make-instance 'chatbot-identity
+                           :persona-name persona-name
+                           :persona-source-name persona-source-name
+                           :checkpoint-name (or checkpoint-name "DefaultConversation"))))
+  (setf (slot-value bot 'llm-config)
+        (or llm-config
+            (make-instance 'chatbot-llm-config
+                           :model model
+                           :backend (if backend-supplied-p backend :gemini)
+                           :temperature temperature
+                           :top-p top-p)))
+  (setf (slot-value bot 'prompt-config)
+        (or prompt-config
+            (make-instance 'chatbot-prompt-config
+                           :system-instruction system-instruction
+                           :system-instruction-path system-instruction-path
+                           :system-instruction-storage-kind (or system-instruction-storage-kind :transient)
+                           :include-timestamp-p include-timestamp-p
+                           :include-model-p include-model-p
+                           :gemini-fallback-to-google-p (or gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+))))
+  (setf (slot-value bot 'cache-config)
+        (or cache-config
+            (make-instance 'chatbot-cache-config
+                           :content-cache-policy (or content-cache-policy :auto)
+                           :content-cache-ttl-seconds content-cache-ttl-seconds
+                           :content-cache-min-tokens content-cache-min-tokens)))
+  (setf (slot-value bot 'tool-config)
+        (or tool-config
+            (make-instance 'chatbot-tool-config
+                           :google-search-p google-search-p
+                           :web-tools-p web-tools-p
+                           :code-execution-p code-execution-p
+                           :enable-eval-p enable-eval-p
+                           :enable-shell-p enable-shell-p
+                           :enable-git-tools-p enable-git-tools-p
+                           :filesystem-tools-p filesystem-tools-p
+                           :filesystem-root-directory filesystem-root-directory
+                           :filesystem-allowed-directories filesystem-allowed-directories
+                           :filesystem-allowlist-path filesystem-allowlist-path
+                           :filesystem-read-only-p filesystem-read-only-p
+                           :scoped-directory scoped-directory)))
+  (setf (slot-value bot 'mcp-state)
+        (or mcp-state
+            (make-instance 'chatbot-mcp-state
+                           :mcp-servers mcp-servers
+                           :mcp-startup-status mcp-startup-status)))
+  (setf (slot-value bot 'minion-state)
+        (or minion-state
+            (make-instance 'chatbot-minion-state
+                           :subordinates subordinates
+                           :parent-name parent-name
+                           :depth (if depth-supplied-p depth 1)
+                           :token-budget token-budget
+                           :spent-tokens (or spent-tokens 0)
+                           :planner-p planner-p
+                           :task-journal (or task-journal (make-hash-table :test 'equal))
+                           :task-journal-lock (or task-journal-lock (sb-thread:make-mutex :name "chatbot-task-journal-lock")))))
+  ;; Applies backend-sensitive defaults for chatbot instances created without an explicit model.
   (setf (chatbot-backend bot)
         (normalize-chatbot-backend (chatbot-backend bot) "chatbot"))
   (when (null (chatbot-model bot))
