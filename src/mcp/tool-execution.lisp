@@ -201,8 +201,37 @@ Each function is called with arguments (bot tool-name arguments result).")
   (declare (ignore result))
   (sync-knowledge-graph-observations bot tool-name arguments))
 
-(eval-when (:load-toplevel :execute)
-  (register-tool-after-execution-hook 'sync-knowledge-graph-observations-hook))
+(defstruct (effect (:constructor make-effect))
+  "A declarative, pure representation of a side-effect to be executed by the Imperative Shell."
+  (type nil :type symbol :read-only t)
+  (args nil :type list :read-only t))
+
+(defun evaluate-tool-after-execution-effects (bot tool-name arguments result)
+  "Pure functional evaluator that analyzes a completed tool run and returns a list of declarative effect descriptions."
+  (declare (ignore result))
+  (let ((effects nil))
+    (when (member tool-name '("create_entities" "add_observations") :test #'string-equal)
+      (push (make-effect :type :chromadb-sync
+                         :args (list :bot bot :tool-name tool-name :arguments arguments))
+            effects))
+    (nreverse effects)))
+
+(defun interpret-effect (effect)
+  "Interprets and executes a single declarative EFFECT, performing the actual side-effect."
+  (let ((type (effect-type effect))
+        (args (effect-args effect)))
+    (cond
+      ((eq type :chromadb-sync)
+       (let ((bot (getf args :bot))
+             (tool-name (getf args :tool-name))
+             (arguments (getf args :arguments)))
+         (sync-knowledge-graph-observations bot tool-name arguments)))
+      (t
+       (error "Unrecognized effect type: ~A" type)))))
+
+(defun interpret-effects (effects)
+  "Interprets and executes a list of declarative EFFECTS."
+  (mapc #'interpret-effect effects))
 
 (defun execute-chatbot-tool (bot source tool-name arguments)
   "Executes SOURCE as either a built-in or MCP tool for BOT."
@@ -212,7 +241,11 @@ Each function is called with arguments (bot tool-name arguments result).")
      (let ((result (if (eq source :built-in)
                        (default-execute-builtin-chatbot-tool bot tool-name arguments)
                        (execute-mcp-tool source tool-name arguments))))
-       ;; Execute post-execution hooks on success
+       ;; Evaluate pure side-effects first
+       (let ((effects (evaluate-tool-after-execution-effects bot tool-name arguments result)))
+         ;; Interpret and execute the side-effects in the Imperative Shell
+         (interpret-effects effects))
+       ;; Execute post-execution hooks on success for backward compatibility
        (dolist (hook *tool-after-execution-hooks*)
          (ignore-errors (funcall hook bot tool-name arguments result)))
        result))

@@ -2785,7 +2785,7 @@ New Line 3")))
                             '(("command" . "echo hello"))))))
 
 (fiveam:test test-execute-chatbot-tool-after-execution-hooks
-  "Verifies that post-execution hooks are correctly registered, triggered on successful tool execution, and can be unregistered."
+  "Verifies that post-execution hooks are Wedding registered, triggered on successful tool execution, and can be unregistered."
   (let* ((*bypass-shell-approval-p* t)
          (bot (make-instance 'chatbot :enable-shell-p t))
          (hook-called-p nil)
@@ -2814,3 +2814,20 @@ New Line 3")))
            (execute-chatbot-tool bot :built-in "shell" '(("command" . "echo second-run")))
            (fiveam:is-false hook-called-p))
       (unregister-tool-after-execution-hook hook-fn))))
+
+(fiveam:test test-declarative-effects-engine-and-interpreter
+  "Verifies that evaluate-tool-after-execution-effects is a pure function returning declarative effects, and they are interpreted correctly."
+  (let* ((bot (make-instance 'chatbot))
+         (args '((:entities . #(((:name . "Common Lisp") (:observations . #("Is awesome")))))))
+         ;; 1. Verify pure functional evaluator
+         (effects (evaluate-tool-after-execution-effects bot "create_entities" args "success-result")))
+    (fiveam:is (= 1 (length effects)))
+    (let ((eff (first effects)))
+      (fiveam:is-true (effect-p eff))
+      (fiveam:is (eq :chromadb-sync (effect-type eff)))
+      (fiveam:is (eq bot (getf (effect-args eff) :bot)))
+      (fiveam:is (string= "create_entities" (getf (effect-args eff) :tool-name)))
+      (fiveam:is (equal args (getf (effect-args eff) :arguments))))
+      
+    ;; 2. Verify evaluator returns NIL for non-KG sync tools
+    (fiveam:is-false (evaluate-tool-after-execution-effects bot "writeFile" '((:path . "notes.txt")) "success-result"))))
