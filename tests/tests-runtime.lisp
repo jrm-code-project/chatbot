@@ -2153,3 +2153,30 @@ data: [DONE]")
     (fiveam:is (equal '(("role" . "user") ("content" . "hello")) (conversation-messages conv)))
     (fiveam:is (equal '(("role" . "user") ("content" . "hello-copied")) (conversation-messages copied-conv)))
     (fiveam:is (eq (conversation-chatbot conv) (conversation-chatbot copied-conv)))))
+
+(fiveam:test test-pure-prompt-decorations-transforms
+  "Verifies that add-prompt-decoration-pure and decrement-prompt-decorations-pure are pure, deterministic functions."
+  (let* ((decors nil)
+         (decors-1 (add-prompt-decoration-pure decors "First" :ttl 3))
+         (decors-2 (add-prompt-decoration-pure decors-1 "Second" :ttl 1)))
+    ;; Verify pure addition (immutability)
+    (fiveam:is-false decors)
+    (fiveam:is (= 1 (length decors-1)))
+    (fiveam:is (= 2 (length decors-2)))
+    (fiveam:is (string= "First" (getf (first decors-2) :text)))
+    (fiveam:is (= 3 (getf (first decors-2) :ttl)))
+    (fiveam:is (string= "Second" (getf (second decors-2) :text)))
+    (fiveam:is (= 1 (getf (second decors-2) :ttl)))
+
+    ;; Verify pure decrementing
+    (let* ((decremented-1 (decrement-prompt-decorations-pure decors-2))
+           (decremented-2 (decrement-prompt-decorations-pure decremented-1)))
+      ;; decors-2 is unchanged
+      (fiveam:is (= 2 (length decors-2)))
+      ;; Second should be expired, First should have TTL 2
+      (fiveam:is (= 1 (length decremented-1)))
+      (fiveam:is (string= "First" (getf (first decremented-1) :text)))
+      (fiveam:is (= 2 (getf (first decremented-1) :ttl)))
+      ;; First should have TTL 1 on second decrement
+      (fiveam:is (= 1 (length decremented-2)))
+      (fiveam:is (= 1 (getf (first decremented-2) :ttl))))))

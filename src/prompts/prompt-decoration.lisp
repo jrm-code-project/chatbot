@@ -226,11 +226,28 @@ using QUERY-TEXT as the query, filtering out any that do not pass THRESHOLD (def
                               ("error" . ,(princ-to-string e))))
       nil)))
 
+(defun add-prompt-decoration-pure (decorations text &key (ttl 1))
+  "Pure functional builder to append a prompt decoration to a list of decorations."
+  (append decorations (list (list :text text :ttl ttl))))
+
+(defun decrement-prompt-decorations-pure (decorations)
+  "Pure functional decrementer of active prompt decorations, returning a new list with expired ones removed."
+  (mapcan (lambda (dec)
+            (let ((new-ttl (1- (getf dec :ttl))))
+              (when (> new-ttl 0)
+                (list (list :text (getf dec :text) :ttl new-ttl)))))
+          decorations))
+
 (defun add-prompt-decoration (conversation text &key (ttl 1))
-  "Adds a transient prompt decoration TEXT to CONVERSATION that persists for TTL turns."
-  (let ((decorations (conversation-prompt-decorations conversation)))
-    (setf (conversation-prompt-decorations conversation)
-          (append decorations (list (list :text text :ttl ttl))))))
+  "Adds a transient prompt decoration TEXT to CONVERSATION, performing copy-on-write."
+  (let* ((new-decorations (add-prompt-decoration-pure
+                           (conversation-prompt-decorations conversation)
+                           text
+                           :ttl ttl))
+         (new-conv (copy-conversation conversation :prompt-decorations new-decorations)))
+    ;; For backward-compatible bridge phase, update the conversation object's internal slot
+    (setf (conversation-prompt-decorations conversation) new-decorations)
+    new-conv))
 
 (defun get-active-prompt-decorations-text (conversation)
   "Returns a combined string of active prompt decorations for CONVERSATION without decrementing TTL."
@@ -243,14 +260,13 @@ using QUERY-TEXT as the query, filtering out any that do not pass THRESHOLD (def
       (format nil "~{~A~^~%~%~}" (reverse texts)))))
 
 (defun decrement-prompt-decorations (conversation)
-  "Decrements the TTL of active prompt decorations in CONVERSATION, removing expired ones."
-  (let ((decorations (conversation-prompt-decorations conversation))
-        (active nil))
-    (dolist (dec decorations)
-      (let ((new-ttl (1- (getf dec :ttl))))
-        (when (> new-ttl 0)
-          (push (list :text (getf dec :text) :ttl new-ttl) active))))
-    (setf (conversation-prompt-decorations conversation) (reverse active))))
+  "Decrements the TTL of active prompt decorations in CONVERSATION, performing copy-on-write."
+  (let* ((new-decorations (decrement-prompt-decorations-pure
+                           (conversation-prompt-decorations conversation)))
+         (new-conv (copy-conversation conversation :prompt-decorations new-decorations)))
+    ;; For backward-compatible bridge phase, update the conversation object's internal slot
+    (setf (conversation-prompt-decorations conversation) new-decorations)
+    new-conv))
 
 (defun decorate-live-user-input (chatbot input &key effective-model (conversation nil))
   "Decorates string INPUT with transient prompt prefixes and relevant diary entries/memories requested by CHATBOT."
