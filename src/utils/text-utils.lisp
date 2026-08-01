@@ -167,20 +167,21 @@
            (push line paragraph-lines))))
       (flush-paragraph)
       (flush-fence))
-    (loop for (block-type . content) in (nreverse blocks)
-          for first-p = t then nil
-          do (unless first-p
-              (terpri stream))
-            (ecase block-type
-              (:prose
-               (dolist (line (wrap-text content :width width :initial-prefix "  "))
-                 (write-line line stream)))
-              (:verbatim-lines
-               (dolist (line content)
-                 (write-line line stream)))
-              (:fence
-               (dolist (line content)
-                 (write-line line stream)))))))
+    (let ((first-p t))
+      (mapc (lambda (block)
+              (let ((block-type (car block))
+                    (content (cdr block)))
+                (if first-p
+                    (setf first-p nil)
+                    (terpri stream))
+                (ecase block-type
+                  (:prose
+                   (mapc (lambda (line) (write-line line stream))
+                         (wrap-text content :width width :initial-prefix "  ")))
+                  ((:verbatim-lines :fence)
+                   (mapc (lambda (line) (write-line line stream))
+                         content)))))
+            (nreverse blocks)))))
 
 (defun print-chat-speaker-header (speaker &key (stream *standard-output*))
   "Prints a bracketed SPEAKER heading to STREAM."
