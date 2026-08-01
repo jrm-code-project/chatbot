@@ -471,7 +471,9 @@ Servers shared from STARTUP-BOT remain owned by the startup chatbot."
   (multiple-value-bind (resolved-context startup-bot)
       (resolve-startup-chatbot-reference bot context)
     (shutdown-chatbot-owned-mcp-servers bot startup-bot)
-    (finalize-chatbot-shutdown bot startup-bot resolved-context)))
+    (finalize-chatbot-shutdown bot startup-bot resolved-context)
+    (when resolved-context
+      (cleanup-supervised-resources (runtime-context-supervisor resolved-context)))))
 
 (eval-when (:load-toplevel :execute)
   (initialize-startup-chatbot-on-load))

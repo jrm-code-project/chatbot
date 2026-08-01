@@ -131,9 +131,11 @@
 
 (defun launch-mcp-server-process (command args environment)
   "Launches one MCP subprocess with COMMAND, ARGS, and ENVIRONMENT."
-  (apply #'uiop:launch-program
-        (cons (cons command args)
-              (mcp-launch-options environment))))
+  (let ((process (apply #'uiop:launch-program
+                        (cons (cons command args)
+                              (mcp-launch-options environment)))))
+    (register-supervised-process (current-resource-supervisor) process)
+    process))
 
 (defun make-mcp-server-from-process (name process-info)
   "Returns an MCP server wrapper around PROCESS-INFO for NAME."
@@ -146,7 +148,9 @@
 
 (defun spawn-mcp-server-thread (thunk name)
   "Starts one MCP supervision thread named NAME running THUNK."
-  (sb-thread:make-thread thunk :name name))
+  (let ((thread (sb-thread:make-thread thunk :name name)))
+    (register-supervised-thread (current-resource-supervisor) thread)
+    thread))
 
 (defun start-mcp-server-supervision (server)
   "Starts stderr and reader supervision threads for SERVER."

@@ -5,7 +5,19 @@
 ;;; Variables for the Chatbot framework
 
 (declaim (special *active-runtime-context*
-                  *default-runtime-context*))
+                  *default-runtime-context*
+                  *active-resource-supervisor*))
+
+(defvar *active-resource-supervisor* nil
+  "The resource supervisor currently bound dynamically, when any.")
+
+(defun current-resource-supervisor ()
+  "Returns the active resource supervisor if bound, otherwise the fallback context supervisor."
+  (or *active-resource-supervisor*
+      (and *active-runtime-context*
+           (runtime-context-supervisor *active-runtime-context*))
+      (and *default-runtime-context*
+           (runtime-context-supervisor *default-runtime-context*))))
 
 (defparameter *gemini-base-url* "https://generativelanguage.googleapis.com/v1beta"
   "The base REST endpoint for the Gemini Interactions API.")
@@ -736,7 +748,8 @@ context directly."
       ((active-runtime-context-p resolved-context)
        (funcall thunk))
       (t
-       (let ((*active-runtime-context* resolved-context))
+       (let ((*active-runtime-context* resolved-context)
+             (*active-resource-supervisor* (runtime-context-supervisor resolved-context)))
          (funcall thunk))))))
 
 (setf *default-runtime-context* (make-runtime-context))
@@ -752,3 +765,13 @@ context directly."
 
 (defparameter *context-pruning-threshold-characters* 300000
   "Compatibility character ceiling for auto-pruning, aligned with the default estimated token window.")
+
+(defmacro with-chatbot-lifecycle ((bot &rest initargs) &body body)
+  "Evaluates BODY with BOT bound to a newly created chatbot, ensuring full shutdown on exit."
+  (let ((context-var (gensym "CONTEXT")))
+    `(let* ((,context-var (make-instance 'runtime-context))
+            (,bot (make-instance 'chatbot :runtime-context ,context-var ,@initargs)))
+       (unwind-protect
+            (call-with-runtime-context ,context-var
+              (lambda () ,@body))
+         (shutdown-chatbot ,bot)))))

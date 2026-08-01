@@ -31,8 +31,61 @@
               (cons (cons context value) context-alist)))
     value))
 
+(defclass resource-supervisor ()
+  ((threads
+    :initform nil
+    :accessor supervisor-threads
+    :documentation "List of tracked active threads.")
+   (processes
+    :initform nil
+    :accessor supervisor-processes
+    :documentation "List of tracked active UIOP process-info objects.")
+   (lock
+    :initform (sb-thread:make-mutex :name "supervisor-lock")
+    :accessor supervisor-lock
+    :documentation "Mutex protecting resource lists.")))
+
+(defun register-supervised-thread (supervisor thread)
+  "Registers THREAD with SUPERVISOR for cleanup."
+  (when supervisor
+    (sb-thread:with-mutex ((supervisor-lock supervisor))
+      (push thread (supervisor-threads supervisor))))
+  thread)
+
+(defun register-supervised-process (supervisor process)
+  "Registers PROCESS with SUPERVISOR for cleanup."
+  (when supervisor
+    (sb-thread:with-mutex ((supervisor-lock supervisor))
+      (push process (supervisor-processes supervisor))))
+  process)
+
+(defun cleanup-supervised-resources (supervisor)
+  "Terminates all tracked threads and processes in SUPERVISOR."
+  (when supervisor
+    (sb-thread:with-mutex ((supervisor-lock supervisor))
+      (dolist (thread (supervisor-threads supervisor))
+        (when (sb-thread:thread-alive-p thread)
+          (ignore-errors (sb-thread:terminate-thread thread))))
+      (setf (supervisor-threads supervisor) nil)
+      (dolist (process (supervisor-processes supervisor))
+        (when (uiop:process-alive-p process)
+          (ignore-errors (uiop:terminate-process process :urgent t))))
+      (setf (supervisor-processes supervisor) nil)))
+  supervisor)
+
+(defmacro with-resource-supervisor ((supervisor) &body body)
+  "Evaluates BODY, ensuring all resources tracked by SUPERVISOR are cleaned up on exit."
+  `(unwind-protect
+       (progn ,@body)
+     (cleanup-supervised-resources ,supervisor)))
+
 (defclass runtime-context ()
-  ((mcp-config-path
+  ((supervisor
+    :initarg :supervisor
+    :accessor runtime-context-supervisor
+    :initform (make-instance 'resource-supervisor)
+    :documentation "Supervisor tracking processes and threads for this context.")
+   (mcp-config-path
     :initarg :mcp-config-path
     :accessor runtime-context-mcp-config-path
     :initform nil

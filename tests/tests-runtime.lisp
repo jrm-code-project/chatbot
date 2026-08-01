@@ -2127,3 +2127,13 @@ data: [DONE]")
         (chat "Prompt 4" :conversation conv)
         
         (fiveam:is (= 4 turn-count))))))
+
+(fiveam:test test-with-chatbot-lifecycle-supervisor
+  "Verifies that with-chatbot-lifecycle correctly registers and terminates supervised background threads."
+  (let ((hung-thread nil))
+    (with-chatbot-lifecycle (bot)
+      (setf hung-thread (sb-thread:make-thread (lambda () (sleep 10)) :name "Supervised-Test-Thread"))
+      (register-supervised-thread (current-resource-supervisor) hung-thread)
+      (fiveam:is-true (sb-thread:thread-alive-p hung-thread)))
+    (sleep 0.1)
+    (fiveam:is-false (sb-thread:thread-alive-p hung-thread))))

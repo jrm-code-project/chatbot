@@ -729,13 +729,14 @@ queued, and :EXHAUSTED when LOOP has no restart budget left."
   (setf (agentic-loop-status loop) :running)
   (unless (agentic-loop-started-at loop)
     (setf (agentic-loop-started-at loop) (get-high-precision-timestamp)))
-  (setf (agentic-loop-thread loop)
-        (sb-thread:make-thread
-         (lambda ()
-           (run-agentic-loop-worker loop))
-         :name (format nil "Agentic-Loop-~A" (agentic-loop-id loop))))
-  (agentic-loop-log :info loop "started")
-  loop)
+  (let ((thread (sb-thread:make-thread
+                 (lambda ()
+                   (run-agentic-loop-worker loop))
+                 :name (format nil "Agentic-Loop-Worker-~A" (agentic-loop-id loop)))))
+    (setf (agentic-loop-thread loop) thread)
+    (register-supervised-thread (current-resource-supervisor) thread)
+    (agentic-loop-log :info loop "started")
+    loop))
 
 (defun start-agentic-loop (conversation goal &key (max-iterations 10) backend model isolate-p)
   "Clones CONVERSATION and starts an autonomous loop for GOAL."
