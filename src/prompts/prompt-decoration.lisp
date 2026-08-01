@@ -201,7 +201,58 @@ using QUERY-TEXT as the query, filtering out any that do not pass *chroma-memory
                               ("error" . ,(princ-to-string e))))
       nil)))
 
-(defun decorate-live-user-input (chatbot input &key effective-model)
+(defun get-relevant-skills (persona-name query-text &key (n-results 5) (threshold 0.5))
+  "Retrieves up to N-RESULTS relevant skills from ChromaDB for the given PERSONA-NAME,
+using QUERY-TEXT as the query, filtering out any that do not pass THRESHOLD (default 0.5)."
+  (handler-case
+      (when (and persona-name (chroma-alive-p))
+        (let* ((collection-name (format nil "~A_Skills" (string persona-name)))
+               (collection (or (chroma-get-collection collection-name)
+                               (chroma-create-collection collection-name :get-or-create t))))
+          (when collection
+            (let* ((collection-id (cdr (assoc :id collection)))
+                   ;; Generate embedding vector for the query text
+                   (query-vector (string->embedding-vector query-text :model "gemini-embedding-2"))
+                   ;; Query ChromaDB for top results
+                   (query-resp (chroma-query collection-id (list query-vector) :n-results n-results))
+                   (results (extract-chroma-query-results query-resp)))
+              ;; Filter results by relevance threshold
+              (remove-if (lambda (res)
+                           (and threshold (> (getf res :distance) threshold)))
+                         results)))))
+    (error (e)
+      (log-message :warn "Failed to fetch relevant skills"
+                   :context `(("persona" . ,persona-name)
+                              ("error" . ,(princ-to-string e))))
+      nil)))
+
+(defun add-prompt-decoration (conversation text &key (ttl 1))
+  "Adds a transient prompt decoration TEXT to CONVERSATION that persists for TTL turns."
+  (let ((decorations (conversation-prompt-decorations conversation)))
+    (setf (conversation-prompt-decorations conversation)
+          (append decorations (list (list :text text :ttl ttl))))))
+
+(defun get-active-prompt-decorations-text (conversation)
+  "Returns a combined string of active prompt decorations for CONVERSATION without decrementing TTL."
+  (let ((decorations (conversation-prompt-decorations conversation))
+        (texts nil))
+    (dolist (dec decorations)
+      (when (> (getf dec :ttl) 0)
+        (push (getf dec :text) texts)))
+    (when texts
+      (format nil "~{~A~^~%~%~}" (reverse texts)))))
+
+(defun decrement-prompt-decorations (conversation)
+  "Decrements the TTL of active prompt decorations in CONVERSATION, removing expired ones."
+  (let ((decorations (conversation-prompt-decorations conversation))
+        (active nil))
+    (dolist (dec decorations)
+      (let ((new-ttl (1- (getf dec :ttl))))
+        (when (> new-ttl 0)
+          (push (list :text (getf dec :text) :ttl new-ttl) active))))
+    (setf (conversation-prompt-decorations conversation) (reverse active))))
+
+(defun decorate-live-user-input (chatbot input &key effective-model (conversation nil))
   "Decorates string INPUT with transient prompt prefixes and relevant diary entries/memories requested by CHATBOT."
   (if (and chatbot
            (stringp input))
@@ -210,7 +261,8 @@ using QUERY-TEXT as the query, filtering out any that do not pass *chroma-memory
           (let* ((parts nil)
                  (persona (chatbot-persona-name chatbot))
                  (diary-text (and persona (get-relevant-diary-entries-text persona input)))
-                 (memory-text (and persona (get-relevant-memories-text persona input))))
+                 (memory-text (and persona (get-relevant-memories-text persona input)))
+                 (ttl-decorations-text (when conversation (get-active-prompt-decorations-text conversation))))
             (when (chatbot-include-timestamp-p chatbot)
               (push (funcall *prompt-timestamp-function*) parts))
             (when (chatbot-include-model-p chatbot)
@@ -224,6 +276,8 @@ using QUERY-TEXT as the query, filtering out any that do not pass *chroma-memory
                 (push diary-text suffix-parts))
               (when memory-text
                 (push memory-text suffix-parts))
+              (when ttl-decorations-text
+                (push ttl-decorations-text suffix-parts))
               (if suffix-parts
                   (format nil "~A~%~%=== Dynamic Context ===~%~{~A~^~%~%~}"
                           input

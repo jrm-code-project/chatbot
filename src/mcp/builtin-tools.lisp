@@ -395,6 +395,19 @@
                                       ("contextSummary" . ((:type . "string")
                                                            (:description . "Summary of the context/goal to pass to the Planner minion (camelCase option).")))))))))
 
+(defun builtin-load-skill-tool ()
+  "Returns the built-in loadSkill tool definition."
+  '((:name . "loadSkill")
+    (:description . "Loads a skill into the active conversation's prompt decorations for a specified number of turns (TTL). Searches for the skill by description.")
+    (:input-schema .
+     ((:type . "object")
+      (:properties .
+       (("description" . ((:type . "string")
+                          (:description . "A description of the skill to load (e.g. 'formatting lisp code').")))
+        ("ttl" . ((:type . "integer")
+                  (:description . "The number of conversational turns the skill should remain active.")))))
+      (:required . ("description" "ttl"))))))
+
 (defun default-get-all-builtin-tools (bot)
   "Returns all built-in tools enabled for BOT as (source . tool) pairs."
   (if (chatbot-planner-p bot)
@@ -407,6 +420,7 @@
         (push (cons :built-in (builtin-read-file-lines-tool)) tools)
         (nreverse tools))
       (let ((tools nil))
+        (push (cons :built-in (builtin-load-skill-tool)) tools)
         (push (cons :built-in (builtin-resume-worker-tool)) tools)
         (push (cons :built-in (builtin-abort-worker-tool)) tools)
         (push (cons :built-in (builtin-prompt-worker-tool)) tools)

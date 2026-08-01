@@ -590,3 +590,122 @@ Returns the response from the ChromaDB add operation."
                 (chroma-add collection-id (list id)
                             :documents (list content)
                             :metadatas (list metadata))))))))
+
+(defun ensure-persona-skills-collection (persona-name)
+  "Ensures that the skills ChromaDB collection exists for the given persona.
+If it doesn't exist, it creates it."
+  (when (and persona-name (chroma-alive-p))
+    (let ((collection-name (format nil "~A_Skills" (string persona-name))))
+      (or (chroma-get-collection collection-name)
+          (chroma-create-collection collection-name :get-or-create t)))))
+
+(defun save-persona-skill (persona-name skill-name content &key description)
+  "Saves a new skill for the persona named PERSONA-NAME to both disk (under ~/.Personas/<persona>/Skills/<skill-name>.txt)
+and to the ChromaDB <persona>_Skills collection.
+If the ChromaDB collection does not exist, it will be created.
+Returns the response from the ChromaDB add operation."
+  (let* ((persona-dir (resolve-persona-directory persona-name))
+         (skills-dir (merge-pathnames "Skills/" persona-dir))
+         (filename (format nil "~A.txt" skill-name))
+         (file-path (merge-pathnames filename skills-dir)))
+    (ensure-directories-exist file-path)
+    (with-open-file (stream file-path :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-string content stream))
+    (log-message :info "Saved skill to disk"
+                 :context `(("path" . ,(namestring file-path))))
+    ;; If ChromaDB is alive, add to collection
+    (if (not (chroma-alive-p))
+        (progn
+          (log-message :info "ChromaDB not running. Skipping collection insert."
+                       :context `(("persona" . ,(string persona-name))))
+          (values nil :host-unavailable))
+        (let* ((collection-name (format nil "~A_Skills" (string persona-name)))
+               (collection (or (chroma-get-collection collection-name)
+                               (chroma-create-collection collection-name :get-or-create t))))
+          (if (null collection)
+              (progn
+                (log-message :warn "Could not create or get ChromaDB collection"
+                             :context `(("collection" . ,collection-name)))
+                nil)
+              (let ((collection-id (cdr (assoc :id collection)))
+                    (id (format nil "skill-~A" skill-name))
+                    (metadata `((:skill--name . ,skill-name)
+                                (:description . ,(or description ""))))
+                    (embedding (string->embedding-vector content :model "gemini-embedding-2")))
+                (chroma-add collection-id (list id)
+                            :documents (list content)
+                            :embeddings (list embedding)
+                            :metadatas (list metadata))))))))
+
+(defun extract-skill-description (skill-md-content)
+  "Extracts the first section delimited by `---` from SKILL-MD-CONTENT."
+  (let* ((lines (cl-ppcre:split "\\r?\\n" skill-md-content))
+         (collected nil)
+         (delimiter-count 0)
+         (starts-with-delimiter (and lines (string= (string-trim '(#\Space #\Tab #\Return) (first lines)) "---"))))
+    (loop for line in lines
+          for trimmed = (string-trim '(#\Space #\Tab #\Return) line)
+          do (cond
+               ((string= trimmed "---")
+                (incf delimiter-count)
+                (when (>= delimiter-count (if starts-with-delimiter 2 1))
+                  (return)))
+               (t
+                (when (or (zerop delimiter-count)
+                          (and (= delimiter-count 1) starts-with-delimiter))
+                  (push line collected)))))
+    (string-trim '(#\Space #\Tab #\Newline #\Return) (format nil "~{~A~^~%~}" (nreverse collected)))))
+
+(defun collect-md-files (dir)
+  "Recursively collects all .md files under DIR."
+  (when (uiop:directory-exists-p dir)
+    (let ((files (remove-if-not (lambda (p) (string-equal (pathname-type p) "md"))
+                                (uiop:directory-files dir)))
+          (subdirs (uiop:subdirectories dir)))
+      (append files (mapcan #'collect-md-files subdirs)))))
+
+(defun add-skill (skill-dir-path &key (persona-name "V"))
+  "Adds a skill from the directory at SKILL-DIR-PATH to the PERSONA-NAME's skills collection."
+  (let* ((skill-dir (uiop:ensure-directory-pathname skill-dir-path))
+         (skill-md-path (merge-pathnames "SKILL.md" skill-dir))
+         (resources-dir (merge-pathnames "resources/" skill-dir)))
+    (unless (probe-file skill-md-path)
+      (error "SKILL.md not found in ~A" skill-dir))
+    (let* ((content (uiop:read-file-string skill-md-path))
+           (description (extract-skill-description content))
+           (resource-files (collect-md-files resources-dir))
+           (resource-paths-str (cl-json:encode-json-to-string (coerce (mapcar #'namestring resource-files) 'vector)))
+           (skill-name (car (last (pathname-directory skill-dir)))))
+      (when (not (chroma-alive-p))
+        (log-message :warn "ChromaDB not running. Skipping add-skill." :context `(("skill" . ,(namestring skill-dir))))
+        (return-from add-skill (values nil :host-unavailable)))
+      
+      (let* ((collection-name (format nil "~A_Skills" (string persona-name)))
+             (collection (or (chroma-get-collection collection-name)
+                             (chroma-create-collection collection-name :get-or-create t))))
+        (if (null collection)
+            (progn
+              (log-message :warn "Could not create or get ChromaDB collection" :context `(("collection" . ,collection-name)))
+              nil)
+            (let ((collection-id (cdr (assoc :id collection)))
+                  (id (format nil "skill-~A" skill-name))
+                  (metadata `((:skill--md--path . ,(namestring skill-md-path))
+                              (:resource--paths . ,resource-paths-str)
+                              (:skill--name . ,skill-name)))
+                  (embedding (string->embedding-vector description :model "gemini-embedding-2")))
+              (chroma-add collection-id (list id)
+                          :documents (list description)
+                          :embeddings (list embedding)
+                          :metadatas (list metadata))))))))
+
+(defun add-skills (skills-dir-path &key (persona-name "V"))
+  "Adds all skills found in subdirectories of SKILLS-DIR-PATH to PERSONA-NAME's skills collection."
+  (let ((skills-dir (uiop:ensure-directory-pathname skills-dir-path)))
+    (unless (uiop:directory-exists-p skills-dir)
+      (error "Skills directory not found: ~A" skills-dir))
+    (let ((subdirs (uiop:subdirectories skills-dir)))
+      (dolist (subdir subdirs)
+        (add-skill subdir :persona-name persona-name)))))
+
+
+

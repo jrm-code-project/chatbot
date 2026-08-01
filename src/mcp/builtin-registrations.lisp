@@ -118,4 +118,7 @@
   (execute-abort-plan-tool bot arguments))
 
 (define-builtin-tool "invokePlanner" (bot arguments)
-  (execute-invoke-planner-via-workers-tool bot arguments tool-name))
+  (execute-invoke-planner-via-workers-tool bot arguments "invokePlanner"))
+
+(define-builtin-tool "loadSkill" (bot arguments)
+  (execute-load-skill-tool bot arguments "loadSkill"))

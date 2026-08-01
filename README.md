@@ -27,11 +27,11 @@ Creates a fresh conversation state. Useful when you want to clear the history wi
 
 **Basic Usage:**
 ```commonlisp
-(new-chat :backend :gemini :model "gemini-1.5-pro")
+(new-chat :backend :gemini :model "gemini-pro-latest")
 ```
 
 ```commonlisp
-(setf (current-default-conversation) (new-chat :backend :gemini :model "gemini-1.5-pro"))
+(setf (current-default-conversation) (new-chat :backend :gemini :model "gemini-pro-latest"))
 ```
 
 ## Persona Configuration
@@ -55,7 +55,7 @@ This file contains a single Lisp property list (plist) defining the persona's se
 **Example `config.lisp`:**
 ```commonlisp
 (:backend :gemini
- :model "gemini-1.5-pro"
+ :model "gemini-pro-latest"
  :temperature 0.7
  :enable-filesystem-tools t
  :enable-eval t

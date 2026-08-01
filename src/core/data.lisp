@@ -406,6 +406,11 @@
     :accessor conversation-persona-diary-entries
     :initform nil
     :documentation "Optional ordered persona diary preload entries kept separate from ordinary conversation turns.")
+   (prompt-decorations
+    :initarg :prompt-decorations
+    :accessor conversation-prompt-decorations
+    :initform nil
+    :documentation "List of active transient prompt decorations with TTLs.")
    (interaction-id
     :initarg :interaction-id
     :accessor conversation-interaction-id

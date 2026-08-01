@@ -2133,6 +2133,68 @@
       (setf (current-active-planner context) original-active-planner)
       (setf (current-active-planner-parent-conversation context) original-parent-conversation))))
 
+(fiveam:test test-execute-chatbot-tool-load-skill
+  (let* ((temp-dir (uiop:default-temporary-directory))
+         (mock-home (merge-pathnames "mock-home-load-skill/" temp-dir))
+         (context (make-test-backend-runtime-context nil))
+         (conv (new-chat :backend :google :runtime-context context :persona-name "V"))
+         (bot (conversation-chatbot conv))
+         (original-active-conversation (current-active-conversation context))
+         (res-text nil))
+    (setf (current-active-conversation context) conv)
+    
+    (let* ((test-skill-dir (merge-pathnames "test-skill/" mock-home))
+           (skill-md-path (merge-pathnames "SKILL.md" test-skill-dir))
+           (resource-path (merge-pathnames "resource.md" test-skill-dir)))
+      (ensure-directories-exist test-skill-dir)
+      (with-open-file (s skill-md-path :direction :output :if-exists :supersede)
+        (write-line "Skill instruction." s))
+      (with-open-file (s resource-path :direction :output :if-exists :supersede)
+        (write-line "Resource content." s))
+      
+      (setf (runtime-context-http-get-function context)
+            (lambda (url &rest args)
+              (declare (ignore args))
+              (cond
+                ((search "/heartbeat" url)
+                 "{\"nanosecond heartbeat\": 1718218128310}")
+                ((search "/collections/V_Skills" url)
+                 "{\"name\": \"V_Skills\", \"id\": \"skills-uuid-123\", \"metadata\": null}")
+                (t (error "Unexpected GET URL: ~A" url)))))
+      (setf (runtime-context-http-post-function context)
+            (lambda (url &rest args)
+              (cond
+                ((search "embedContent" url)
+                 "{\"embedding\": {\"values\": [0.1]}}")
+                ((search "/query" url)
+                 (let* ((meta-plist `((:skill--md--path . ,(namestring skill-md-path))
+                                      (:resource--paths . ,(cl-json:encode-json-to-string (list (namestring resource-path))))
+                                      (:skill--name . "TestSkill")))
+                        (meta-json (cl-json:encode-json-to-string meta-plist)))
+                   (format nil "{\"ids\": [[\"skill-1\"]],
+                                 \"distances\": [[0.15]],
+                                 \"documents\": [[\"Skill desc\"]],
+                                 \"metadatas\": [[~A]]}" meta-json)))
+                (t (error "Unexpected POST URL: ~A" url)))))
+      
+      (unwind-protect
+          (call-with-runtime-context context
+            (lambda ()
+              (handler-bind ((error (lambda (e) (format t "ERROR in loadSkill: ~A~%" e))))
+                (setf res-text (execute-chatbot-tool-by-name bot "loadSkill" '(("description" . "Find skill") ("ttl" . 5))))
+                (fiveam:is (search "Successfully loaded skill 'TestSkill' for 5 turns." res-text)))
+              
+              (let ((decorations (conversation-prompt-decorations conv)))
+                (fiveam:is (= 1 (length decorations)))
+                (let ((dec (first decorations)))
+                  (fiveam:is (= 5 (getf dec :ttl)))
+                  (fiveam:is (search "--- Skill: TestSkill ---" (getf dec :text)))
+                  (fiveam:is (search "Skill instruction." (getf dec :text)))
+                  (fiveam:is (search "Resource content." (getf dec :text)))))))
+        (setf (current-active-conversation context) original-active-conversation)
+        (when (uiop:directory-exists-p mock-home)
+          (uiop:delete-directory-tree mock-home :validate t))))))
+
 (fiveam:test test-invoke-planner-tool
   (let* ((temp-dir (uiop:default-temporary-directory))
         (mock-home (merge-pathnames "mock-home-invoke-planner/" temp-dir))

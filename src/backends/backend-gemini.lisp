@@ -35,7 +35,8 @@
                                     original-interaction-id current-interaction-id live-user-input)
   "Builds the provider-runner state for a Gemini Interactions turn."
   (let ((decorated (decorate-live-user-input (conversation-chatbot conversation) input
-                                             :effective-model effective-model)))
+                                             :effective-model effective-model
+                                             :conversation conversation)))
     (list :input input
           :live-user-input (or live-user-input
                                (and (stringp decorated) decorated))

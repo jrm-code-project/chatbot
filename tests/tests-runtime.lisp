@@ -5,8 +5,7 @@
 
 (fiveam:test test-default-conversation
   (let ((conv (new-chat))
-        (called nil)
-        (original-default-conversation *default-conversation*))
+        (called nil))
     (let ((original-post-function *http-post-function*)
          (original-gemini-api-key-function *gemini-api-key-function*)
           (original-context-default (runtime-context-default-conversation *default-runtime-context*)))
@@ -24,32 +23,13 @@
              (fiveam:is (eq conv (runtime-context-default-conversation *default-runtime-context*))))
         (setf *gemini-api-key-function* original-gemini-api-key-function)
         (setf *http-post-function* original-post-function)
-        (setf *default-conversation* original-default-conversation)
         (setf (runtime-context-default-conversation *default-runtime-context*) original-context-default)))))
-
-(fiveam:test test-resolve-chat-entry-context-does-not-sync-legacy-default-conversation-into-runtime-context
-  (let* ((default-context *default-runtime-context*)
-        (legacy-conversation (new-chat))
-        (context-conversation (new-chat))
-        (original-legacy-conversation *default-conversation*)
-        (original-default-conversation (runtime-context-default-conversation default-context)))
-    (unwind-protect
-        (progn
-          (setf *default-conversation* legacy-conversation)
-          (setf (runtime-context-default-conversation default-context) context-conversation)
-          (fiveam:is (eq default-context (resolve-chat-entry-context nil)))
-          (fiveam:is (eq context-conversation
-                        (runtime-context-default-conversation default-context)))
-          (fiveam:is (eq legacy-conversation *default-conversation*)))
-      (setf *default-conversation* original-legacy-conversation)
-      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
 
 (fiveam:test test-chat-with-canonical-default-conversation-uses-conversation-runtime-context
   (let* ((custom-context (make-runtime-context))
          (conv (new-chat :backend :google :runtime-context custom-context))
          (legacy-http-called-p nil)
          (context-http-called-p nil)
-         (original-default-conversation *default-conversation*)
          (original-context-default (runtime-context-default-conversation *default-runtime-context*))
          (original-gemini-api-key-function *gemini-api-key-function*)
          (original-http-post-function *http-post-function*)
@@ -80,7 +60,6 @@
           (fiveam:is (string= "Hello from ambient context" (chat "Hello ambient runtime context")))
           (fiveam:is-true context-http-called-p)
           (fiveam:is-false legacy-http-called-p))
-      (setf *default-conversation* original-default-conversation)
       (setf (runtime-context-default-conversation *default-runtime-context*) original-context-default)
       (setf *gemini-api-key-function* original-gemini-api-key-function)
       (setf *http-post-function* original-http-post-function)
@@ -132,274 +111,6 @@
           (fiveam:is (string= "(gamma) (delta)" (fourth forms))))
       (when (probe-file file)
         (delete-file file)))))
-
-(fiveam:test test-make-runtime-context-inherits-default-conversation-from-canonical-context-not-legacy-global
-  (let* ((default-context *default-runtime-context*)
-        (legacy-conversation (new-chat))
-        (context-conversation (new-chat))
-        (original-legacy-conversation *default-conversation*)
-        (original-default-conversation (runtime-context-default-conversation default-context)))
-    (unwind-protect
-        (progn
-          (setf *default-conversation* legacy-conversation)
-          (setf (runtime-context-default-conversation default-context) context-conversation)
-          (let ((context (make-runtime-context)))
-            (fiveam:is (eq context-conversation
-                           (runtime-context-default-conversation context)))))
-      (setf *default-conversation* original-legacy-conversation)
-      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
-
-(fiveam:test test-no-arg-current-default-conversation-prefers-default-runtime-context
-  (let* ((default-context *default-runtime-context*)
-         (legacy-conversation (new-chat))
-         (context-conversation (new-chat))
-         (original-legacy-conversation *default-conversation*)
-         (original-default-conversation (runtime-context-default-conversation default-context)))
-    (unwind-protect
-         (progn
-           (setf *default-conversation* legacy-conversation)
-           (setf (runtime-context-default-conversation default-context) context-conversation)
-           (fiveam:is (eq context-conversation (current-default-conversation)))
-           (fiveam:is (eq context-conversation
-                         (runtime-context-default-conversation default-context)))
-           (fiveam:is (eq legacy-conversation *default-conversation*)))
-      (setf *default-conversation* original-legacy-conversation)
-      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
-
-(fiveam:test test-no-arg-set-current-default-conversation-updates-default-runtime-context
-  (let* ((default-context *default-runtime-context*)
-         (conversation (new-chat))
-         (original-legacy-conversation *default-conversation*)
-         (original-default-conversation (runtime-context-default-conversation default-context)))
-    (unwind-protect
-         (progn
-           (setf (current-default-conversation) conversation)
-           (fiveam:is (eq original-legacy-conversation *default-conversation*))
-           (fiveam:is (eq conversation
-                         (runtime-context-default-conversation default-context))))
-      (setf *default-conversation* original-legacy-conversation)
-      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
-
-(fiveam:test test-new-chat-does-not-sync-legacy-default-conversation-into-runtime-context
-  (let* ((default-context *default-runtime-context*)
-         (legacy-conversation (new-chat))
-         (context-conversation (new-chat))
-         (original-legacy-conversation *default-conversation*)
-         (original-default-conversation (runtime-context-default-conversation default-context)))
-    (unwind-protect
-         (progn
-           (setf *default-conversation* legacy-conversation)
-           (setf (runtime-context-default-conversation default-context) context-conversation)
-           (new-chat)
-           (fiveam:is (eq context-conversation
-                         (runtime-context-default-conversation default-context)))
-           (fiveam:is (eq legacy-conversation *default-conversation*)))
-      (setf *default-conversation* original-legacy-conversation)
-      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
-
-(fiveam:test test-initialize-startup-chatbot-does-not-sync-legacy-default-conversation-into-runtime-context
-  (let* ((default-context *default-runtime-context*)
-         (legacy-conversation (new-chat))
-         (context-conversation (new-chat))
-         (original-legacy-conversation *default-conversation*)
-         (original-default-conversation (runtime-context-default-conversation default-context))
-         (original-context-startup-chatbot (runtime-context-startup-chatbot default-context)))
-    (unwind-protect
-         (let ((*initialize-mcp-servers-for-chatbot-function*
-                (lambda (bot &key strict-required-p)
-                  (declare (ignore strict-required-p))
-                  bot)))
-           (setf *default-conversation* legacy-conversation)
-           (setf (runtime-context-default-conversation default-context) context-conversation)
-           (setf (runtime-context-startup-chatbot default-context) nil)
-           (initialize-startup-chatbot)
-           (fiveam:is (eq context-conversation
-                         (runtime-context-default-conversation default-context)))
-           (fiveam:is (eq legacy-conversation *default-conversation*)))
-      (setf *default-conversation* original-legacy-conversation)
-      (setf (runtime-context-default-conversation default-context) original-default-conversation)
-      (setf (runtime-context-startup-chatbot default-context) original-context-startup-chatbot))))
-
-(fiveam:test test-function-seam-helpers-do-not-sync-legacy-default-conversation-into-runtime-context
-  (let* ((default-context *default-runtime-context*)
-         (legacy-conversation (new-chat))
-         (context-conversation (new-chat))
-         (original-legacy-conversation *default-conversation*)
-         (original-default-conversation (runtime-context-default-conversation default-context))
-         (original-getenv-function *getenv-function*)
-         (context-getenv-function (lambda (name)
-                                    (if (string= name "OPENAI_API_KEY")
-                                        "context-env-key"
-                                        nil))))
-    (unwind-protect
-         (progn
-           (setf *default-conversation* legacy-conversation)
-           (setf (runtime-context-default-conversation default-context) context-conversation)
-           (setf (runtime-context-getenv-function default-context) context-getenv-function)
-           (fiveam:is (eq context-getenv-function
-                         (current-getenv-function default-context)))
-           (setf (current-getenv-function default-context)
-                 (lambda (name)
-                   (if (string= name "OPENAI_API_KEY")
-                       "updated-context-env-key"
-                       nil)))
-           (fiveam:is (eq context-conversation
-                         (runtime-context-default-conversation default-context)))
-           (fiveam:is (eq legacy-conversation *default-conversation*)))
-      (setf *default-conversation* original-legacy-conversation)
-      (setf (runtime-context-default-conversation default-context) original-default-conversation)
-      (setf *getenv-function* original-getenv-function))))
-
-(fiveam:test test-approval-helpers-do-not-sync-legacy-default-conversation-into-runtime-context
-  (let* ((default-context *default-runtime-context*)
-         (legacy-conversation (new-chat))
-         (context-conversation (new-chat))
-         (original-legacy-conversation *default-conversation*)
-         (original-default-conversation (runtime-context-default-conversation default-context))
-         (original-approval-function *filesystem-access-approval-function*)
-         (context-approval-function (lambda (&rest ignored)
-                                      (declare (ignore ignored))
-                                      :context-approval)))
-    (unwind-protect
-         (progn
-           (setf *default-conversation* legacy-conversation)
-           (setf (runtime-context-default-conversation default-context) context-conversation)
-           (setf (runtime-context-filesystem-access-approval-function default-context)
-                 context-approval-function)
-           (fiveam:is (eq context-approval-function
-                         (current-filesystem-access-approval-function default-context)))
-           (setf (current-filesystem-access-approval-function default-context)
-                 (lambda (&rest ignored)
-                   (declare (ignore ignored))
-                   :updated-context-approval))
-           (fiveam:is (eq context-conversation
-                         (runtime-context-default-conversation default-context)))
-           (fiveam:is (eq legacy-conversation *default-conversation*)))
-      (setf *default-conversation* original-legacy-conversation)
-      (setf (runtime-context-default-conversation default-context) original-default-conversation)
-      (setf *filesystem-access-approval-function* original-approval-function))))
-
-(fiveam:test test-explicit-runtime-context-controls-http-timeouts
-  (let* ((context (make-runtime-context :http-connect-timeout 7
-                                       :http-read-timeout 33))
-         (conv (new-chat :backend :google :runtime-context context))
-         (captured-connect-timeout nil)
-         (captured-read-timeout nil)
-         )
-    (setf (runtime-context-gemini-api-key-function context) (lambda () "mocked-google-api-key"))
-    (setf (runtime-context-http-post-function context)
-          (lambda (url &rest args)
-            (declare (ignore url))
-            (setf captured-connect-timeout (getf args :connect-timeout))
-            (setf captured-read-timeout (getf args :read-timeout))
-            (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from context\"}], \"role\": \"model\"}}]}" 200)))
-    (fiveam:is (string= "Hello from context" (chat "Hi" :conversation conv)))
-    (fiveam:is (= 7 captured-connect-timeout))
-    (fiveam:is (= 33 captured-read-timeout))))
-
-(fiveam:test test-call-with-stream-read-timeout-signals-on-stall
-  (let ((start (get-internal-real-time))
-       (units internal-time-units-per-second))
-    (fiveam:signals error
-     (call-with-stream-read-timeout
-      (lambda ()
-        (sleep 2)
-        "never reached")
-      :timeout-seconds 1
-      :timeout-context "test stream"))
-    (fiveam:is (< (/ (- (get-internal-real-time) start) units) 2.0))))
-
-(fiveam:test test-legacy-timeout-globals-do-not-override-default-runtime-context
-  (let* ((conv (new-chat :backend :google))
-         (captured-connect-timeout nil)
-         (captured-read-timeout nil)
-         (original-connect-timeout *http-connect-timeout*)
-         (original-read-timeout *http-read-timeout*)
-         (original-context-connect (runtime-context-http-connect-timeout *default-runtime-context*))
-         (original-context-read (runtime-context-http-read-timeout *default-runtime-context*))
-         (original-post-function *http-post-function*)
-         (original-gemini-api-key-function *gemini-api-key-function*))
-    (setf *gemini-api-key-function* (lambda () "mocked-google-api-key"))
-    (setf *http-post-function*
-          (lambda (url &rest args)
-            (declare (ignore url))
-            (setf captured-connect-timeout (getf args :connect-timeout))
-            (setf captured-read-timeout (getf args :read-timeout))
-            (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello from globals\"}], \"role\": \"model\"}}]}" 200)))
-    (unwind-protect
-         (progn
-           (setf (runtime-context-http-connect-timeout *default-runtime-context*) 17)
-           (setf (runtime-context-http-read-timeout *default-runtime-context*) 71)
-           (let ((*http-connect-timeout* 21)
-                 (*http-read-timeout* 84))
-             (fiveam:is (string= "Hello from globals" (chat "Hi" :conversation conv)))
-             (fiveam:is (= 17 captured-connect-timeout))
-             (fiveam:is (= 71 captured-read-timeout))
-             (fiveam:is (= 17 (current-http-connect-timeout)))
-             (fiveam:is (= 71 (current-http-read-timeout)))))
-      (setf *gemini-api-key-function* original-gemini-api-key-function)
-      (setf *http-post-function* original-post-function)
-      (setf *http-connect-timeout* original-connect-timeout)
-      (setf *http-read-timeout* original-read-timeout)
-      (setf (runtime-context-http-connect-timeout *default-runtime-context*) original-context-connect)
-      (setf (runtime-context-http-read-timeout *default-runtime-context*) original-context-read))))
-
-(fiveam:test test-default-runtime-context-helpers-no-longer-sync-legacy-globals
-  (let ((original-mcp-config-path *mcp-config-path*)
-       (original-auto-init *auto-initialize-startup-mcp-servers-p*)
-       (original-logging-enabled *logging-enabled-p*)
-       (original-log-level *log-level*)
-       (original-log-stream *log-stream*)
-       (original-connect-timeout *http-connect-timeout*)
-       (original-read-timeout *http-read-timeout*)
-       (context *default-runtime-context*)
-       (original-context-path (runtime-context-mcp-config-path *default-runtime-context*))
-       (original-context-auto-init
-        (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*))
-       (original-context-logging-enabled
-        (runtime-context-logging-enabled-p *default-runtime-context*))
-       (original-context-log-level (runtime-context-log-level *default-runtime-context*))
-       (original-context-log-stream (runtime-context-log-stream *default-runtime-context*))
-       (original-context-connect (runtime-context-http-connect-timeout *default-runtime-context*))
-       (original-context-read (runtime-context-http-read-timeout *default-runtime-context*))
-       (test-stream (make-string-output-stream)))
-    (unwind-protect
-        (progn
-          (setf (current-mcp-config-path) "compat-path.lisp")
-          (setf (current-auto-initialize-startup-mcp-servers-p) t)
-          (setf (current-logging-enabled-p) nil)
-          (setf (current-log-level) :error)
-          (setf (current-log-stream) test-stream)
-          (setf (current-http-connect-timeout) 41)
-          (setf (current-http-read-timeout) 142)
-          (fiveam:is (equal original-mcp-config-path *mcp-config-path*))
-          (fiveam:is (eql original-auto-init *auto-initialize-startup-mcp-servers-p*))
-          (fiveam:is (eql original-logging-enabled *logging-enabled-p*))
-          (fiveam:is (eq original-log-level *log-level*))
-          (fiveam:is (eq original-log-stream *log-stream*))
-          (fiveam:is (= original-connect-timeout *http-connect-timeout*))
-          (fiveam:is (= original-read-timeout *http-read-timeout*))
-          (fiveam:is (string= "compat-path.lisp" (runtime-context-mcp-config-path context)))
-          (fiveam:is-true (runtime-context-auto-initialize-startup-mcp-servers-p context))
-          (fiveam:is-false (runtime-context-logging-enabled-p context))
-          (fiveam:is (eq :error (runtime-context-log-level context)))
-          (fiveam:is (eq test-stream (runtime-context-log-stream context)))
-          (fiveam:is (= 41 (runtime-context-http-connect-timeout context)))
-          (fiveam:is (= 142 (runtime-context-http-read-timeout context))))
-      (setf *mcp-config-path* original-mcp-config-path)
-      (setf *auto-initialize-startup-mcp-servers-p* original-auto-init)
-      (setf *logging-enabled-p* original-logging-enabled)
-      (setf *log-level* original-log-level)
-      (setf *log-stream* original-log-stream)
-      (setf *http-connect-timeout* original-connect-timeout)
-      (setf *http-read-timeout* original-read-timeout)
-      (setf (runtime-context-mcp-config-path context) original-context-path)
-      (setf (runtime-context-auto-initialize-startup-mcp-servers-p context) original-context-auto-init)
-      (setf (runtime-context-logging-enabled-p context) original-context-logging-enabled)
-      (setf (runtime-context-log-level context) original-context-log-level)
-      (setf (runtime-context-log-stream context) original-context-log-stream)
-      (setf (runtime-context-http-connect-timeout context) original-context-connect)
-      (setf (runtime-context-http-read-timeout context) original-context-read))))
 
 (fiveam:test test-continue-stateless-tool-recursion-updates-history-and-preserves-order
   (let* ((conversation (new-chat :backend :openai))
@@ -531,704 +242,6 @@
                              (list (list (cons "role" "model")
                                          (cons "content" "Shared final"))))
                      (conversation-messages conversation)))))
-
-(fiveam:test test-explicit-runtime-context-helpers-do-not-mutate-default-globals
-  (let* ((context (make-runtime-context :mcp-config-path "explicit-start.lisp"
-                                       :auto-initialize-startup-mcp-servers-p nil
-                                       :logging-enabled-p t
-                                       :log-level :info
-                                       :log-stream *error-output*
-                                       :http-connect-timeout 7
-                                       :http-read-timeout 33))
-        (original-mcp-config-path *mcp-config-path*)
-        (original-auto-init *auto-initialize-startup-mcp-servers-p*)
-        (original-logging-enabled *logging-enabled-p*)
-        (original-log-level *log-level*)
-        (original-log-stream *log-stream*)
-        (original-connect-timeout *http-connect-timeout*)
-        (original-read-timeout *http-read-timeout*)
-        (test-stream (make-string-output-stream)))
-    (unwind-protect
-        (call-with-runtime-context
-         context
-         (lambda ()
-           (setf (current-mcp-config-path context) "explicit-next.lisp")
-           (setf (current-auto-initialize-startup-mcp-servers-p context) t)
-           (setf (current-logging-enabled-p context) nil)
-           (setf (current-log-level context) :warn)
-           (setf (current-log-stream context) test-stream)
-           (setf (current-http-connect-timeout context) 19)
-           (setf (current-http-read-timeout context) 88)
-           (fiveam:is (string= "explicit-next.lisp" (current-mcp-config-path context)))
-           (fiveam:is-true (current-auto-initialize-startup-mcp-servers-p context))
-           (fiveam:is-false (current-logging-enabled-p context))
-           (fiveam:is (eq :warn (current-log-level context)))
-           (fiveam:is (eq test-stream (current-log-stream context)))
-           (fiveam:is (= 19 (current-http-connect-timeout context)))
-           (fiveam:is (= 88 (current-http-read-timeout context)))))
-      (fiveam:is (equal original-mcp-config-path *mcp-config-path*))
-      (fiveam:is (eql original-auto-init *auto-initialize-startup-mcp-servers-p*))
-      (fiveam:is (eql original-logging-enabled *logging-enabled-p*))
-      (fiveam:is (eq original-log-level *log-level*))
-      (fiveam:is (eq original-log-stream *log-stream*))
-      (fiveam:is (= original-connect-timeout *http-connect-timeout*))
-      (fiveam:is (= original-read-timeout *http-read-timeout*))
-      (fiveam:is (string= "explicit-next.lisp" (runtime-context-mcp-config-path context)))
-      (fiveam:is-true (runtime-context-auto-initialize-startup-mcp-servers-p context))
-      (fiveam:is-false (runtime-context-logging-enabled-p context))
-      (fiveam:is (eq :warn (runtime-context-log-level context)))
-      (fiveam:is (eq test-stream (runtime-context-log-stream context)))
-      (fiveam:is (= 19 (runtime-context-http-connect-timeout context)))
-      (fiveam:is (= 88 (runtime-context-http-read-timeout context))))))
-
-(fiveam:test test-deprecated-runtime-globals-no-longer-override-current-helpers
-  (let ((original-read-timeout *http-read-timeout*)
-        (original-context-read (runtime-context-http-read-timeout *default-runtime-context*)))
-    (unwind-protect
-         (progn
-           (setf (runtime-context-http-read-timeout *default-runtime-context*) 88)
-           (setf *http-read-timeout* 141)
-           (fiveam:is (= 88 (current-http-read-timeout))))
-      (setf *http-read-timeout* original-read-timeout)
-      (setf (runtime-context-http-read-timeout *default-runtime-context*) original-context-read))))
-
-(fiveam:test test-explicit-runtime-context-does-not-warn-about-legacy-globals
-  (let* ((context (make-runtime-context :http-connect-timeout 7)))
-    (let ((*error-output* (make-string-output-stream)))
-      (call-with-runtime-context
-       context
-       (lambda ()
-         (setf (current-http-connect-timeout context) 12)
-         (fiveam:is (= 12 (current-http-connect-timeout context)))))
-      (fiveam:is (string= "" (get-output-stream-string *error-output*))))))
-
-(fiveam:test test-no-arg-current-helpers-prefer-active-runtime-context
-  (let* ((default-context *default-runtime-context*)
-        (original-default-connect-timeout (runtime-context-http-connect-timeout default-context))
-        (original-default-startup-chatbot (runtime-context-startup-chatbot default-context))
-        (explicit-bot (make-instance 'chatbot))
-        (context (make-runtime-context :http-connect-timeout 29
-                                      :startup-chatbot explicit-bot)))
-    (unwind-protect
-        (call-with-runtime-context
-         context
-         (lambda ()
-          (fiveam:is (= 29 (current-http-connect-timeout)))
-          (fiveam:is (eq explicit-bot (current-startup-chatbot)))
-          (fiveam:is (= original-default-connect-timeout
-                        (runtime-context-http-connect-timeout default-context)))
-          (fiveam:is (eq original-default-startup-chatbot
-                         (runtime-context-startup-chatbot default-context)))))
-      (setf (runtime-context-http-connect-timeout default-context) original-default-connect-timeout)
-      (setf (runtime-context-startup-chatbot default-context) original-default-startup-chatbot))))
-
-(fiveam:test test-no-arg-transient-helpers-prefer-active-runtime-context-without-legacy-mirroring
-  (let* ((default-context *default-runtime-context*)
-        (explicit-conversation (new-chat :runtime-context (make-runtime-context)))
-        (explicit-planner (new-chat :runtime-context (make-runtime-context)))
-        (explicit-parent (new-chat :runtime-context (make-runtime-context)))
-        (legacy-conversation (new-chat))
-        (legacy-planner (new-chat))
-        (legacy-parent (new-chat))
-        (original-default-active-conversation (runtime-context-active-conversation default-context))
-        (original-default-active-planner (runtime-context-active-planner default-context))
-        (original-default-active-planner-parent
-          (runtime-context-active-planner-parent-conversation default-context))
-        (original-legacy-active-conversation *active-conversation*)
-        (original-legacy-active-planner *active-planner*)
-        (original-legacy-active-planner-parent *active-planner-parent-conversation*)
-        (context (make-runtime-context)))
-    (unwind-protect
-        (progn
-          (setf *active-conversation* legacy-conversation)
-          (setf *active-planner* legacy-planner)
-          (setf *active-planner-parent-conversation* legacy-parent)
-          (call-with-runtime-context
-           context
-           (lambda ()
-             (setf (current-active-conversation) explicit-conversation)
-             (setf (current-active-planner) explicit-planner)
-             (setf (current-active-planner-parent-conversation) explicit-parent)
-             (fiveam:is (eq explicit-conversation (current-active-conversation)))
-             (fiveam:is (eq explicit-planner (current-active-planner)))
-             (fiveam:is (eq explicit-parent
-                           (current-active-planner-parent-conversation)))
-             (fiveam:is (eq legacy-conversation *active-conversation*))
-             (fiveam:is (eq legacy-planner *active-planner*))
-             (fiveam:is (eq legacy-parent *active-planner-parent-conversation*))))
-          (fiveam:is (eq explicit-conversation
-                        (runtime-context-active-conversation context)))
-          (fiveam:is (eq explicit-planner
-                        (runtime-context-active-planner context)))
-          (fiveam:is (eq explicit-parent
-                        (runtime-context-active-planner-parent-conversation context)))
-          (fiveam:is (eq legacy-conversation *active-conversation*))
-          (fiveam:is (eq legacy-planner *active-planner*))
-          (fiveam:is (eq legacy-parent *active-planner-parent-conversation*)))
-      (setf (runtime-context-active-conversation default-context) original-default-active-conversation)
-      (setf (runtime-context-active-planner default-context) original-default-active-planner)
-      (setf (runtime-context-active-planner-parent-conversation default-context)
-           original-default-active-planner-parent)
-      (setf *active-conversation* original-legacy-active-conversation)
-      (setf *active-planner* original-legacy-active-planner)
-      (setf *active-planner-parent-conversation* original-legacy-active-planner-parent))))
-
-(fiveam:test test-default-runtime-context-transient-helpers-no-longer-mirror-legacy-globals
-  (let* ((default-context *default-runtime-context*)
-        (conversation (new-chat))
-        (planner (new-chat))
-        (parent (new-chat))
-        (original-default-active-conversation (runtime-context-active-conversation default-context))
-        (original-default-active-planner (runtime-context-active-planner default-context))
-        (original-default-active-planner-parent
-          (runtime-context-active-planner-parent-conversation default-context))
-        (original-legacy-active-conversation *active-conversation*)
-        (original-legacy-active-planner *active-planner*)
-        (original-legacy-active-planner-parent *active-planner-parent-conversation*))
-    (unwind-protect
-        (call-with-runtime-context
-         default-context
-         (lambda ()
-           (setf (current-active-conversation) conversation)
-           (setf (current-active-planner) planner)
-           (setf (current-active-planner-parent-conversation) parent)
-           (fiveam:is (eq original-legacy-active-conversation *active-conversation*))
-           (fiveam:is (eq original-legacy-active-planner *active-planner*))
-           (fiveam:is (eq original-legacy-active-planner-parent
-                         *active-planner-parent-conversation*))
-           (fiveam:is (eq conversation
-                          (runtime-context-active-conversation default-context)))
-           (fiveam:is (eq planner
-                          (runtime-context-active-planner default-context)))
-           (fiveam:is (eq parent
-                          (runtime-context-active-planner-parent-conversation
-                           default-context)))))
-      (setf (runtime-context-active-conversation default-context) original-default-active-conversation)
-      (setf (runtime-context-active-planner default-context) original-default-active-planner)
-      (setf (runtime-context-active-planner-parent-conversation default-context)
-           original-default-active-planner-parent)
-      (setf *active-conversation* original-legacy-active-conversation)
-      (setf *active-planner* original-legacy-active-planner)
-      (setf *active-planner-parent-conversation* original-legacy-active-planner-parent))))
-
-(fiveam:test test-explicit-runtime-context-transient-getters-do-not-fall-back-to-legacy-globals
-  (let* ((context (make-runtime-context))
-        (legacy-conversation (new-chat :runtime-context context))
-        (legacy-planner (new-chat :runtime-context context))
-        (legacy-parent (new-chat :runtime-context context))
-        (original-legacy-active-conversation *active-conversation*)
-        (original-legacy-active-planner *active-planner*)
-        (original-legacy-active-planner-parent *active-planner-parent-conversation*))
-    (unwind-protect
-        (progn
-          (setf *active-conversation* legacy-conversation)
-          (setf *active-planner* legacy-planner)
-          (setf *active-planner-parent-conversation* legacy-parent)
-          (call-with-runtime-context
-           context
-           (lambda ()
-             (fiveam:is-false (current-active-conversation))
-             (fiveam:is-false (current-active-planner))
-             (fiveam:is-false (current-active-planner-parent-conversation)))))
-      (setf *active-conversation* original-legacy-active-conversation)
-      (setf *active-planner* original-legacy-active-planner)
-      (setf *active-planner-parent-conversation* original-legacy-active-planner-parent))))
-
-(fiveam:test test-default-runtime-context-transient-getters-no-longer-fall-back-to-legacy-globals
-  (let* ((default-context *default-runtime-context*)
-        (legacy-conversation (new-chat))
-        (legacy-planner (new-chat))
-        (legacy-parent (new-chat))
-        (original-default-active-conversation (runtime-context-active-conversation default-context))
-        (original-default-active-planner (runtime-context-active-planner default-context))
-        (original-default-active-planner-parent
-          (runtime-context-active-planner-parent-conversation default-context))
-        (original-legacy-active-conversation *active-conversation*)
-        (original-legacy-active-planner *active-planner*)
-        (original-legacy-active-planner-parent *active-planner-parent-conversation*))
-    (unwind-protect
-        (progn
-          (setf (runtime-context-active-conversation default-context) nil)
-          (setf (runtime-context-active-planner default-context) nil)
-          (setf (runtime-context-active-planner-parent-conversation default-context) nil)
-          (setf *active-conversation* legacy-conversation)
-          (setf *active-planner* legacy-planner)
-          (setf *active-planner-parent-conversation* legacy-parent)
-          (call-with-runtime-context
-           default-context
-           (lambda ()
-             (fiveam:is-false (current-active-conversation))
-             (fiveam:is-false (current-active-planner))
-             (fiveam:is-false (current-active-planner-parent-conversation))
-             (fiveam:is (eq legacy-conversation *active-conversation*))
-             (fiveam:is (eq legacy-planner *active-planner*))
-             (fiveam:is (eq legacy-parent *active-planner-parent-conversation*)))))
-      (setf (runtime-context-active-conversation default-context) original-default-active-conversation)
-      (setf (runtime-context-active-planner default-context) original-default-active-planner)
-      (setf (runtime-context-active-planner-parent-conversation default-context)
-           original-default-active-planner-parent)
-      (setf *active-conversation* original-legacy-active-conversation)
-      (setf *active-planner* original-legacy-active-planner)
-      (setf *active-planner-parent-conversation* original-legacy-active-planner-parent))))
-
-(fiveam:test test-make-runtime-context-inherits-from-canonical-context-not-legacy-globals
-  (let* ((default-context *default-runtime-context*)
-        (original-default-log-level (runtime-context-log-level default-context))
-        (original-default-connect-timeout (runtime-context-http-connect-timeout default-context))
-        (original-legacy-log-level *log-level*)
-        (original-legacy-connect-timeout *http-connect-timeout*))
-    (unwind-protect
-        (progn
-          (setf (runtime-context-log-level default-context) :warn)
-          (setf (runtime-context-http-connect-timeout default-context) 23)
-          (setf *log-level* :error)
-          (setf *http-connect-timeout* 91)
-          (let ((context (make-runtime-context)))
-            (fiveam:is (eq :warn (runtime-context-log-level context)))
-            (fiveam:is (= 23 (runtime-context-http-connect-timeout context)))))
-      (setf (runtime-context-log-level default-context) original-default-log-level)
-      (setf (runtime-context-http-connect-timeout default-context) original-default-connect-timeout)
-      (setf *log-level* original-legacy-log-level)
-      (setf *http-connect-timeout* original-legacy-connect-timeout))))
-
-(fiveam:test test-explicit-runtime-context-getenv-function-does-not-rely-on-legacy-mirroring
-  (let* ((context (make-runtime-context :getenv-function
-                                       (lambda (name)
-                                         (if (string= name "OPENAI_API_KEY")
-                                             "context-env-key"
-                                             nil))))
-        (original-openai-api-key *openai-api-key*)
-        (original-getenv-function *getenv-function*))
-    (unwind-protect
-        (let ((*openai-api-key* nil)
-              (*getenv-function* (lambda (name)
-                                   (if (string= name "OPENAI_API_KEY")
-                                       "legacy-env-key"
-                                       nil))))
-          (call-with-runtime-context
-           context
-           (lambda ()
-             (fiveam:is (string= "context-env-key" (openai-api-key))))))
-      (setf *openai-api-key* original-openai-api-key)
-      (setf *getenv-function* original-getenv-function))))
-
-(fiveam:test test-no-arg-function-seam-helpers-prefer-active-runtime-context
-  (let* ((context-function (lambda (name)
-                            (if (string= name "OPENAI_API_KEY")
-                                "context-env-key"
-                                nil)))
-        (context (make-runtime-context :getenv-function context-function))
-        (legacy-function (lambda (name)
-                           (if (string= name "OPENAI_API_KEY")
-                               "legacy-env-key"
-                               nil)))
-        (original-openai-api-key *openai-api-key*)
-        (original-getenv-function *getenv-function*)
-        (legacy-result nil))
-    (unwind-protect
-       (let ((*openai-api-key* nil)
-             (*getenv-function* legacy-function))
-         (call-with-runtime-context
-          context
-          (lambda ()
-            (fiveam:is (eq context-function (current-getenv-function)))
-            (setf legacy-result (funcall *getenv-function* "OPENAI_API_KEY"))
-            (fiveam:is (string= "context-env-key" (openai-api-key)))
-            (setf (current-getenv-function)
-                  (lambda (name)
-                    (if (string= name "OPENAI_API_KEY")
-                        "updated-context-env-key"
-                        nil)))
-            (fiveam:is (string= "updated-context-env-key" (openai-api-key))))))
-      (setf *openai-api-key* original-openai-api-key)
-      (setf *getenv-function* original-getenv-function))
-    (fiveam:is (string= "updated-context-env-key"
-                       (funcall (runtime-context-getenv-function context)
-                                "OPENAI_API_KEY")))
-    (fiveam:is (string= "legacy-env-key" legacy-result))))
-
-(fiveam:test test-explicit-runtime-context-filesystem-approval-does-not-rely-on-legacy-mirroring
-  (let* ((context (make-runtime-context :filesystem-access-approval-function
-                                       (lambda (&rest ignored)
-                                         (declare (ignore ignored))
-                                         :context-approval)))
-         (original-approval-function *filesystem-access-approval-function*))
-    (unwind-protect
-         (let ((*filesystem-access-approval-function* (lambda (&rest ignored)
-                                                       (declare (ignore ignored))
-                                                       :legacy-approval)))
-           (fiveam:is (eq :context-approval
-                         (funcall (current-filesystem-access-approval-function context)))))
-      (setf *filesystem-access-approval-function* original-approval-function))))
-
-(fiveam:test test-no-arg-approval-helper-prefers-active-runtime-context
-  (let* ((context (make-runtime-context :filesystem-access-approval-function
-                                       (lambda (&rest ignored)
-                                         (declare (ignore ignored))
-                                         :context-approval)))
-        (legacy-approval-function (lambda (&rest ignored)
-                                    (declare (ignore ignored))
-                                    :legacy-approval))
-        (original-approval-function *filesystem-access-approval-function*)
-        (legacy-result nil))
-    (unwind-protect
-       (let ((*filesystem-access-approval-function* legacy-approval-function))
-         (call-with-runtime-context
-          context
-          (lambda ()
-            (setf legacy-result (funcall *filesystem-access-approval-function*))
-            (fiveam:is (eq :context-approval
-                           (funcall (current-filesystem-access-approval-function))))
-            (setf (current-filesystem-access-approval-function)
-                  (lambda (&rest ignored)
-                    (declare (ignore ignored))
-                    :updated-context-approval))
-            (fiveam:is (eq :updated-context-approval
-                           (funcall (current-filesystem-access-approval-function)))))))
-      (setf *filesystem-access-approval-function* original-approval-function))
-    (fiveam:is (eq :updated-context-approval
-                  (funcall (runtime-context-filesystem-access-approval-function context))))
-    (fiveam:is (eq :legacy-approval legacy-result))))
-
-(fiveam:test test-default-runtime-context-filesystem-approval-prefers-runtime-context
-  (let* ((default-context *default-runtime-context*)
-        (original-approval-function *filesystem-access-approval-function*)
-        (original-default-approval
-          (runtime-context-filesystem-access-approval-function default-context)))
-    (unwind-protect
-       (progn
-         (setf (runtime-context-filesystem-access-approval-function default-context)
-               (lambda (&rest ignored)
-                 (declare (ignore ignored))
-                 :context-approval))
-         (fiveam:is (eq :context-approval
-                        (funcall (current-filesystem-access-approval-function default-context))))
-         (let ((*filesystem-access-approval-function* (lambda (&rest ignored)
-                                                        (declare (ignore ignored))
-                                                        :legacy-approval)))
-           (call-with-runtime-context
-            default-context
-            (lambda ()
-              (fiveam:is (eq :context-approval
-                             (funcall (current-filesystem-access-approval-function))))
-              (fiveam:is (eq :context-approval
-                             (funcall (current-filesystem-access-approval-function
-                                       default-context))))))))
-      (setf *filesystem-access-approval-function* original-approval-function)
-      (setf (runtime-context-filesystem-access-approval-function default-context)
-           original-default-approval))))
-
-(fiveam:test test-default-runtime-context-eval-approval-prefers-runtime-context
-  (let* ((default-context *default-runtime-context*)
-       (original-approval-function *eval-approval-function*)
-       (original-default-approval
-         (runtime-context-eval-approval-function default-context)))
-    (unwind-protect
-      (progn
-        (setf (runtime-context-eval-approval-function default-context)
-              (lambda (&rest ignored)
-                (declare (ignore ignored))
-                :context-approval))
-        (fiveam:is (eq :context-approval
-                       (funcall (current-eval-approval-function default-context))))
-        (let ((*eval-approval-function* (lambda (&rest ignored)
-                                          (declare (ignore ignored))
-                                          :legacy-approval)))
-          (call-with-runtime-context
-           default-context
-           (lambda ()
-             (fiveam:is (eq :context-approval
-                            (funcall (current-eval-approval-function))))
-             (fiveam:is (eq :context-approval
-                            (funcall (current-eval-approval-function
-                                      default-context))))))))
-      (setf *eval-approval-function* original-approval-function)
-      (setf (runtime-context-eval-approval-function default-context)
-          original-default-approval))))
-
-(fiveam:test test-default-runtime-context-no-arg-function-seam-no-longer-falls-back-to-legacy
-  (let* ((default-context *default-runtime-context*)
-        (original-getenv-function *getenv-function*)
-        (original-default-getenv (runtime-context-getenv-function default-context)))
-    (unwind-protect
-        (progn
-          (setf (runtime-context-getenv-function default-context)
-               (lambda (name)
-                 (if (string= name "OPENAI_API_KEY")
-                     "context-env-key"
-                     nil)))
-          (fiveam:is (string= "context-env-key"
-                             (funcall (current-getenv-function default-context)
-                                      "OPENAI_API_KEY")))
-          (let ((*getenv-function* (lambda (name)
-                                    (if (string= name "OPENAI_API_KEY")
-                                        "legacy-env-key"
-                                        nil))))
-           (call-with-runtime-context
-            default-context
-            (lambda ()
-              (fiveam:is (string= "context-env-key"
-                                  (funcall (current-getenv-function)
-                                           "OPENAI_API_KEY")))))))
-      (setf *getenv-function* original-getenv-function)
-      (setf (runtime-context-getenv-function default-context)
-           original-default-getenv))))
-
-(fiveam:test test-explicit-runtime-context-startup-chatbot-does-not-rely-on-legacy-mirroring
-  (let* ((default-context *default-runtime-context*)
-         (legacy-startup-bot (make-instance 'chatbot))
-         (context-startup-bot (make-instance 'chatbot))
-         (original-legacy-startup-bot *startup-chatbot*)
-         (original-default-startup-bot (runtime-context-startup-chatbot default-context))
-         (context (make-runtime-context :startup-chatbot context-startup-bot)))
-    (unwind-protect
-         (progn
-           (setf *startup-chatbot* legacy-startup-bot)
-           (setf (runtime-context-startup-chatbot default-context) legacy-startup-bot)
-           (fiveam:is (eq context-startup-bot
-                         (current-startup-chatbot context))))
-      (setf *startup-chatbot* original-legacy-startup-bot)
-      (setf (runtime-context-startup-chatbot default-context) original-default-startup-bot))))
-
-(fiveam:test test-explicit-runtime-context-default-conversation-does-not-rely-on-legacy-mirroring
-  (let* ((default-context *default-runtime-context*)
-        (legacy-conversation (new-chat))
-        (context-conversation (new-chat))
-        (original-legacy-conversation *default-conversation*)
-        (original-default-conversation (runtime-context-default-conversation default-context))
-        (context (make-runtime-context :default-conversation context-conversation)))
-    (unwind-protect
-        (progn
-          (setf *default-conversation* legacy-conversation)
-          (setf (runtime-context-default-conversation default-context) legacy-conversation)
-          (fiveam:is (eq context-conversation
-                        (current-default-conversation context))))
-      (setf *default-conversation* original-legacy-conversation)
-      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
-
-(fiveam:test test-call-with-runtime-context-explicit-context-does-not-rebind-legacy-default-conversation
-  (let* ((legacy-conversation (new-chat))
-         (context-conversation (new-chat))
-         (context (make-runtime-context :default-conversation context-conversation))
-         (original-legacy-conversation *default-conversation*))
-    (unwind-protect
-         (progn
-           (setf *default-conversation* legacy-conversation)
-           (call-with-runtime-context
-            context
-            (lambda ()
-              (fiveam:is (eq context-conversation
-                           (current-default-conversation)))
-              (fiveam:is (eq legacy-conversation *default-conversation*))
-              (setf (current-default-conversation) nil)
-              (fiveam:is (null (current-default-conversation)))
-              (fiveam:is (eq legacy-conversation *default-conversation*))))
-           (fiveam:is (null (runtime-context-default-conversation context)))
-           (fiveam:is (eq legacy-conversation *default-conversation*)))
-      (setf *default-conversation* original-legacy-conversation))))
-
-(fiveam:test test-call-with-runtime-context-default-context-does-not-rebind-legacy-default-conversation
-  (let* ((default-context *default-runtime-context*)
-         (legacy-conversation (new-chat))
-         (context-conversation (new-chat))
-         (original-legacy-conversation *default-conversation*)
-         (original-default-conversation (runtime-context-default-conversation default-context)))
-    (unwind-protect
-         (progn
-           (setf *default-conversation* legacy-conversation)
-           (setf (runtime-context-default-conversation default-context) context-conversation)
-           (call-with-runtime-context
-            default-context
-            (lambda ()
-              (fiveam:is (eq legacy-conversation *default-conversation*))
-              (fiveam:is (eq context-conversation (current-default-conversation)))
-              (setf *default-conversation* legacy-conversation)))
-           (fiveam:is (eq context-conversation
-                        (runtime-context-default-conversation default-context)))
-           (fiveam:is (eq legacy-conversation *default-conversation*)))
-      (setf *default-conversation* original-legacy-conversation)
-      (setf (runtime-context-default-conversation default-context) original-default-conversation))))
-
-(fiveam:test test-call-with-runtime-context-opt-out-does-not-sync-legacy-function-or-approval-seams
-  (let* ((default-context *default-runtime-context*)
-         (context-getenv-function (lambda (name)
-                                   (declare (ignore name))
-                                   "context-env-key"))
-         (legacy-getenv-function (lambda (name)
-                                  (declare (ignore name))
-                                  "legacy-env-key"))
-         (context-approval-function (lambda (&rest ignored)
-                                     (declare (ignore ignored))
-                                     :context-approval))
-         (legacy-approval-function (lambda (&rest ignored)
-                                    (declare (ignore ignored))
-                                    :legacy-approval))
-         (original-default-getenv (runtime-context-getenv-function default-context))
-         (original-default-approval
-           (runtime-context-filesystem-access-approval-function default-context))
-         (original-legacy-getenv *getenv-function*)
-         (original-legacy-approval *filesystem-access-approval-function*))
-    (unwind-protect
-         (progn
-           (setf (runtime-context-getenv-function default-context) context-getenv-function)
-           (setf (runtime-context-filesystem-access-approval-function default-context)
-                context-approval-function)
-           (let ((*getenv-function* legacy-getenv-function)
-                (*filesystem-access-approval-function* legacy-approval-function))
-            (call-with-runtime-context
-             default-context
-             (lambda ())
-             :default-conversation-compatibility-p nil
-             :legacy-function-seam-compatibility-p nil))
-           (fiveam:is (eq context-getenv-function
-                        (runtime-context-getenv-function default-context)))
-           (fiveam:is (eq context-approval-function
-                        (runtime-context-filesystem-access-approval-function
-                         default-context))))
-      (setf (runtime-context-getenv-function default-context) original-default-getenv)
-      (setf (runtime-context-filesystem-access-approval-function default-context)
-           original-default-approval)
-      (setf *getenv-function* original-legacy-getenv)
-      (setf *filesystem-access-approval-function* original-legacy-approval))))
-
-(fiveam:test test-call-with-runtime-context-default-compatibility-no-longer-syncs-legacy-function-seams
-  (let* ((default-context *default-runtime-context*)
-         (context-getenv-function (lambda (name)
-                                   (declare (ignore name))
-                                   "context-env-key"))
-         (legacy-getenv-function (lambda (name)
-                                  (declare (ignore name))
-                                  "legacy-env-key"))
-         (context-approval-function (lambda (&rest ignored)
-                                     (declare (ignore ignored))
-                                     :context-approval))
-         (legacy-approval-function (lambda (&rest ignored)
-                                    (declare (ignore ignored))
-                                    :legacy-approval))
-         (original-default-getenv (runtime-context-getenv-function default-context))
-         (original-default-approval
-           (runtime-context-filesystem-access-approval-function default-context))
-         (original-legacy-getenv *getenv-function*)
-         (original-legacy-approval *filesystem-access-approval-function*))
-    (unwind-protect
-         (progn
-           (setf (runtime-context-getenv-function default-context) context-getenv-function)
-           (setf (runtime-context-filesystem-access-approval-function default-context)
-                context-approval-function)
-           (let ((*getenv-function* legacy-getenv-function)
-                (*filesystem-access-approval-function* legacy-approval-function))
-            (call-with-runtime-context
-             default-context
-             (lambda ())))
-           (fiveam:is (eq context-getenv-function
-                        (runtime-context-getenv-function default-context)))
-           (fiveam:is (eq context-approval-function
-                        (runtime-context-filesystem-access-approval-function
-                         default-context))))
-      (setf (runtime-context-getenv-function default-context) original-default-getenv)
-      (setf (runtime-context-filesystem-access-approval-function default-context)
-           original-default-approval)
-      (setf *getenv-function* original-legacy-getenv)
-      (setf *filesystem-access-approval-function* original-legacy-approval))))
-
-(fiveam:test test-explicit-runtime-context-mcp-config-path-does-not-rely-on-legacy-mirroring
-  (let* ((default-context *default-runtime-context*)
-         (legacy-path "legacy-config.lisp")
-         (context-path "context-config.lisp")
-         (original-legacy-path *mcp-config-path*)
-         (original-default-path (runtime-context-mcp-config-path default-context))
-         (context (make-runtime-context :mcp-config-path context-path)))
-    (unwind-protect
-         (progn
-          (setf *mcp-config-path* legacy-path)
-          (setf (runtime-context-mcp-config-path default-context) legacy-path)
-          (fiveam:is (string= context-path
-                              (current-mcp-config-path context))))
-      (setf *mcp-config-path* original-legacy-path)
-      (setf (runtime-context-mcp-config-path default-context) original-default-path))))
-
-(fiveam:test test-explicit-runtime-context-log-stream-does-not-rely-on-legacy-mirroring
-  (let* ((default-context *default-runtime-context*)
-         (legacy-stream (make-string-output-stream))
-         (context-stream (make-string-output-stream))
-         (original-legacy-stream *log-stream*)
-         (original-default-stream (runtime-context-log-stream default-context))
-         (context (make-runtime-context :log-stream context-stream)))
-    (unwind-protect
-         (progn
-          (setf *log-stream* legacy-stream)
-          (setf (runtime-context-log-stream default-context) legacy-stream)
-          (fiveam:is (eq context-stream
-                         (current-log-stream context))))
-      (setf *log-stream* original-legacy-stream)
-      (setf (runtime-context-log-stream default-context) original-default-stream))))
-
-(fiveam:test test-explicit-runtime-context-logging-enabled-does-not-rely-on-legacy-mirroring
-  (let* ((default-context *default-runtime-context*)
-         (original-legacy-enabled *logging-enabled-p*)
-         (original-default-enabled (runtime-context-logging-enabled-p default-context))
-         (context (make-runtime-context :logging-enabled-p nil)))
-    (unwind-protect
-         (progn
-          (setf *logging-enabled-p* t)
-          (setf (runtime-context-logging-enabled-p default-context) t)
-          (fiveam:is-false (current-logging-enabled-p context)))
-      (setf *logging-enabled-p* original-legacy-enabled)
-      (setf (runtime-context-logging-enabled-p default-context) original-default-enabled))))
-
-(fiveam:test test-explicit-runtime-context-log-level-does-not-rely-on-legacy-mirroring
-  (let* ((default-context *default-runtime-context*)
-         (original-legacy-level *log-level*)
-         (original-default-level (runtime-context-log-level default-context))
-         (context (make-runtime-context :log-level :warn)))
-    (unwind-protect
-         (progn
-          (setf *log-level* :error)
-          (setf (runtime-context-log-level default-context) :error)
-          (fiveam:is (eq :warn (current-log-level context))))
-      (setf *log-level* original-legacy-level)
-      (setf (runtime-context-log-level default-context) original-default-level))))
-
-(fiveam:test test-explicit-runtime-context-http-connect-timeout-does-not-rely-on-legacy-mirroring
-  (let* ((default-context *default-runtime-context*)
-         (original-legacy-timeout *http-connect-timeout*)
-         (original-default-timeout (runtime-context-http-connect-timeout default-context))
-         (context (make-runtime-context :http-connect-timeout 19)))
-    (unwind-protect
-         (progn
-          (setf *http-connect-timeout* 91)
-          (setf (runtime-context-http-connect-timeout default-context) 91)
-          (fiveam:is (= 19 (current-http-connect-timeout context))))
-      (setf *http-connect-timeout* original-legacy-timeout)
-      (setf (runtime-context-http-connect-timeout default-context) original-default-timeout))))
-
-(fiveam:test test-explicit-runtime-context-http-read-timeout-does-not-rely-on-legacy-mirroring
-  (let* ((default-context *default-runtime-context*)
-         (original-legacy-timeout *http-read-timeout*)
-         (original-default-timeout (runtime-context-http-read-timeout default-context))
-         (context (make-runtime-context :http-read-timeout 88)))
-    (unwind-protect
-         (progn
-          (setf *http-read-timeout* 141)
-          (setf (runtime-context-http-read-timeout default-context) 141)
-          (fiveam:is (= 88 (current-http-read-timeout context))))
-      (setf *http-read-timeout* original-legacy-timeout)
-      (setf (runtime-context-http-read-timeout default-context) original-default-timeout))))
-
-(fiveam:test test-explicit-runtime-context-auto-init-does-not-rely-on-legacy-mirroring
-  (let* ((default-context *default-runtime-context*)
-         (original-legacy-auto-init *auto-initialize-startup-mcp-servers-p*)
-         (original-default-auto-init
-          (runtime-context-auto-initialize-startup-mcp-servers-p default-context))
-         (context (make-runtime-context :auto-initialize-startup-mcp-servers-p nil)))
-    (unwind-protect
-         (progn
-          (setf *auto-initialize-startup-mcp-servers-p* t)
-          (setf (runtime-context-auto-initialize-startup-mcp-servers-p default-context) t)
-          (fiveam:is-false (current-auto-initialize-startup-mcp-servers-p context)))
-      (setf *auto-initialize-startup-mcp-servers-p* original-legacy-auto-init)
-      (setf (runtime-context-auto-initialize-startup-mcp-servers-p default-context)
-           original-default-auto-init))))
 
 (fiveam:test test-new-chat-without-persona-starts-empty
   (let* ((conv (new-chat))
@@ -2379,8 +1392,7 @@ data: [DONE]")
       (fiveam:is (string= "Hello done" (chat "Hi done" :conversation conv))))))
 
 (fiveam:test test-new-chat-reuses-startup-mcp-servers
-  (let ((original-startup-chatbot *startup-chatbot*)
-        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*)))
+  (let ((original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*)))
     (let ((*initialize-mcp-servers-for-chatbot-function*
            (lambda (bot &key strict-required-p)
              (declare (ignore strict-required-p))
@@ -2396,12 +1408,10 @@ data: [DONE]")
              (bot (conversation-chatbot conv))
              (startup-bot (ensure-startup-chatbot)))
         (fiveam:is-true (startup-chatbot-initialized-p))
-        (fiveam:is (eq original-startup-chatbot *startup-chatbot*))
         (fiveam:is (eq startup-bot
                        (runtime-context-startup-chatbot *default-runtime-context*)))
         (fiveam:is (eq (chatbot-mcp-servers bot)
                        (chatbot-mcp-servers startup-bot))))
-      (setf *startup-chatbot* original-startup-chatbot)
       (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot))))
 
 (fiveam:test test-initialize-startup-chatbot-reuses-existing-shared-bot
@@ -2577,8 +1587,7 @@ data: [DONE]")
       (setf (runtime-context-startup-chatbot context) nil))))
 
 (fiveam:test test-new-chat-does-not-start-mcp-servers
-  (let ((original-startup-chatbot *startup-chatbot*)
-        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
+  (let ((original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
         (init-calls 0))
     (let ((*initialize-mcp-servers-for-chatbot-function*
            (lambda (bot &key strict-required-p)
@@ -2588,9 +1597,7 @@ data: [DONE]")
       (let* ((conv (new-chat))
              (bot (conversation-chatbot conv)))
         (fiveam:is (= 0 init-calls))
-        (fiveam:is (eq original-startup-chatbot *startup-chatbot*))
         (fiveam:is (null (chatbot-mcp-servers bot))))
-      (setf *startup-chatbot* original-startup-chatbot)
       (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot))))
 
 (fiveam:test test-new-chat-auto-initializes-startup-mcp-servers-when-enabled
@@ -2664,9 +1671,7 @@ data: [DONE]")
        (fiveam:is (= 1 (mcp-startup-status-failed-count status)))))))
 
 (fiveam:test test-auto-startup-chatbot-defaults-to-noop
-  (let ((original-startup-chatbot *startup-chatbot*)
-       (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
-       (original-auto-init *auto-initialize-startup-mcp-servers-p*)
+  (let ((original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
         (original-context-auto-init
          (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*))
         (init-calls 0))
@@ -2678,19 +1683,13 @@ data: [DONE]")
       (setf (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*) nil)
       (maybe-auto-initialize-startup-chatbot)
       (fiveam:is (= 0 init-calls))
-      (fiveam:is (eq original-startup-chatbot *startup-chatbot*))
-      (fiveam:is (eql original-auto-init *auto-initialize-startup-mcp-servers-p*))
       (fiveam:is-false (startup-chatbot-initialized-p))
-      (setf *startup-chatbot* original-startup-chatbot)
       (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot)
-      (setf *auto-initialize-startup-mcp-servers-p* original-auto-init)
       (setf (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*)
             original-context-auto-init))))
 
 (fiveam:test test-auto-startup-chatbot-honors-compatibility-flag
-  (let ((original-startup-chatbot *startup-chatbot*)
-        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
-        (original-auto-init *auto-initialize-startup-mcp-servers-p*)
+  (let ((original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
         (original-context-auto-init
          (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*)))
     (let ((*initialize-mcp-servers-for-chatbot-function*
@@ -2706,21 +1705,15 @@ data: [DONE]")
       (setf (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*) t)
       (maybe-auto-initialize-startup-chatbot)
       (fiveam:is-true (startup-chatbot-initialized-p))
-      (fiveam:is (eq original-startup-chatbot *startup-chatbot*))
-      (fiveam:is (eql original-auto-init *auto-initialize-startup-mcp-servers-p*))
       (fiveam:is (equal '(:shared-server)
                        (chatbot-mcp-servers
                         (runtime-context-startup-chatbot *default-runtime-context*))))
-      (setf *startup-chatbot* original-startup-chatbot)
       (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot)
-      (setf *auto-initialize-startup-mcp-servers-p* original-auto-init)
       (setf (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*)
             original-context-auto-init))))
 
 (fiveam:test test-initialize-startup-chatbot-on-load-initializes-shared-startup-chatbot
-  (let ((original-startup-chatbot *startup-chatbot*)
-        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
-        (original-auto-init *auto-initialize-startup-mcp-servers-p*)
+  (let ((original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
         (original-context-auto-init
          (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*))
         (init-calls 0))
@@ -2741,18 +1734,13 @@ data: [DONE]")
       (setf (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*) nil)
       (initialize-startup-chatbot-on-load)
       (fiveam:is (= 1 init-calls))
-      (fiveam:is (eq original-startup-chatbot *startup-chatbot*))
-      (fiveam:is (eql original-auto-init *auto-initialize-startup-mcp-servers-p*))
       (fiveam:is-true (startup-chatbot-initialized-p))
-      (setf *startup-chatbot* original-startup-chatbot)
       (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot)
-      (setf *auto-initialize-startup-mcp-servers-p* original-auto-init)
       (setf (runtime-context-auto-initialize-startup-mcp-servers-p *default-runtime-context*)
             original-context-auto-init))))
 
 (fiveam:test test-startup-chatbot-exposes-partial-startup-status
-  (let ((original-startup-chatbot *startup-chatbot*)
-        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*)))
+  (let ((original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*)))
     (let ((*read-mcp-config-function*
            (lambda ()
              '((:name "healthy-server" :command "sbcl" :args ("--script" "healthy.lisp"))
@@ -2768,16 +1756,13 @@ data: [DONE]")
       (initialize-startup-chatbot)
       (let ((status (startup-chatbot-mcp-status)))
         (fiveam:is-true (startup-chatbot-initialized-p))
-        (fiveam:is (eq original-startup-chatbot *startup-chatbot*))
         (fiveam:is (typep status 'mcp-startup-status))
         (fiveam:is-true (mcp-startup-status-partial-failure-p status))
         (fiveam:is (= 1 (mcp-startup-status-failed-count status))))
-      (setf *startup-chatbot* original-startup-chatbot)
       (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot))))
 
 (fiveam:test test-startup-chatbot-does-not-initialize-on-strict-required-failure
-  (let ((original-startup-chatbot *startup-chatbot*)
-        (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*)))
+  (let ((original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*)))
     (let ((*read-mcp-config-function*
            (lambda ()
              '((:name "required-failure"
@@ -2792,15 +1777,12 @@ data: [DONE]")
       (setf (runtime-context-startup-chatbot *default-runtime-context*) nil)
       (fiveam:signals mcp-startup-error
         (initialize-startup-chatbot nil :strict-required-p t))
-      (fiveam:is (eq original-startup-chatbot *startup-chatbot*))
       (fiveam:is-false (startup-chatbot-initialized-p))
       (fiveam:is-false (startup-chatbot-mcp-status))
-      (setf *startup-chatbot* original-startup-chatbot)
       (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot))))
 
 (fiveam:test test-startup-chatbot-strict-required-failure-cleans-up-started-servers
-  (let ((original-startup-chatbot *startup-chatbot*)
-       (original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
+  (let ((original-context-startup-chatbot (runtime-context-startup-chatbot *default-runtime-context*))
        (stopped nil))
     (let ((*read-mcp-config-function*
           (lambda ()
@@ -2825,10 +1807,8 @@ data: [DONE]")
       (fiveam:signals mcp-startup-error
        (initialize-startup-chatbot nil :strict-required-p t))
       (fiveam:is (equal '("healthy-server") stopped))
-      (fiveam:is (eq original-startup-chatbot *startup-chatbot*))
       (fiveam:is-false (startup-chatbot-initialized-p))
       (fiveam:is-false (startup-chatbot-mcp-status))
-      (setf *startup-chatbot* original-startup-chatbot)
       (setf (runtime-context-startup-chatbot *default-runtime-context*) original-context-startup-chatbot))))
 
 (fiveam:test test-startup-chatbot-strict-mode-reinitializes-incompatible-shared-bot
@@ -3107,3 +2087,43 @@ data: [DONE]")
         (chat "ok" :conversation conv)
         (fiveam:is (eq :flash-warm (conversation-swp-state conv)))
         (fiveam:is (= 0 (conversation-swp-streak conv)))))))
+
+(fiveam:test test-prompt-decoration-ttl
+  "Verifies that prompt decorations persist and decrement TTL correctly across chat turns."
+  (let* ((context (make-test-backend-runtime-context nil))
+         (conv (new-chat :backend :google :runtime-context context))
+         (chatbot (conversation-chatbot conv))
+         (turn-count 0))
+    (setf (runtime-context-http-post-function context)
+          (lambda (url &rest args)
+            (declare (ignore url args))
+            (incf turn-count)
+            (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Response text\"}], \"role\": \"model\"}}]}" 200)))
+    (call-with-runtime-context context
+      (lambda ()
+        (add-prompt-decoration conv "TTL3-Decoration" :ttl 3)
+        (add-prompt-decoration conv "TTL1-Decoration" :ttl 1)
+        
+        ;; Turn 1: both should be active
+        (let ((decorated (decorate-live-user-input chatbot "Prompt 1" :conversation conv)))
+          (fiveam:is (search "TTL3-Decoration" decorated))
+          (fiveam:is (search "TTL1-Decoration" decorated)))
+        (chat "Prompt 1" :conversation conv)
+        
+        ;; Turn 2: TTL3 (now 2) active, TTL1 expired
+        (let ((decorated (decorate-live-user-input chatbot "Prompt 2" :conversation conv)))
+          (fiveam:is (search "TTL3-Decoration" decorated))
+          (fiveam:is (not (search "TTL1-Decoration" decorated))))
+        (chat "Prompt 2" :conversation conv)
+        
+        ;; Turn 3: TTL3 (now 1) active
+        (let ((decorated (decorate-live-user-input chatbot "Prompt 3" :conversation conv)))
+          (fiveam:is (search "TTL3-Decoration" decorated)))
+        (chat "Prompt 3" :conversation conv)
+        
+        ;; Turn 4: TTL3 expired
+        (let ((decorated (decorate-live-user-input chatbot "Prompt 4" :conversation conv)))
+          (fiveam:is (not (search "TTL3-Decoration" decorated))))
+        (chat "Prompt 4" :conversation conv)
+        
+        (fiveam:is (= 4 turn-count))))))

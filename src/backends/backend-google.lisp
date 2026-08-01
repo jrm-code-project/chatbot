@@ -100,7 +100,7 @@
   (let* ((current-messages (conversation-messages conversation))
          (persona-memory (conversation-persona-memory conversation))
          (persona-diary-entries (conversation-persona-diary-entries conversation))
-         (decorated (decorate-live-user-input bot input :effective-model effective-model))
+         (decorated (decorate-live-user-input bot input :effective-model effective-model :conversation conversation))
          (resolved-cached-content-name
            (and (not bypass-cache-p)
                 (or cached-content-name

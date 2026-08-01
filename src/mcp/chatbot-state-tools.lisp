@@ -152,3 +152,43 @@
       tool-name)))
   (maybe-save-system-instructions bot tool-name)
   (system-instruction-tool-result bot :saved (system-instruction-tool-saved-p bot)))
+
+(defun execute-load-skill-tool (bot arguments tool-name)
+  "Executes the loadSkill tool."
+  (let* ((description (or (mcp-val :description arguments)
+                          (mcp-val "description" arguments)))
+         (ttl (or (mcp-val :ttl arguments)
+                  (mcp-val "ttl" arguments)))
+         (conversation (current-active-conversation (chatbot-runtime-context bot))))
+    (unless description
+      (error 'mcp-tool-execution-error :tool-name tool-name :reason "description is required"))
+    (unless ttl
+      (error 'mcp-tool-execution-error :tool-name tool-name :reason "ttl is required"))
+    (unless conversation
+      (error 'mcp-tool-execution-error :tool-name tool-name :reason "No active conversation found for loadSkill."))
+    
+    (let ((skills (get-relevant-skills (chatbot-persona-name bot) description :n-results 1 :threshold nil)))
+      (if (null skills)
+          (error 'mcp-tool-execution-error :tool-name tool-name :reason (format nil "No skill found matching: ~A" description))
+          (let* ((skill (first skills))
+                 (meta (getf skill :metadata))
+                 (skill-md-path (cdr (assoc :skill--md--path meta)))
+                 (resource-paths-str (cdr (assoc :resource--paths meta)))
+                 (resource-paths-raw (and resource-paths-str (cl-json:decode-json-from-string resource-paths-str)))
+                 (resource-paths (cond
+                                   ((stringp resource-paths-raw) nil)
+                                   ((vectorp resource-paths-raw) (coerce resource-paths-raw 'list))
+                                   ((listp resource-paths-raw) resource-paths-raw)
+                                   (t (list resource-paths-raw))))
+                 (skill-name (cdr (assoc :skill--name meta)))
+                 (combined-text (with-output-to-string (s)
+                                  (format s "--- Skill: ~A ---~%~%" (or skill-name "Unknown"))
+                                  (when (and skill-md-path (probe-file skill-md-path))
+                                    (format s "SKILL.md:~%~A~%~%" (uiop:read-file-string skill-md-path)))
+                                  (dolist (rpath resource-paths)
+                                    (when (probe-file rpath)
+                                      (format s "~A:~%~A~%~%" 
+                                              (file-namestring rpath)
+                                              (uiop:read-file-string rpath)))))))
+            (add-prompt-decoration conversation combined-text :ttl ttl)
+            (format nil "Successfully loaded skill '~A' for ~D turns." (or skill-name description) ttl))))))

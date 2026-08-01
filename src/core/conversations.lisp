@@ -330,6 +330,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                                     (chat-turn-result-conversation result))))
     (let ((text (apply-chat-turn-result result effective-conversation)))
       (when effective-conversation
+        (decrement-prompt-decorations effective-conversation)
         (compress-conversation-context-if-needed effective-conversation)
         (checkpoint-conversation-after-chat effective-conversation))
       text)))

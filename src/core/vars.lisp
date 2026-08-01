@@ -4,19 +4,7 @@
 
 ;;; Variables for the Chatbot framework
 
-(declaim (special *mcp-config-path*
-                  *startup-chatbot*
-                  *auto-initialize-startup-mcp-servers-p*
-                  *logging-enabled-p*
-                  *log-level*
-                  *log-stream*
-                  *http-connect-timeout*
-                  *http-read-timeout*
-                  *http-patch-function*
-                  *http-delete-function*
-                  *default-conversation*
-                  *agentic-loop-default-backend*
-                  *agentic-loop-default-model*
+(declaim (special *active-runtime-context*
                   *default-runtime-context*))
 
 (defparameter *gemini-base-url* "https://generativelanguage.googleapis.com/v1beta"
@@ -357,6 +345,10 @@ CURRENT-ACTIVE-CONVERSATION with an explicit runtime context instead.")
   "Stores VALUE on CONTEXT through ACCESSOR."
   (funcall (fdefinition (list 'setf accessor)) value context))
 
+(defun (setf runtime-context-accessor-value) (value context accessor)
+  "Stores VALUE on CONTEXT through ACCESSOR using SETF."
+  (set-runtime-context-accessor-value context accessor value))
+
 (defmethod initialize-instance :after ((bot chatbot) &key)
   "Applies backend-sensitive defaults for chatbot instances created without an explicit model."
   (setf (chatbot-backend bot)
@@ -617,254 +609,43 @@ compatibility-only ambient special variables."
      (loop for entry being the hash-values of registry
            collect entry))))
 
-(defun runtime-context-function-seam-value (context accessor legacy-symbol)
-  "Returns the function seam value for ACCESSOR and LEGACY-SYMBOL."
-  (declare (ignore legacy-symbol))
-  (let ((resolved-context (resolve-runtime-context context)))
-    (and resolved-context
-         (runtime-context-accessor-value resolved-context accessor))))
-
-(defun set-runtime-context-function-seam-value (value context accessor legacy-symbol)
-  "Stores VALUE through the function seam bridge for ACCESSOR and LEGACY-SYMBOL."
-  (declare (ignore legacy-symbol))
-  (let ((resolved-context (resolve-runtime-context context)))
-    (when resolved-context
-      (set-runtime-context-accessor-value resolved-context accessor value)))
-  value)
-
-(defmacro define-runtime-context-function-seam-helper (name accessor legacy-symbol getter-doc setter-doc)
+(defmacro define-runtime-context-accessor (name accessor)
   `(progn
      (defun ,name (&optional context)
-       ,getter-doc
-       (runtime-context-function-seam-value context
-                                          ',accessor
-                                          ',legacy-symbol))
+       (let ((resolved (resolve-runtime-context context)))
+         (and resolved (runtime-context-accessor-value resolved ',accessor))))
      (defun (setf ,name) (value &optional context)
-       ,setter-doc
-       (set-runtime-context-function-seam-value value
-                                              context
-                                              ',accessor
-                                              ',legacy-symbol))))
+       (let ((resolved (resolve-runtime-context context)))
+         (when resolved
+           (setf (runtime-context-accessor-value resolved ',accessor) value)))
+       value)))
 
-(defun runtime-context-approval-function-value (context accessor legacy-symbol)
-  "Returns the approval function seam value for ACCESSOR and LEGACY-SYMBOL."
-  (declare (ignore legacy-symbol))
-  (let ((resolved-context (resolve-runtime-context context)))
-    (and resolved-context
-         (runtime-context-accessor-value resolved-context accessor))))
+(define-runtime-context-accessor current-default-conversation runtime-context-default-conversation)
+(define-runtime-context-accessor current-mcp-config-path runtime-context-mcp-config-path)
+(define-runtime-context-accessor current-startup-chatbot runtime-context-startup-chatbot)
+(define-runtime-context-accessor current-auto-initialize-startup-mcp-servers-p runtime-context-auto-initialize-startup-mcp-servers-p)
+(define-runtime-context-accessor current-logging-enabled-p runtime-context-logging-enabled-p)
+(define-runtime-context-accessor current-log-level runtime-context-log-level)
+(define-runtime-context-accessor current-log-stream runtime-context-log-stream)
+(define-runtime-context-accessor current-http-connect-timeout runtime-context-http-connect-timeout)
+(define-runtime-context-accessor current-http-read-timeout runtime-context-http-read-timeout)
+(define-runtime-context-accessor current-agentic-loop-default-backend runtime-context-agentic-loop-default-backend)
+(define-runtime-context-accessor current-agentic-loop-default-model runtime-context-agentic-loop-default-model)
 
-(defun set-runtime-context-approval-function-value (value context accessor legacy-symbol)
-  "Stores approval VALUE through the runtime-context bridge."
-  (declare (ignore legacy-symbol))
-  (let ((resolved-context (resolve-runtime-context context)))
-    (when resolved-context
-      (set-runtime-context-accessor-value resolved-context accessor value)))
-  value)
+(define-runtime-context-accessor current-getenv-function runtime-context-getenv-function)
+(define-runtime-context-accessor current-http-post-function runtime-context-http-post-function)
+(define-runtime-context-accessor current-http-get-function runtime-context-http-get-function)
+(define-runtime-context-accessor current-http-patch-function runtime-context-http-patch-function)
+(define-runtime-context-accessor current-http-delete-function runtime-context-http-delete-function)
+(define-runtime-context-accessor current-gemini-api-key-function runtime-context-gemini-api-key-function)
 
-(defmacro define-runtime-context-approval-function-helper (name accessor legacy-symbol getter-doc setter-doc)
-  `(progn
-     (defun ,name (&optional context)
-       ,getter-doc
-       (runtime-context-approval-function-value context
-                                              ',accessor
-                                              ',legacy-symbol))
-     (defun (setf ,name) (value &optional context)
-       ,setter-doc
-       (set-runtime-context-approval-function-value value
-                                                  context
-                                                  ',accessor
-                                                  ',legacy-symbol))))
+(define-runtime-context-accessor current-filesystem-access-approval-function runtime-context-filesystem-access-approval-function)
+(define-runtime-context-accessor current-eval-approval-function runtime-context-eval-approval-function)
+(define-runtime-context-accessor current-shell-approval-function runtime-context-shell-approval-function)
 
-(defun runtime-context-owned-value (context accessor)
-  "Returns ACCESSOR from the resolved runtime context, preferring the active context."
-  (let ((resolved-context (resolve-runtime-context context)))
-    (and resolved-context
-        (runtime-context-accessor-value resolved-context accessor))))
-
-(defun set-runtime-context-owned-value (value context accessor legacy-symbol)
-  "Stores VALUE through ACCESSOR on the resolved runtime context.
-LEGACY-SYMBOL is retained only for compatibility helper definitions and is no
-longer mirrored."
-  (declare (ignore legacy-symbol))
-  (let ((resolved-context (or (resolve-runtime-context context)
-                             *default-runtime-context*)))
-    (when resolved-context
-      (set-runtime-context-accessor-value resolved-context accessor value)))
-  value)
-
-(defmacro define-context-owned-runtime-context-helper (name accessor legacy-symbol getter-doc setter-doc)
-  `(progn
-     (defun ,name (&optional context)
-       ,getter-doc
-       (runtime-context-owned-value context ',accessor))
-     (defun (setf ,name) (value &optional context)
-       ,setter-doc
-       (set-runtime-context-owned-value value context ',accessor ',legacy-symbol))))
-
-(defun transient-runtime-context-value (context accessor legacy-symbol)
-  "Returns transient runtime state from CONTEXT's canonical runtime context."
-  (declare (ignore legacy-symbol))
-  (let ((resolved-context (resolve-runtime-context context)))
-    (and resolved-context
-         (runtime-context-accessor-value resolved-context accessor))))
-
-(defun set-transient-runtime-context-value (value context accessor legacy-symbol)
-  "Stores transient runtime state in CONTEXT's canonical runtime context."
-  (declare (ignore legacy-symbol))
-  (let ((resolved-context (resolve-runtime-context context)))
-    (when resolved-context
-      (set-runtime-context-accessor-value resolved-context accessor value)))
-  value)
-
-(defmacro define-transient-runtime-context-helper (name accessor legacy-symbol getter-doc setter-doc)
-  `(progn
-     (defun ,name (&optional context)
-       ,getter-doc
-       (transient-runtime-context-value context ',accessor ',legacy-symbol))
-     (defun (setf ,name) (value &optional context)
-       ,setter-doc
-       (set-transient-runtime-context-value value context ',accessor ',legacy-symbol))))
-
-(defun current-default-conversation (&optional context)
-  "Returns CONTEXT's canonical default conversation."
-  (let ((resolved-context (or (resolve-runtime-context context)
-                              *default-runtime-context*)))
-    (and resolved-context
-         (runtime-context-default-conversation resolved-context))))
-
-(defun (setf current-default-conversation) (value &optional context)
-  "Sets CONTEXT's canonical default conversation."
-  (let ((resolved-context (or (resolve-runtime-context context)
-                              *default-runtime-context*)))
-    (when resolved-context
-      (setf (runtime-context-default-conversation resolved-context) value)))
-  value)
-
-(define-context-owned-runtime-context-helper current-mcp-config-path
- runtime-context-mcp-config-path
- *mcp-config-path*
-  "Returns the ambient MCP configuration override path for CONTEXT."
-  "Sets the ambient MCP configuration override path for CONTEXT.")
-
-(define-context-owned-runtime-context-helper current-startup-chatbot
-  runtime-context-startup-chatbot
-  *startup-chatbot*
-  "Returns the shared startup chatbot for CONTEXT."
-  "Sets the shared startup chatbot for CONTEXT.")
-
-(define-context-owned-runtime-context-helper current-auto-initialize-startup-mcp-servers-p
-  runtime-context-auto-initialize-startup-mcp-servers-p
-  *auto-initialize-startup-mcp-servers-p*
-  "Returns whether startup MCP auto-initialization is enabled for CONTEXT."
-  "Sets whether startup MCP auto-initialization is enabled for CONTEXT.")
-
-(define-context-owned-runtime-context-helper current-logging-enabled-p
-  runtime-context-logging-enabled-p
-  *logging-enabled-p*
-  "Returns whether logging is enabled for CONTEXT."
-  "Sets whether logging is enabled for CONTEXT.")
-
-(define-context-owned-runtime-context-helper current-log-level
-  runtime-context-log-level
-  *log-level*
-  "Returns the current log level for CONTEXT."
-  "Sets the current log level for CONTEXT.")
-
-(define-context-owned-runtime-context-helper current-log-stream
-  runtime-context-log-stream
-  *log-stream*
-  "Returns the current log stream for CONTEXT."
-  "Sets the current log stream for CONTEXT.")
-
-(define-context-owned-runtime-context-helper current-http-connect-timeout
-  runtime-context-http-connect-timeout
-  *http-connect-timeout*
-  "Returns the current HTTP connect timeout for CONTEXT."
-  "Sets the current HTTP connect timeout for CONTEXT.")
-
-(define-context-owned-runtime-context-helper current-http-read-timeout
-  runtime-context-http-read-timeout
-  *http-read-timeout*
-  "Returns the current HTTP read timeout for CONTEXT."
-  "Sets the current HTTP read timeout for CONTEXT.")
-
-(define-context-owned-runtime-context-helper current-agentic-loop-default-backend
-  runtime-context-agentic-loop-default-backend
-  *agentic-loop-default-backend*
-  "Returns the default backend for new agentic loops in CONTEXT."
-  "Sets the default backend for new agentic loops in CONTEXT.")
-
-(define-context-owned-runtime-context-helper current-agentic-loop-default-model
-  runtime-context-agentic-loop-default-model
-  *agentic-loop-default-model*
-  "Returns the default model for new agentic loops in CONTEXT."
-  "Sets the default model for new agentic loops in CONTEXT.")
-
-(define-runtime-context-function-seam-helper current-getenv-function
-  runtime-context-getenv-function
-  *getenv-function*
-  "Returns the current environment lookup function for CONTEXT."
-  "Sets the current environment lookup function for CONTEXT.")
-
-(define-runtime-context-function-seam-helper current-http-post-function
-  runtime-context-http-post-function
-  *http-post-function*
-  "Returns the current HTTP POST function for CONTEXT."
-  "Sets the current HTTP POST function for CONTEXT.")
-
-(define-runtime-context-function-seam-helper current-http-get-function
-  runtime-context-http-get-function
-  *http-get-function*
-  "Returns the current HTTP GET function for CONTEXT."
-  "Sets the current HTTP GET function for CONTEXT.")
-
-(define-runtime-context-function-seam-helper current-http-patch-function
-  runtime-context-http-patch-function
-  *http-patch-function*
-  "Returns the current HTTP PATCH function for CONTEXT."
-  "Sets the current HTTP PATCH function for CONTEXT.")
-
-(define-runtime-context-function-seam-helper current-http-delete-function
-  runtime-context-http-delete-function
-  *http-delete-function*
-  "Returns the current HTTP DELETE function for CONTEXT."
-  "Sets the current HTTP DELETE function for CONTEXT.")
-
-(define-runtime-context-function-seam-helper current-gemini-api-key-function
-  runtime-context-gemini-api-key-function
-  *gemini-api-key-function*
-  "Returns the current Gemini API key lookup function for CONTEXT."
-  "Sets the current Gemini API key lookup function for CONTEXT.")
-
-(define-runtime-context-approval-function-helper current-filesystem-access-approval-function
-  runtime-context-filesystem-access-approval-function
-  *filesystem-access-approval-function*
-  "Returns the current filesystem access approval function for CONTEXT."
-  "Sets the current filesystem access approval function for CONTEXT.")
-
-(define-runtime-context-approval-function-helper current-eval-approval-function
-  runtime-context-eval-approval-function
-  *eval-approval-function*
-  "Returns the current eval approval function for CONTEXT."
-  "Sets the current eval approval function for CONTEXT.")
-
-(define-transient-runtime-context-helper current-active-conversation
-  runtime-context-active-conversation
-  *active-conversation*
-  "Returns the transient active conversation for CONTEXT."
-  "Sets the transient active conversation for CONTEXT.")
-
-(define-transient-runtime-context-helper current-active-planner
-  runtime-context-active-planner
-  *active-planner*
-  "Returns the transient active planner conversation for CONTEXT."
-  "Sets the transient active planner conversation for CONTEXT.")
-
-(define-transient-runtime-context-helper current-active-planner-parent-conversation
-  runtime-context-active-planner-parent-conversation
-  *active-planner-parent-conversation*
-  "Returns the transient planner parent conversation for CONTEXT."
-  "Sets the transient planner parent conversation for CONTEXT.")
+(define-runtime-context-accessor current-active-conversation runtime-context-active-conversation)
+(define-runtime-context-accessor current-active-planner runtime-context-active-planner)
+(define-runtime-context-accessor current-active-planner-parent-conversation runtime-context-active-planner-parent-conversation)
 
 (defun call-with-runtime-context (context thunk
                                  &key
@@ -872,9 +653,7 @@ longer mirrored."
                                    (legacy-function-seam-compatibility-p t))
   "Calls THUNK with the resolved runtime context active.
 Function seams and approval seams now resolve through the active runtime
-context directly. DEFAULT-CONVERSATION-COMPATIBILITY-P and
-LEGACY-FUNCTION-SEAM-COMPATIBILITY-P are retained for API compatibility but no
-longer mirror legacy ambient specials back into the runtime context."
+context directly."
   (declare (ignore default-conversation-compatibility-p
                     legacy-function-seam-compatibility-p))
   (let ((resolved-context (resolve-runtime-context context)))
@@ -900,13 +679,3 @@ longer mirror legacy ambient specials back into the runtime context."
 
 (defparameter *context-pruning-threshold-characters* 300000
   "Compatibility character ceiling for auto-pruning, aligned with the default estimated token window.")
-
-(defvar *active-planner* nil
-  "Deprecated compatibility alias for the active planner minion conversation.
-Runtime code no longer consults or mirrors this special; use
-CURRENT-ACTIVE-PLANNER with an explicit runtime context instead.")
-
-(defvar *active-planner-parent-conversation* nil
-  "Deprecated compatibility alias for the active planner parent conversation.
-Runtime code no longer consults or mirrors this special; use
-CURRENT-ACTIVE-PLANNER-PARENT-CONVERSATION with an explicit runtime context instead.")

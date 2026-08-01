@@ -10,7 +10,7 @@
          (current-messages (conversation-messages conversation))
          (persona-memory (conversation-persona-memory conversation))
          (persona-diary-entries (conversation-persona-diary-entries conversation))
-         (decorated (decorate-live-user-input bot input)))
+         (decorated (decorate-live-user-input bot input :conversation conversation)))
     (list :input input
           :conversation conversation
           :file-attachments file-attachments
