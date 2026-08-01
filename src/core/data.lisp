@@ -477,6 +477,27 @@
     :initform nil
     :documentation "Optional runtime context carrying shared configuration and startup state.")))
 
+(defstruct (history-node (:constructor %make-history-node))
+  "An immutable, persistent history node pointing backward in time.
+This forms a Git-like branchable conversation history tree where previous nodes
+are naturally shared across multiple conversation snapshots."
+  (parent nil :type (or null history-node) :read-only t)
+  (message nil :type list :read-only t))
+
+(defun history-node-to-list (node)
+  "Converts a persistent, backward-pointing history-node tree to a standard chronological list of messages."
+  (let ((msgs nil))
+    (do ((curr node (history-node-parent curr)))
+        ((null curr) msgs)
+      (push (history-node-message curr) msgs))))
+
+(defun list-to-history-node (list)
+  "Converts a standard chronological list of messages to a persistent, backward-pointing history-node tree."
+  (reduce (lambda (parent msg)
+            (%make-history-node :parent parent :message msg))
+          list
+          :initial-value nil))
+
 ;;; Component classes for CONVERSATION
 (defclass conversation-history ()
   ((persona-memory
@@ -496,9 +517,17 @@
     :documentation "List of active transient prompt decorations with TTLs.")
    (messages
     :initarg :messages
-    :accessor history-messages
     :initform nil
-    :documentation "Accumulated conversation messages for stateless backends (like OpenAI).")))
+    :documentation "Internal storage as a backward-pointing persistent history-node tree.")))
+
+(defmethod initialize-instance :after ((history conversation-history) &key messages &allow-other-keys)
+  (setf (slot-value history 'messages) (list-to-history-node messages)))
+
+(defmethod history-messages ((history conversation-history))
+  (history-node-to-list (slot-value history 'messages)))
+
+(defmethod (setf history-messages) (val (history conversation-history))
+  (setf (slot-value history 'messages) (list-to-history-node val)))
 
 (defclass conversation-cache-state ()
   ((cached-content-name

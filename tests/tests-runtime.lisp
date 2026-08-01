@@ -2180,3 +2180,26 @@ data: [DONE]")
       ;; First should have TTL 1 on second decrement
       (fiveam:is (= 1 (length decremented-2)))
       (fiveam:is (= 1 (getf (first decremented-2) :ttl))))))
+
+(fiveam:test test-persistent-immutable-history-trees
+  "Verifies the backward-pointing immutable history-node tree supports perfect structural sharing and conversion."
+  (let* ((messages '((("role" . "user") ("content" . "hello"))))
+         (tree-1 (list-to-history-node messages))
+         ;; Build tree-2 functionally ON TOP of tree-1 (structural sharing!)
+         (tree-2 (%make-history-node :parent tree-1 :message '(("role" . "model") ("content" . "hi")))))
+    ;; Verify tree-1 and tree-2 are history-node structures
+    (fiveam:is-true (history-node-p tree-1))
+    (fiveam:is-true (history-node-p tree-2))
+    
+    ;; Verify conversion back to list
+    (fiveam:is (equal messages (history-node-to-list tree-1)))
+    (fiveam:is (equal (append messages '((("role" . "model") ("content" . "hi")))) (history-node-to-list tree-2)))
+    
+    ;; Verify STRUCTURAL SHARING: tree-2's parent is EXACTLY tree-1 in memory!
+    (fiveam:is (eq (history-node-parent tree-2) tree-1))
+    
+    ;; Verify integration with conversation class
+    (let* ((bot (make-instance 'chatbot))
+           (conv (make-instance 'conversation :chatbot bot :messages messages)))
+      (fiveam:is (equal messages (conversation-messages conv)))
+      (fiveam:is (typep (slot-value (%conversation-history conv) 'messages) 'history-node)))))
