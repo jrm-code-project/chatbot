@@ -1,0 +1,264 @@
+;;; -*- Lisp -*-
+;;; conversation-constructors.lisp - conversation constructors and persona entry points
+
+(in-package "CHATBOT")
+
+(defun read-persona-config (config-path)
+  "Reads and validates a persona config form from CONFIG-PATH."
+  (handler-case
+      (with-open-file (stream config-path :direction :input)
+        (let* ((eof-marker (gensym "EOF"))
+               (forms (loop for form = (read stream nil eof-marker)
+                            until (eq form eof-marker)
+                            collect form))
+               (config (cond
+                         ((null forms) :eof)
+                         ((and (= 1 (length forms))
+                               (listp (car forms)))
+                          (car forms))
+                         (t forms))))
+          (when (eq config :eof)
+            (error "Persona config file is empty: ~A" config-path))
+          (unless (listp config)
+            (error "Persona config must be a property list: ~A" config-path))
+          (unless (and config (keywordp (car config)))
+            (error "Persona config must start with a keyword property: ~A" config-path))
+          config))
+    (error (e)
+      (error "Invalid persona config in ~A: ~A" config-path e))))
+
+(defun persona-system-instruction-path (persona-dir)
+  "Returns the preferred persona system-instruction file pathname when present."
+  (or (probe-file (merge-pathnames "system-instructions" persona-dir))
+      (probe-file (merge-pathnames "system-instruction.md" persona-dir))
+      (probe-file (merge-pathnames "system-instructions.md" persona-dir))))
+
+(defun read-persona-system-instruction (inst-path)
+  "Reads INST-PATH using the appropriate internal representation."
+  (let ((contents (uiop:read-file-string inst-path)))
+    (if (string= "system-instructions" (file-namestring inst-path))
+        (split-system-instruction-into-paragraphs contents)
+        contents)))
+
+(defun persona-system-instruction-storage-kind (inst-path)
+  "Returns the storage kind implied by INST-PATH."
+  (if (and inst-path
+           (string= "system-instructions" (file-namestring inst-path)))
+      :paragraph-file
+      :markdown-file))
+
+(defun persona-config-backend (config)
+  "Returns the backend keyword implied by persona CONFIG."
+  (let ((backend (safe-getf config :backend)))
+    (cond
+      ((null backend)
+       (if (eq (safe-getf config :googleapi) :google-api)
+          :google
+          :gemini))
+      (t
+       (normalize-chatbot-backend backend "persona")))))
+
+(defun persona-config-agentic-loop-default-backend (config)
+  "Returns the optional default agentic loop backend implied by persona CONFIG."
+  (normalize-chatbot-backend (safe-getf config :agentic-loop-default-backend)
+                            "persona agentic loop default"
+                            :allow-nil-p t))
+
+(defun persona-config-agentic-loop-default-model (config)
+  "Returns the optional default agentic loop model implied by persona CONFIG."
+  (let ((model (safe-getf config :agentic-loop-default-model)))
+    (when model
+      (require-non-empty-string model "Persona agentic loop default model"))))
+
+(defun persona-config-runtime-context (config runtime-context)
+  "Returns the effective runtime context for a persona using CONFIG and RUNTIME-CONTEXT."
+  (let* ((base-context (resolve-runtime-context runtime-context))
+        (loop-default-backend (persona-config-agentic-loop-default-backend config))
+        (loop-default-model (persona-config-agentic-loop-default-model config)))
+    (if (or loop-default-backend loop-default-model)
+       (call-with-runtime-context
+        base-context
+        (lambda ()
+          (make-runtime-context :agentic-loop-default-backend loop-default-backend
+                                :agentic-loop-default-model loop-default-model))
+        :default-conversation-compatibility-p nil
+        :legacy-function-seam-compatibility-p nil)
+       base-context)))
+
+(defun subordinate-conversation-name (conversation)
+  "Returns CONVERSATION's subordinate name."
+  (chatbot-persona-name (conversation-chatbot conversation)))
+
+(defun subordinate-conversation-worker-kind (conversation)
+  "Returns CONVERSATION's unified worker kind keyword."
+  (if (chatbot-planner-p (conversation-chatbot conversation))
+      :planner
+      :delegated))
+
+(defun subordinate-conversation-worker-id (conversation)
+  "Returns CONVERSATION's unified worker identifier."
+  (format nil "~A:~A"
+          (runtime-worker-kind-public-name
+           (subordinate-conversation-worker-kind conversation))
+          (subordinate-conversation-name conversation)))
+
+(defun register-initial-subordinate-conversations (bot)
+  "Registers BOT's configured subordinate conversations as runtime workers."
+  (dolist (conversation (chatbot-subordinates bot))
+    (register-runtime-worker-entry
+     (make-runtime-worker-entry
+      :worker-id (subordinate-conversation-worker-id conversation)
+      :kind (subordinate-conversation-worker-kind conversation)
+      :conversation conversation
+      :owner-bot bot)
+     (chatbot-runtime-context bot))))
+
+(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p (content-cache-policy +default-content-cache-policy+) (content-cache-ttl-seconds *default-content-cache-ttl-seconds*) (content-cache-min-tokens *default-content-cache-min-tokens*) google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p enable-shell-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path (backend :gemini) runtime-context subordinates persona-name persona-source-name checkpoint-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p cached-content-name cached-content-key cached-content-metadata (turns-since-cache-reload 0))
+  "Creates a new chatbot instance and returns an initialized conversation object.
+If model is NIL, a sensible default model is chosen based on the backend.
+Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
+configuration, instructions, or preloaded memory."
+  (let ((resolved-context (resolve-runtime-context runtime-context)))
+    (call-with-runtime-context
+     resolved-context
+     (lambda ()
+      (maybe-auto-initialize-startup-chatbot resolved-context)
+      (let* ((backend (normalize-chatbot-backend backend "chatbot"))
+             (chosen-model (or model
+                               (backend-default-model backend)))
+             (bot (make-instance 'chatbot
+                                 :persona-name persona-name
+                                 :persona-source-name persona-source-name
+                                 :checkpoint-name (or checkpoint-name persona-name "DefaultConversation")
+                                 :model chosen-model
+                                 :backend backend
+                                 :system-instruction system-instruction
+                                 :system-instruction-path system-instruction-path
+                                 :system-instruction-storage-kind system-instruction-storage-kind
+                                 :temperature (normalize-chatbot-temperature temperature :allow-nil-p t)
+                                 :top-p (normalize-chatbot-top-p top-p :allow-nil-p t)
+                                 :content-cache-policy (normalize-content-cache-policy content-cache-policy)
+                                 :content-cache-ttl-seconds (normalize-content-cache-ttl-seconds content-cache-ttl-seconds :allow-nil-p t)
+                                 :content-cache-min-tokens (normalize-content-cache-min-tokens content-cache-min-tokens :allow-nil-p t)
+                                 :google-search-p google-search-p
+                                 :gemini-fallback-to-google-p gemini-fallback-to-google-p
+                                 :web-tools-p web-tools-p
+                                 :code-execution-p code-execution-p
+                                 :include-timestamp-p include-timestamp-p
+                                 :include-model-p include-model-p
+                                 :enable-eval-p enable-eval-p :enable-shell-p enable-shell-p :enable-git-tools-p enable-git-tools-p
+                                 :filesystem-tools-p filesystem-tools-p
+                                 :filesystem-root-directory (or scoped-directory filesystem-root-directory)
+                                 :filesystem-allowed-directories filesystem-allowed-directories
+                                 :filesystem-allowlist-path filesystem-allowlist-path
+                                 :runtime-context resolved-context
+                                 :subordinates subordinates
+                                 :parent-name parent-name
+                                 :depth depth
+                                 :token-budget token-budget
+                                 :spent-tokens spent-tokens
+                                 :scoped-directory (or scoped-directory filesystem-root-directory)
+                                 :filesystem-read-only-p filesystem-read-only-p
+                                 :planner-p planner-p)))
+        (let ((startup-servers (startup-chatbot-mcp-servers resolved-context))
+              (startup-status (startup-chatbot-mcp-status resolved-context)))
+          (when startup-servers
+            (setf (chatbot-mcp-servers bot) startup-servers))
+          (when startup-status
+            (setf (chatbot-mcp-startup-status bot) startup-status)))
+        (register-initial-subordinate-conversations bot)
+        (make-instance 'conversation
+                       :chatbot bot
+                       :checkpoint-name (or checkpoint-name persona-name "DefaultConversation")
+                       :cached-content-name cached-content-name
+                       :cached-content-key cached-content-key
+                       :cached-content-metadata cached-content-metadata
+                       :turns-since-cache-reload turns-since-cache-reload)))
+     :default-conversation-compatibility-p nil
+     :legacy-function-seam-compatibility-p nil)))
+
+(defun new-chat-persona (persona-name &key checkpoint-name runtime-context parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory (web-tools-p nil web-tools-supplied-p) (enable-shell-p nil enable-shell-supplied-p) (enable-git-tools-p nil enable-git-tools-supplied-p) (filesystem-tools-p nil filesystem-tools-supplied-p) (filesystem-read-only-p nil filesystem-read-only-supplied-p) (planner-p nil planner-supplied-p) (load-configured-subordinates-p t))
+  "Creates a new chat session for a given chatbot persona.
+The persona's configuration is read from ~/.Personas/<persona-name>/config.lisp
+and the system instructions are loaded from the persona's system-instruction file set.
+Use NEW-CHAT instead when no persona should be loaded."
+  (let* ((spec (resolve-persona-startup-spec persona-name))
+         (persona-dir (getf spec :directory))
+         (fallback-p (getf spec :fallback-p)))
+    (if fallback-p
+        (progn
+         (log-message :warn "Skipping restore for missing persona"
+                      :context `(("persona" . ,(princ-to-string persona-name))))
+         (new-chat :runtime-context runtime-context
+                   :persona-source-name persona-name
+                   :checkpoint-name (or checkpoint-name persona-name)
+                   :parent-name parent-name
+                   :depth depth
+                   :token-budget token-budget
+                   :spent-tokens spent-tokens
+                   :scoped-directory scoped-directory
+                   :filesystem-read-only-p (if filesystem-read-only-supplied-p filesystem-read-only-p nil)
+                   :planner-p (if planner-supplied-p planner-p nil)))
+        (let* ((config-path (probe-file (merge-pathnames "config.lisp" persona-dir)))
+              (inst-path (persona-system-instruction-path persona-dir)))
+         (let* ((config (when config-path
+                          (read-persona-config config-path)))
+                (system-instruction (when inst-path
+                                      (read-persona-system-instruction inst-path)))
+                (model (safe-getf config :model))
+                (temperature (safe-getf config :temperature))
+                (top-p (safe-getf config :top-p))
+                (googleapi (safe-getf config :googleapi))
+                (google-search-p (safe-getf config :google-search-p))
+                (gemini-fallback-to-google-p (safe-getf config :gemini-fallback-to-google-p))
+                (config-web-tools-p (safe-getf config :enable-web-tools))
+                (code-execution-p (safe-getf config :code-execution-p))
+                (include-timestamp-p (safe-getf config :include-timestamp))
+                (include-model-p (safe-getf config :include-model))
+                (enable-eval-p (safe-getf config :enable-eval))
+                (config-enable-shell-p (safe-getf config :enable-shell))
+                (config-enable-git-tools-p (safe-getf config :enable-git-tools)) (config-filesystem-tools-p (safe-getf config :enable-filesystem-tools))
+                (backend (persona-config-backend config))
+                (persona-runtime-context (persona-config-runtime-context config runtime-context)))
+           (declare (ignore googleapi))
+           (let ((conversation
+                   (preload-persona-conversation-diary
+                    (preload-persona-conversation-memory
+                     (new-chat :backend backend
+                               :model model
+                               :checkpoint-name (or checkpoint-name persona-name)
+                               :system-instruction system-instruction
+                               :system-instruction-path inst-path
+                               :system-instruction-storage-kind (persona-system-instruction-storage-kind inst-path)
+                               :temperature temperature
+                               :top-p top-p
+                               :google-search-p google-search-p
+                               :gemini-fallback-to-google-p gemini-fallback-to-google-p
+                               :web-tools-p (if web-tools-supplied-p web-tools-p config-web-tools-p)
+                               :code-execution-p code-execution-p
+                               :include-timestamp-p include-timestamp-p
+                               :include-model-p include-model-p
+                               :enable-eval-p enable-eval-p
+                               :enable-shell-p (if enable-shell-supplied-p enable-shell-p config-enable-shell-p)
+                               :enable-git-tools-p (if enable-git-tools-supplied-p enable-git-tools-p config-enable-git-tools-p) :filesystem-tools-p (if filesystem-tools-supplied-p filesystem-tools-p config-filesystem-tools-p)
+                               :filesystem-root-directory (or scoped-directory persona-dir)
+                               :filesystem-allowed-directories (persona-filesystem-allowlist-directories persona-dir)
+                               :filesystem-allowlist-path (persona-filesystem-allowlist-path persona-dir)
+                               :runtime-context persona-runtime-context
+                               :subordinates (and load-configured-subordinates-p
+                                                  (loop for sub-persona in (safe-getf config :subordinates)
+                                                        collect (new-chat-persona sub-persona :runtime-context runtime-context)))
+                               :persona-name persona-name
+                               :persona-source-name persona-name
+                               :parent-name parent-name
+                               :depth depth
+                               :token-budget token-budget
+                               :spent-tokens spent-tokens
+                               :scoped-directory (or scoped-directory persona-dir)
+                               :filesystem-read-only-p (if filesystem-read-only-supplied-p filesystem-read-only-p nil)
+                               :planner-p (if planner-supplied-p planner-p nil))
+                     persona-dir)
+                    persona-dir)))
+             (setf conversation (attach-persona-memory-mcp-server conversation persona-dir))
+             (start-persona-memory-compression-thread conversation persona-dir)
+             conversation))))))
