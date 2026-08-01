@@ -86,28 +86,31 @@ If X is nil, returns nil."
 (defun extract-observations-from-tool (tool-name arguments)
   "Extracts a list of plist records containing :entity-name, :entity-type, and :text (observation string)
 from the MCP arguments for create_entities and add_observations."
-  (let ((results nil))
-    (cond
-      ((string-equal tool-name "create_entities")
-       (let ((entities (normalize-to-list (cdr (assoc :entities arguments)))))
-         (loop for entity in entities
-               do (let* ((name (cdr (assoc :name entity)))
-                         (type (or (cdr (assoc :entity--type entity))
-                                   (cdr (assoc :entity-type entity))))
-                         (obs (normalize-to-list (cdr (assoc :observations entity)))))
-                    (loop for ob in obs
-                          when (and (stringp ob) (string/= ob ""))
-                          do (push (list :entity-name name :entity-type type :text ob) results))))))
-      ((string-equal tool-name "add_observations")
-       (let ((observations (normalize-to-list (cdr (assoc :observations arguments)))))
-         (loop for obs-entry in observations
-               do (let* ((name (or (cdr (assoc :entity--name obs-entry))
-                                   (cdr (assoc :entity-name obs-entry))))
-                         (contents (normalize-to-list (cdr (assoc :contents obs-entry)))))
-                    (loop for content in contents
-                          when (and (stringp content) (string/= content ""))
-                          do (push (list :entity-name name :text content) results)))))))
-    (nreverse results)))
+  (cond
+    ((string-equal tool-name "create_entities")
+     (let ((entities (normalize-to-list (cdr (assoc :entities arguments)))))
+       (mapcan (lambda (entity)
+                 (let* ((name (cdr (assoc :name entity)))
+                        (type (or (cdr (assoc :entity--type entity))
+                                  (cdr (assoc :entity-type entity))))
+                        (obs (remove-if (lambda (ob) (or (not (stringp ob)) (string= ob "")))
+                                        (normalize-to-list (cdr (assoc :observations entity))))))
+                   (mapcar (lambda (ob)
+                             (list :entity-name name :entity-type type :text ob))
+                           obs)))
+               entities)))
+    ((string-equal tool-name "add_observations")
+     (let ((observations (normalize-to-list (cdr (assoc :observations arguments)))))
+       (mapcan (lambda (obs-entry)
+                 (let* ((name (or (cdr (assoc :entity--name obs-entry))
+                                  (cdr (assoc :entity-name obs-entry))))
+                        (contents (remove-if (lambda (content) (or (not (stringp content)) (string= content "")))
+                                             (normalize-to-list (cdr (assoc :contents obs-entry))))))
+                   (mapcar (lambda (content)
+                             (list :entity-name name :text content))
+                           contents)))
+               observations)))
+    (t nil)))
 
 (defun construct-complete-sentence (entity-name entity-type observation)
   "Uses Gemini to construct a grammatically correct, natural-sounding complete sentence

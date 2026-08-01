@@ -184,22 +184,18 @@
     (error 'mcp-tool-execution-error
            :tool-name tool-name
            :reason "endingLine must be >= beginningLine."))
-  (with-open-file (stream path :direction :input)
-    (let* ((eof-marker (gensym "EOF"))
-           (lines (loop for line = (read-line stream nil eof-marker)
-                        until (eq line eof-marker)
-                        collect line))
-           (line-count (length lines)))
-      (when (< line-count beginning-line)
-        (error 'mcp-tool-execution-error
-               :tool-name tool-name
-               :reason (format nil "beginningLine ~D is past end of file (~D lines)."
-                               beginning-line
-                               line-count)))
-      (format nil "~{~A~^~%~}"
-              (subseq lines
-                      (1- beginning-line)
-                      (min ending-line line-count))))))
+  (let* ((lines (uiop:read-file-lines path))
+         (line-count (length lines)))
+    (when (< line-count beginning-line)
+      (error 'mcp-tool-execution-error
+             :tool-name tool-name
+             :reason (format nil "beginningLine ~D is past end of file (~D lines)."
+                             beginning-line
+                             line-count)))
+    (format nil "~{~A~^~%~}"
+            (subseq lines
+                    (1- beginning-line)
+                    (min ending-line line-count)))))
 
 (defun validate-directory-tool-pattern (pattern tool-name)
   "Validates PATTERN for the built-in directory tool."
@@ -403,27 +399,22 @@
              (error 'mcp-tool-execution-error
                     :tool-name tool-name
                     :reason "endLine must be >= startLine."))
-           (with-open-file (stream path :direction :input)
-             (let* ((eof-marker (gensym "EOF"))
-                    (lines (loop for line = (read-line stream nil eof-marker)
-                                 until (eq line eof-marker)
-                                 collect line))
-                    (line-count (length lines)))
-               (when (< line-count start)
-                 (error 'mcp-tool-execution-error
-                        :tool-name tool-name
-                        :reason (format nil "startLine ~D is past end of file (~D lines)."
-                                        start
-                                        line-count)))
-               (let* ((before-lines (subseq lines 0 (1- start)))
-                      (after-lines (subseq lines (min end line-count)))
-                      (new-lines (cl-ppcre:split "\\r?\\n" new-content))
-                      (all-lines (append before-lines new-lines after-lines))
-                      (lf-only-p (with-open-file (check path :direction :input)
-                                   (let ((str (uiop:read-file-string path)))
-                                     (not (search (format nil "~C~C" #\Return #\Linefeed) str))))))
-                 (write-file-tool-result path root all-lines lf-only-p t)
-                 (format nil "Successfully replaced lines ~D to ~D in: ~A" start end (enough-namestring path root)))))))
+           (let* ((lines (uiop:read-file-lines path))
+                  (line-count (length lines)))
+             (when (< line-count start)
+               (error 'mcp-tool-execution-error
+                      :tool-name tool-name
+                      :reason (format nil "startLine ~D is past end of file (~D lines)."
+                                      start
+                                      line-count)))
+             (let* ((before-lines (subseq lines 0 (1- start)))
+                    (after-lines (subseq lines (min end line-count)))
+                    (new-lines (cl-ppcre:split "\\r?\\n" new-content))
+                    (all-lines (append before-lines new-lines after-lines))
+                    (lf-only-p (let ((str (uiop:read-file-string path)))
+                                 (not (search (format nil "~C~C" #\Return #\Linefeed) str)))))
+               (write-file-tool-result path root all-lines lf-only-p t)
+               (format nil "Successfully replaced lines ~D to ~D in: ~A" start end (enough-namestring path root))))))
         
         (t
          (error 'mcp-tool-execution-error

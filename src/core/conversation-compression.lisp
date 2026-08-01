@@ -133,14 +133,13 @@ content instead of recursively digesting the wrapper text."
 
 (defun estimated-history-token-count (messages)
   "Returns a coarse token estimate for MESSAGES."
-  (loop for message in messages
-        sum (estimate-message-token-count message)))
+  (reduce #'+ messages :key #'estimate-message-token-count :initial-value 0))
 
 (defun estimated-digest-message-token-count (messages)
   "Returns the estimated token usage attributable to synthetic digest messages."
-  (loop for message in messages
-        when (state-digest-message-p message)
-          sum (estimate-message-token-count message)))
+  (reduce #'+ (remove-if-not #'state-digest-message-p messages)
+          :key #'estimate-message-token-count
+          :initial-value 0))
 
 (defun estimate-optional-text-token-count (text)
   "Returns a coarse token estimate for TEXT, or zero when TEXT is absent."
