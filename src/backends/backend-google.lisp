@@ -371,14 +371,16 @@
   (let ((api-key (google-api-key-or-error)))
     (list :payload-json (google-turn-request-payload-json bot state)
           :url (google-request-url bot (getf state :effective-model))
-          :headers (google-request-headers api-key))))
+          :headers (google-request-headers api-key)
+          :http-read-timeout (backend-http-read-timeout :google))))
 
 (defun post-google-turn-request (request-details)
   "Executes one Google generateContent request from REQUEST-DETAILS."
   (multiple-value-bind (response-body status)
       (post-web-request (getf request-details :url)
                         (getf request-details :headers)
-                        (getf request-details :payload-json))
+                        (getf request-details :payload-json)
+                        :read-timeout (getf request-details :http-read-timeout))
     (unless (= status 200)
       (error "API responded with HTTP status ~A" status))
     (list :response-body response-body

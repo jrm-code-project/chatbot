@@ -245,6 +245,9 @@ and falls back to the GROK_API_KEY environment variable."
 (defparameter *lm-studio-http-read-timeout* 600
   "Minimum HTTP response timeout in seconds for the LM Studio backend.")
 
+(defparameter *google-http-read-timeout* 150
+  "Minimum HTTP response timeout in seconds for the Gemini and Google backends.")
+
 (defparameter +default-content-cache-policy+ :auto
   "Default content-caching policy for chatbots.")
 
@@ -263,9 +266,12 @@ and falls back to the GROK_API_KEY environment variable."
 (defun backend-http-read-timeout (backend)
   "Returns the effective HTTP read timeout for BACKEND."
   (let ((default-timeout (current-http-read-timeout)))
-    (if (eq backend :lm-studio)
-        (max default-timeout *lm-studio-http-read-timeout*)
-        default-timeout)))
+    (cond
+      ((eq backend :lm-studio)
+       (max default-timeout *lm-studio-http-read-timeout*))
+      ((member backend '(:gemini :google))
+       (max default-timeout *google-http-read-timeout*))
+      (t default-timeout))))
 
 (defun normalize-content-cache-policy (policy &key allow-nil-p)
   "Returns POLICY normalized to a supported content-caching keyword."

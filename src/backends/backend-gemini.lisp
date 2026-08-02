@@ -328,20 +328,23 @@
 
 (defun gemini-turn-request-details (bot state)
   "Returns the request details plist for one Gemini Interactions turn."
-  (let ((api-key (gemini-api-key-or-error)))
-    (list :payload-json (gemini-turn-request-payload-json bot state)
-          :url (gemini-request-url)
-          :headers (gemini-request-headers api-key)
-          :stream-read-timeout (current-http-read-timeout)
-          :current-interaction-id (getf state :current-interaction-id))))
+  (let ((api-key (gemini-api-key-or-error))
+       (read-timeout (backend-http-read-timeout :gemini)))
+   (list :payload-json (gemini-turn-request-payload-json bot state)
+         :url (gemini-request-url)
+         :headers (gemini-request-headers api-key)
+         :http-read-timeout read-timeout
+         :stream-read-timeout read-timeout
+         :current-interaction-id (getf state :current-interaction-id))))
 
 (defun post-gemini-turn-request (request-details)
   "Executes one Gemini Interactions streaming request from REQUEST-DETAILS."
   (multiple-value-bind (stream status)
-      (post-web-request (getf request-details :url)
-                        (getf request-details :headers)
-                        (getf request-details :payload-json)
-                        :want-stream t)
+     (post-web-request (getf request-details :url)
+                       (getf request-details :headers)
+                       (getf request-details :payload-json)
+                       :want-stream t
+                       :read-timeout (getf request-details :http-read-timeout))
     (unless (= status 200)
       (error "API responded with HTTP status ~A" status))
     (list :stream stream
