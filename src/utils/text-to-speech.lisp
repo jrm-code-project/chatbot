@@ -9,7 +9,7 @@ When NIL, SPEAK-CHAT-RESPONSE returns immediately without deriving an API key, p
 filesystem, or making any network call. The test suite binds this to NIL so tests never make
 a real call to texttospeech.googleapis.com, regardless of any API key discoverable on disk.")
 
-(defparameter *texttospeech-voice-name* "en-US-Studio-O"
+(defparameter *texttospeech-voice-name* "en-US-Journey-O"
   "The Google Cloud Text-to-Speech voice used for chat response playback.")
 
 (defparameter *texttospeech-voice-language-code* "en-US"
