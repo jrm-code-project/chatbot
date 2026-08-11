@@ -54,7 +54,7 @@
     (save-minion-state conversation :checkpoint-name checkpoint-name)))
 
 (defun finalize-chat-turn-result (result &optional conversation)
-  "Applies RESULT, performs post-response compression, checkpoints, and returns the final text."
+  "Applies RESULT, performs post-response compression, checkpoints, speaks the response, and returns the final text."
   (let ((effective-conversation (or conversation
                                     (chat-turn-result-conversation result))))
     (let ((text (apply-chat-turn-result result effective-conversation)))
@@ -62,6 +62,7 @@
         (decrement-prompt-decorations effective-conversation)
         (compress-conversation-context-if-needed effective-conversation)
         (checkpoint-conversation-after-chat effective-conversation))
+      (speak-chat-response-in-background text)
       text)))
 
 (defun parse-minion-state-file (file runtime-context)

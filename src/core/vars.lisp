@@ -50,6 +50,13 @@
 (defparameter *grok-api-key* nil
   "The API key for the Grok API. If nil, reads from AppData/Local/config/X/api-key or checks GROK_API_KEY environment variable.")
 
+(defparameter *texttospeech-base-url* "https://texttospeech.googleapis.com/v1"
+  "The base REST endpoint for the Google Cloud Text-to-Speech API.")
+
+(defparameter *texttospeech-api-key* nil
+  "The API key for the Google Cloud Text-to-Speech API. If nil, reads from AppData/Local/config/texttospeech/apikey.
+When no key can be found, text-to-speech playback is skipped (not an error).")
+
 (defparameter *getenv-function* #'uiop:getenv
   "Function used to read environment variables.")
 
@@ -212,6 +219,25 @@ and falls back to the GROK_API_KEY environment variable."
         (if (probe-file path)
             (string-trim '(#\Space #\Tab #\Return #\Linefeed) (uiop:read-file-string path))
             (funcall (current-getenv-function) "GROK_API_KEY")))))
+
+(defun texttospeech-api-key-file-path ()
+  "Constructs the target path for the Text-to-Speech API key stored in AppData/Local/config/texttospeech/apikey."
+  (let* ((local-app-data (funcall (current-getenv-function) "LOCALAPPDATA"))
+         (home (funcall *user-homedir-pathname-function*)))
+    (if (and local-app-data (string/= local-app-data ""))
+        (merge-pathnames "config/texttospeech/apikey" (uiop:ensure-directory-pathname local-app-data))
+        (merge-pathnames "AppData/Local/config/texttospeech/apikey" home))))
+
+(defun texttospeech-api-key ()
+  "Returns the Text-to-Speech API key, or NIL when unconfigured.
+First checks *texttospeech-api-key*, then reads from AppData/Local/config/texttospeech/apikey.
+Unlike other provider API keys, a missing key is not an error: callers should log and skip
+text-to-speech playback when this returns NIL."
+  (or *texttospeech-api-key*
+      (let ((path (texttospeech-api-key-file-path)))
+        (when (probe-file path)
+          (let ((trimmed (string-trim '(#\Space #\Tab #\Return #\Linefeed) (uiop:read-file-string path))))
+            (and (string/= trimmed "") trimmed))))))
 
 (defun grok-api-base-url ()
   "Returns the normalized OpenAI-compatible Grok API base URL."
