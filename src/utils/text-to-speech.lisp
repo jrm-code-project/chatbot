@@ -84,6 +84,16 @@ pinned to *texttospeech-voice-name*/*texttospeech-voice-language-code*."
   "Plays the audio file at PATH using the configured player function."
   (funcall *play-audio-file-function* path))
 
+(defun synthesize-speech-mp3-octets-with-timing (text api-key)
+  "Synthesizes TEXT via API-KEY, returning (VALUES OCTETS ELAPSED-SECONDS) and info-logging the duration."
+  (let* ((start-time (get-internal-real-time))
+         (octets (synthesize-speech-mp3-octets text api-key))
+         (end-time (get-internal-real-time))
+         (elapsed-seconds (/ (- end-time start-time) (float internal-time-units-per-second))))
+    (log-message :info "Text-to-speech synthesis completed"
+               :context `(("elapsed-seconds" . ,(format nil "~,3F" elapsed-seconds))))
+    (values octets elapsed-seconds)))
+
 (defun speak-chat-response (text)
   "Synthesizes TEXT with the en-US-Studio-O voice and plays it back, when a Text-to-Speech
 API key is configured. Logs and skips silently when no key is found; synthesis or playback
@@ -97,7 +107,7 @@ failures are logged and swallowed so they never interrupt the surrounding chat t
                     (string/= (string-trim '(#\Space #\Tab #\Newline #\Return) text) "")))
            nil)
           (t
-           (let* ((octets (synthesize-speech-mp3-octets text api-key))
+           (let* ((octets (synthesize-speech-mp3-octets-with-timing text api-key))
                   (path (write-mp3-to-temp-file octets)))
              (play-audio-file path)))))
     (error (e)
