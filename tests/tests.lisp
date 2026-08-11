@@ -120,7 +120,18 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
       (lambda ()
         "Utility to run the chatbot-suite tests and return results."
         (let ((*bypass-eval-approval-p* t)
-              (*chat-backends* (make-test-chat-backends)))
+              (*chat-backends* (make-test-chat-backends))
+              ;; Master kill-switch: prevents any test from making a real call to
+              ;; texttospeech.googleapis.com (e.g. via a real developer-configured API key
+              ;; discovered on disk) or playing real audio. Individual tests may still locally
+              ;; shadow *texttospeech-enabled-p*, *texttospeech-api-key*, and
+              ;; *play-audio-file-function* to exercise the synthesis/playback path with
+              ;; their own mocks.
+              (*texttospeech-enabled-p* nil)
+              (*texttospeech-api-key* nil)
+              (*play-audio-file-function* (lambda (path)
+                                            (declare (ignore path))
+                                            nil)))
           (let ((results (fiveam:run 'chatbot-suite)))
             (fiveam:explain! results)
             (test-results-passed-p results)))))

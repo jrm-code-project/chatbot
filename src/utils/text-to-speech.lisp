@@ -3,6 +3,12 @@
 
 (in-package "CHATBOT")
 
+(defparameter *texttospeech-enabled-p* t
+  "Master kill-switch for post-turn Text-to-Speech synthesis and playback.
+When NIL, SPEAK-CHAT-RESPONSE returns immediately without deriving an API key, probing the
+filesystem, or making any network call. The test suite binds this to NIL so tests never make
+a real call to texttospeech.googleapis.com, regardless of any API key discoverable on disk.")
+
 (defparameter *texttospeech-voice-name* "en-US-Studio-O"
   "The Google Cloud Text-to-Speech voice used for chat response playback.")
 
@@ -96,28 +102,51 @@ pinned to *texttospeech-voice-name*/*texttospeech-voice-language-code*."
 
 (defun speak-chat-response (text)
   "Synthesizes TEXT with the en-US-Studio-O voice and plays it back, when a Text-to-Speech
-API key is configured. Logs and skips silently when no key is found; synthesis or playback
-failures are logged and swallowed so they never interrupt the surrounding chat turn."
+API key is configured. Logs and skips silently when *TEXTTOSPEECH-ENABLED-P* is NIL or no key
+is found; synthesis or playback failures are logged and swallowed so they never interrupt the
+surrounding chat turn."
   (handler-case
-      (let ((api-key (texttospeech-api-key)))
-        (cond
-          ((not (and api-key (string/= api-key "")))
-           (log-message :info "Skipping text-to-speech playback: no Text-to-Speech API key configured."))
-          ((not (and (stringp text)
-                    (string/= (string-trim '(#\Space #\Tab #\Newline #\Return) text) "")))
-           nil)
-          (t
-           (let* ((octets (synthesize-speech-mp3-octets-with-timing text api-key))
-                  (path (write-mp3-to-temp-file octets)))
-             (play-audio-file path)))))
+      (cond
+        ((not *texttospeech-enabled-p*)
+         (log-message :info "Skipping text-to-speech playback: text-to-speech is disabled."))
+        (t
+         (let ((api-key (texttospeech-api-key)))
+           (cond
+             ((not (and api-key (string/= api-key "")))
+              (log-message :info "Skipping text-to-speech playback: no Text-to-Speech API key configured."))
+             ((not (and (stringp text)
+                       (string/= (string-trim '(#\Space #\Tab #\Newline #\Return) text) "")))
+              nil)
+             (t
+              (let* ((octets (synthesize-speech-mp3-octets-with-timing text api-key))
+                     (path (write-mp3-to-temp-file octets)))
+                (play-audio-file path)))))))
     (error (e)
       (log-message :warn "Text-to-speech playback failed"
                  :context `(("error" . ,(princ-to-string e)))))))
 
 (defun speak-chat-response-in-background (text)
-  "Starts a supervised background thread that synthesizes and plays TEXT, without blocking the caller."
-  (let ((thread (sb-thread:make-thread
-                (lambda () (speak-chat-response text))
-                :name "chatbot-tts-playback")))
+  "Starts a supervised background thread that synthesizes and plays TEXT, without blocking the caller.
+Captures the calling thread's active runtime context, Text-to-Speech enablement flag, API key, and
+player seam before spawning, since a fresh SBCL thread does not inherit the caller's dynamic bindings
+-- without this capture, the background thread would silently fall back to global defaults (e.g. a
+real API key discovered on disk) instead of honoring the caller's (or a test's) scoped overrides."
+  (unless *texttospeech-enabled-p*
+    (log-message :info "Skipping text-to-speech playback: text-to-speech is disabled.")
+    (return-from speak-chat-response-in-background nil))
+  (let* ((captured-context (resolve-runtime-context nil))
+         (captured-enabled-p *texttospeech-enabled-p*)
+         (captured-api-key *texttospeech-api-key*)
+         (captured-play-function *play-audio-file-function*)
+         (thread (sb-thread:make-thread
+                 (lambda ()
+                   (call-with-runtime-context
+                    captured-context
+                    (lambda ()
+                      (let ((*texttospeech-enabled-p* captured-enabled-p)
+                            (*texttospeech-api-key* captured-api-key)
+                            (*play-audio-file-function* captured-play-function))
+                        (speak-chat-response text)))))
+                 :name "chatbot-tts-playback")))
     (register-supervised-thread (current-resource-supervisor) thread)
     thread))

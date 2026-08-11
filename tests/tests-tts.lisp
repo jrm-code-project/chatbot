@@ -66,8 +66,19 @@
                               (cdr (assoc "X-Goog-Api-Key" captured-headers :test #'string=))))
            (fiveam:is (equalp #(104 101 108 108 111) octets))))))))
 
+(fiveam:test test-speak-chat-response-skips-when-disabled
+  (let* ((play-called-p nil)
+         (*texttospeech-enabled-p* nil)
+         (*texttospeech-api-key* "configured-key")
+         (*play-audio-file-function* (lambda (path)
+                                      (declare (ignore path))
+                                      (setf play-called-p t))))
+    (speak-chat-response "This should not be spoken.")
+    (fiveam:is (not play-called-p))))
+
 (fiveam:test test-speak-chat-response-skips-when-no-api-key-configured
   (let* ((play-called-p nil)
+         (*texttospeech-enabled-p* t)
          (*texttospeech-api-key* nil)
          (*play-audio-file-function* (lambda (path)
                                       (declare (ignore path))
@@ -85,6 +96,7 @@
 
 (fiveam:test test-speak-chat-response-synthesizes-and-plays-when-key-configured
   (let* ((play-called-with-path nil)
+         (*texttospeech-enabled-p* t)
          (*texttospeech-api-key* "configured-key")
          (*play-audio-file-function* (lambda (path)
                                       (setf play-called-with-path path))))
@@ -113,6 +125,7 @@
 
 (fiveam:test test-speak-chat-response-swallows-synthesis-errors
   (let ((play-called-p nil)
+        (*texttospeech-enabled-p* t)
         (*texttospeech-api-key* "configured-key")
         (*play-audio-file-function* (lambda (path)
                                       (declare (ignore path))
@@ -127,3 +140,39 @@
        (lambda ()
          (fiveam:finishes (speak-chat-response "Speak this.")))))
     (fiveam:is (not play-called-p))))
+
+(fiveam:test test-speak-chat-response-in-background-captures-caller-settings
+  ;; A fresh SBCL thread does not inherit the caller's dynamic bindings, so
+  ;; SPEAK-CHAT-RESPONSE-IN-BACKGROUND must capture the caller's active runtime
+  ;; context, enablement flag, API key, and player seam and re-establish them inside
+  ;; the spawned thread. This guards against silently falling back to global defaults
+  ;; (e.g. a real on-disk API key) when a caller has scoped its own overrides -- and
+  ;; is what lets the test suite's global *texttospeech-enabled-p* NIL default actually
+  ;; take effect inside background TTS threads spawned by ordinary chat-flow tests.
+  (let ((play-called-with-path nil)
+        (post-called-p nil)
+        (*texttospeech-enabled-p* t)
+        (*texttospeech-api-key* "configured-key"))
+    (let ((context (make-runtime-context
+                   :http-post-function
+                   (lambda (url &rest args)
+                     (declare (ignore url args))
+                     (setf post-called-p t)
+                     (values (cl-json:encode-json-to-string
+                             (list (cons "audioContent" "aGVsbG8=")))
+                            200)))))
+      (call-with-runtime-context
+       context
+       (lambda ()
+         (let* ((*play-audio-file-function* (lambda (path)
+                                              (setf play-called-with-path path)))
+                (thread (speak-chat-response-in-background "Speak this in the background.")))
+           (sb-thread:join-thread thread :timeout 5)))))
+    (fiveam:is (eq t post-called-p))
+    (fiveam:is (not (null play-called-with-path)))
+    (when play-called-with-path
+      (ignore-errors (delete-file play-called-with-path)))))
+
+(fiveam:test test-speak-chat-response-in-background-noop-when-disabled
+  (let ((*texttospeech-enabled-p* nil))
+    (fiveam:is (null (speak-chat-response-in-background "Should never spawn a thread.")))))
