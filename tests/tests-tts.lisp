@@ -19,7 +19,7 @@
   (let* ((*texttospeech-api-key* nil)
          (temp-dir (uiop:temporary-directory))
          (appdata-dir (merge-pathnames "tts-mock-localappdata/" temp-dir))
-         (config-dir (merge-pathnames "config/texttospeech/" appdata-dir))
+         (config-dir (merge-pathnames "config/googleapis/texttospeech/" appdata-dir))
          (key-file (merge-pathnames "apikey" config-dir)))
     (ensure-directories-exist config-dir)
     (with-open-file (s key-file :direction :output :if-exists :supersede)
@@ -69,17 +69,18 @@
 (fiveam:test test-speak-chat-response-skips-when-no-api-key-configured
   (let* ((play-called-p nil)
          (*texttospeech-api-key* nil)
-         (*getenv-function* (lambda (name)
-                             (declare (ignore name))
-                             nil))
-         (*user-homedir-pathname-function* (lambda ()
-                                            (merge-pathnames
-                                             "mock-home-tts-skip/"
-                                             (uiop:default-temporary-directory))))
          (*play-audio-file-function* (lambda (path)
                                       (declare (ignore path))
-                                      (setf play-called-p t))))
-    (speak-chat-response "This should not be spoken.")
+                                      (setf play-called-p t)))
+         (context (make-runtime-context
+                  :getenv-function (lambda (name)
+                                     (declare (ignore name))
+                                     nil))))
+    (call-with-runtime-context
+     context
+     (lambda ()
+       (let ((*user-homedir-pathname-function* (lambda () #p"/non-existent-home-tts-skip/")))
+         (speak-chat-response "This should not be spoken."))))
     (fiveam:is (not play-called-p))))
 
 (fiveam:test test-speak-chat-response-synthesizes-and-plays-when-key-configured

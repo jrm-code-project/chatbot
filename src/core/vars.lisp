@@ -54,7 +54,7 @@
   "The base REST endpoint for the Google Cloud Text-to-Speech API.")
 
 (defparameter *texttospeech-api-key* nil
-  "The API key for the Google Cloud Text-to-Speech API. If nil, reads from AppData/Local/config/texttospeech/apikey.
+  "The API key for the Google Cloud Text-to-Speech API. If nil, reads from AppData/Local/config/googleapis/texttospeech/apikey.
 When no key can be found, text-to-speech playback is skipped (not an error).")
 
 (defparameter *getenv-function* #'uiop:getenv
@@ -221,16 +221,16 @@ and falls back to the GROK_API_KEY environment variable."
             (funcall (current-getenv-function) "GROK_API_KEY")))))
 
 (defun texttospeech-api-key-file-path ()
-  "Constructs the target path for the Text-to-Speech API key stored in AppData/Local/config/texttospeech/apikey."
+  "Constructs the target path for the Text-to-Speech API key stored in AppData/Local/config/googleapis/texttospeech/apikey."
   (let* ((local-app-data (funcall (current-getenv-function) "LOCALAPPDATA"))
          (home (funcall *user-homedir-pathname-function*)))
     (if (and local-app-data (string/= local-app-data ""))
-        (merge-pathnames "config/texttospeech/apikey" (uiop:ensure-directory-pathname local-app-data))
-        (merge-pathnames "AppData/Local/config/texttospeech/apikey" home))))
+        (merge-pathnames "config/googleapis/texttospeech/apikey" (uiop:ensure-directory-pathname local-app-data))
+        (merge-pathnames "AppData/Local/config/googleapis/texttospeech/apikey" home))))
 
 (defun texttospeech-api-key ()
   "Returns the Text-to-Speech API key, or NIL when unconfigured.
-First checks *texttospeech-api-key*, then reads from AppData/Local/config/texttospeech/apikey.
+First checks *texttospeech-api-key*, then reads from AppData/Local/config/googleapis/texttospeech/apikey.
 Unlike other provider API keys, a missing key is not an error: callers should log and skip
 text-to-speech playback when this returns NIL."
   (or *texttospeech-api-key*
