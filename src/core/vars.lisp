@@ -181,6 +181,22 @@ Unknown backends fall back to the Gemini default."
                        gemini-default)))
     (require-non-empty-string resolved (format nil "Default model for backend ~A" backend))))
 
+(defparameter *cheap-summarization-models*
+  '((:gemini . "gemini-flash-lite-latest")
+    (:google . "gemini-flash-lite-latest")
+    (:openai . "gpt-4o-mini")
+    (:grok . "grok-2-latest"))
+  "Cheap model names, keyed by backend, used for internal history-digest
+summarization instead of the parent conversation's (potentially expensive)
+model. Backends without a configured entry fall back to the caller-supplied
+default model.")
+
+(defun cheap-summarization-model (backend default-model)
+  "Returns the configured cheap summarization model for BACKEND, or
+DEFAULT-MODEL when BACKEND has no cheaper model configured."
+  (or (cdr (assoc backend *cheap-summarization-models*))
+      default-model))
+
 (defun normalize-chatbot-backend (backend context &key allow-nil-p)
   "Normalizes BACKEND to a backend keyword for CONTEXT."
   (when (null backend)
@@ -791,13 +807,33 @@ context directly."
   "The global maximum nesting depth allowed for the minion hierarchy.")
 
 (defparameter *context-pruning-estimated-max-tokens* 200000
-  "Estimated prompt-token ceiling above which completed conversation history is auto-compressed.")
+  "Estimated prompt-token ceiling above which completed conversation history is auto-compressed.
+This is the fallback ceiling used when the conversation's model is unknown or is not a
+Gemini Pro-tier model; see *gemini-pro-context-price-cliff-tokens* for the Pro-specific ceiling.")
 
 (defparameter *context-pruning-estimated-target-tokens* 150000
-  "Estimated prompt-token target after compressing oversized conversation history.")
+  "Estimated prompt-token target after compressing oversized conversation history.
+This is the fallback target used when the conversation's model is unknown or is not a
+Gemini Pro-tier model; see *context-pruning-pro-target-ratio* for the Pro-specific target.")
 
 (defparameter *context-pruning-threshold-characters* 300000
   "Compatibility character ceiling for auto-pruning, aligned with the default estimated token window.")
+
+(defparameter *gemini-pro-context-price-cliff-tokens* 200000
+  "Prompt-token count at which Gemini Pro-tier pricing doubles for the entire request
+(per Google's published pricing: prompts over this size are billed at the higher tier,
+not just the excess). Used to keep Pro conversations well clear of this cliff.")
+
+(defparameter *gemini-pro-context-pruning-safety-margin-tokens* 60000
+  "Safety margin subtracted from *gemini-pro-context-price-cliff-tokens* when computing the
+auto-compression ceiling for Gemini Pro-tier conversations, so compression fires with
+enough headroom to never let a request cross the price cliff.")
+
+(defparameter *context-pruning-pro-target-ratio* 0.35
+  "Fraction of the effective max-token ceiling that Gemini Pro-tier conversations are
+compressed down to. Kept aggressively low (relative to the ~0.75 ratio implied by the
+generic defaults) because Pro's per-token price is high and this target governs the
+average history size resent on every subsequent turn.")
 
 (defmacro with-chatbot-lifecycle ((bot &rest initargs) &body body)
   "Evaluates BODY with BOT bound to a newly created chatbot, ensuring full shutdown on exit."

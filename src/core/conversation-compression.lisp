@@ -25,9 +25,12 @@
                    "Please read the following conversation history and write a highly concise, dense State Digest summarizing all key factual information, state, progress, and memories from it. Consolidate any prior digest content instead of repeating wrapper text. Output only the State Digest, nothing else, and keep it under approximately ~D tokens.~%~%~A"
                    max-digest-tokens
                    history-text))
-         ;; Use a clean, stateless conversation to avoid nested pruning loops
+         ;; Use a clean, stateless conversation to avoid nested pruning loops.
+         ;; Always summarize with a cheap model, regardless of the parent
+         ;; conversation's (potentially expensive) model, since digest
+         ;; generation is the largest single input this system ever sends.
          (conv (new-chat :backend (chatbot-backend bot)
-                         :model (chatbot-model bot)
+                         :model (cheap-summarization-model (chatbot-backend bot) (chatbot-model bot))
                          :runtime-context (chatbot-runtime-context bot)))
          (summary
            (call-with-runtime-context
@@ -171,9 +174,16 @@ content instead of recursively digesting the wrapper text."
           :non-digest-history-tokens (max 0 (- history-tokens digest-message-tokens))
           :total-tokens (+ fixed-context-tokens history-tokens))))
 
-(defun configured-context-pruning-max-tokens ()
-  "Returns the configured estimated max-token ceiling before per-conversation adaptation."
-  (let ((max-tokens *context-pruning-estimated-max-tokens*)
+(defun configured-context-pruning-max-tokens (&optional model)
+  "Returns the configured estimated max-token ceiling before per-conversation adaptation.
+When MODEL names a Gemini Pro-tier model, the ceiling is additionally clamped to stay a
+safety margin below the Pro price cliff (*gemini-pro-context-price-cliff-tokens*), since
+a request that crosses that cliff is billed at roughly double the per-token rate."
+  (let ((max-tokens (if (and model (gemini-pro-model-p model))
+                        (min *context-pruning-estimated-max-tokens*
+                             (max 1 (- *gemini-pro-context-price-cliff-tokens*
+                                       *gemini-pro-context-pruning-safety-margin-tokens*)))
+                        *context-pruning-estimated-max-tokens*))
         (char-threshold *context-pruning-threshold-characters*))
     (if (and char-threshold (> char-threshold 0))
         (min max-tokens
@@ -182,9 +192,10 @@ content instead of recursively digesting the wrapper text."
 
 (defun update-adaptive-context-pruning-max-tokens (conversation history)
   "Updates CONVERSATION with a per-conversation compression ceiling no higher than the configured budget."
-  (let ((compressed-total-tokens (estimated-conversation-context-token-count conversation history)))
+  (let ((compressed-total-tokens (estimated-conversation-context-token-count conversation history))
+        (model (chatbot-model (conversation-chatbot conversation))))
     (setf (conversation-adaptive-context-pruning-max-tokens conversation)
-          (min (configured-context-pruning-max-tokens)
+          (min (configured-context-pruning-max-tokens model)
                (max 1 (* 2 compressed-total-tokens))))))
 
 (defun effective-history-compression-max-tokens (conversation)
@@ -201,7 +212,8 @@ content instead of recursively digesting the wrapper text."
 
 (defun effective-context-pruning-max-tokens (&optional conversation)
   "Returns the effective estimated max-token ceiling, including per-conversation adaptation."
-  (let ((configured-max-tokens (configured-context-pruning-max-tokens)))
+  (let* ((model (and conversation (chatbot-model (conversation-chatbot conversation))))
+         (configured-max-tokens (configured-context-pruning-max-tokens model)))
     (if conversation
         (let ((adaptive-max-tokens
                 (conversation-adaptive-context-pruning-max-tokens conversation)))
@@ -211,9 +223,18 @@ content instead of recursively digesting the wrapper text."
         configured-max-tokens)))
 
 (defun effective-context-pruning-target-tokens (&optional conversation)
-  "Returns the effective estimated post-compression target token count."
+  "Returns the effective estimated post-compression target token count.
+For Gemini Pro-tier conversations, the target is a small fraction
+(*context-pruning-pro-target-ratio*) of the effective max ceiling, kept aggressively low
+because Pro's high per-token price makes the average resent-history size across a
+session's life the dominant cost driver. Other conversations use the generic configured
+target."
   (let* ((max-tokens (effective-context-pruning-max-tokens conversation))
-         (configured-target *context-pruning-estimated-target-tokens*))
+         (model (and conversation (chatbot-model (conversation-chatbot conversation))))
+         (configured-target
+           (if (and model (gemini-pro-model-p model))
+               (max 1 (floor (* max-tokens *context-pruning-pro-target-ratio*)))
+               *context-pruning-estimated-target-tokens*)))
     (min configured-target
          (max 1 (floor (* max-tokens 0.9))))))
 
@@ -302,7 +323,7 @@ content instead of recursively digesting the wrapper text."
                       initial-pass))
                 (compressed-history (getf final-pass :history))
                 (next-adaptive-max-tokens
-                  (min (configured-context-pruning-max-tokens)
+                  (min (configured-context-pruning-max-tokens (chatbot-model (conversation-chatbot conversation)))
                        (max 1
                             (* 2
                                (estimated-conversation-context-token-count conversation
@@ -310,7 +331,22 @@ content instead of recursively digesting the wrapper text."
                 (old-messages (getf final-pass :old-messages))
                 (raw-messages (getf final-pass :raw-messages))
                 (digest (getf final-pass :digest))
-                (breakdown (conversation-context-token-breakdown conversation compressed-history)))
+                (breakdown (conversation-context-token-breakdown conversation compressed-history))
+                (main-model (chatbot-model (conversation-chatbot conversation)))
+                (digest-model (cheap-summarization-model (chatbot-backend (conversation-chatbot conversation))
+                                                          main-model))
+                (main-model-price (estimated-gemini-model-input-price-per-token main-model))
+                (digest-model-price (estimated-gemini-model-input-price-per-token digest-model))
+                (old-messages-tokens (estimated-history-token-count old-messages))
+                ;; Estimated per-turn savings from a smaller resent history going forward.
+                (estimated-per-turn-dollars-saved
+                  (and digest main-model-price
+                       (* old-messages-tokens main-model-price)))
+                ;; Estimated $ avoided by summarizing on a cheap model instead of the
+                ;; parent conversation's (potentially expensive) model.
+                (estimated-digest-call-dollars-saved
+                  (and digest main-model-price digest-model-price
+                       (* old-messages-tokens (- main-model-price digest-model-price)))))
            (when digest
              (log-message :info "Compressed conversation history context after completed turn"
                           :context `(("estimated-total-tokens" . ,(princ-to-string estimated-total-tokens))
@@ -327,7 +363,16 @@ content instead of recursively digesting the wrapper text."
                                      ("compressed-non-digest-history-tokens" . ,(princ-to-string (getf breakdown :non-digest-history-tokens)))
                                      ("old-messages-count" . ,(princ-to-string (length old-messages)))
                                      ("kept-messages-count" . ,(princ-to-string (length raw-messages)))
-                                     ("digest-length" . ,(princ-to-string (length digest))))))
+                                     ("digest-length" . ,(princ-to-string (length digest)))
+                                     ("digest-model" . ,digest-model)
+                                     ("estimated-per-turn-dollars-saved"
+                                      . ,(if estimated-per-turn-dollars-saved
+                                             (format nil "~,4F" estimated-per-turn-dollars-saved)
+                                             "unknown"))
+                                     ("estimated-digest-call-dollars-saved"
+                                      . ,(if estimated-digest-call-dollars-saved
+                                             (format nil "~,4F" estimated-digest-call-dollars-saved)
+                                             "unknown")))))
            compressed-history)))))
 
 (defun compress-conversation-context-if-needed (conversation)

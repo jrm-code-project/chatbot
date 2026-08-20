@@ -229,3 +229,20 @@ If the given model is already the strongest model (or not recognized), returns i
            "gemini-pro-latest"))
       ;; 4. Fallback - return as-is
       (t model))))
+
+(defun gemini-pro-model-p (model)
+  "Returns true when MODEL names a Gemini Pro-tier model (matches \"pro\" case-insensitively)."
+  (and (stringp model)
+       (search "pro" model :test #'char-equal)
+       t))
+
+(defun estimated-gemini-model-input-price-per-token (model)
+  "Returns an estimated Gemini input-token price for MODEL, or NIL when unrecognized.
+Prices reflect Google's published standard-tier Gemini API pricing as of August 2026
+(ai.google.dev/gemini-api/docs/pricing) and are promotional through December 31, 2026."
+  (when (stringp model)
+    (cond
+      ((gemini-pro-model-p model) (/ 2.00d0 1000000))
+      ((search "flash-lite" model :test #'char-equal) (/ 0.30d0 1000000))
+      ((search "flash" model :test #'char-equal) (/ 0.75d0 1000000))
+      (t nil))))
