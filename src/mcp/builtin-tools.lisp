@@ -115,6 +115,15 @@
                                                   (:description . "The Common Lisp / HyperSpec search query.")))))
                       (:required . ("query"))))))
 
+(defun builtin-fetch-url-tool ()
+  "Returns the built-in fetchUrl tool definition."
+  '((:name . "fetchUrl")
+    (:description . "Fetches the raw content of a web page at the given URL.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("url" . ((:type . "string")
+                                                (:description . "The absolute URL of the web page to fetch.")))))
+                      (:required . ("url"))))))
+
 (defun builtin-read-system-instructions-tool ()
   "Returns the built-in readSystemInstructions tool definition."
   '((:name . "readSystemInstructions")
@@ -416,6 +425,7 @@
         (push (cons :built-in (builtin-abort-plan-tool)) tools)
         (push (cons :built-in (builtin-hyperspec-search-tool)) tools)
         (push (cons :built-in (builtin-web-search-tool)) tools)
+        (push (cons :built-in (builtin-fetch-url-tool)) tools)
         (push (cons :built-in (builtin-directory-tool)) tools)
         (push (cons :built-in (builtin-read-file-lines-tool)) tools)
         (nreverse tools))
@@ -444,7 +454,8 @@
         (push (cons :built-in (builtin-invoke-planner-tool)) tools)
         (when (chatbot-web-tools-p bot)
           (push (cons :built-in (builtin-hyperspec-search-tool)) tools)
-          (push (cons :built-in (builtin-web-search-tool)) tools))
+          (push (cons :built-in (builtin-web-search-tool)) tools)
+          (push (cons :built-in (builtin-fetch-url-tool)) tools))
         (when (chatbot-enable-eval-p bot)
           (push (cons :built-in (builtin-eval-tool)) tools))
         (when (chatbot-enable-shell-p bot)

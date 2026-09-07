@@ -2238,11 +2238,12 @@
                                  (cdr (assoc "content" msg :test #'string=))))
               (fiveam:is (search "Develop schema for leaders."
                                  (cdr (assoc "content" msg :test #'string=)))))
-            (fiveam:is (= 6 (length tool-names)))
+            (fiveam:is (= 7 (length tool-names)))
             (fiveam:is (member "readFileLines" tool-names :test #'string=))
             (fiveam:is (member "directory" tool-names :test #'string=))
             (fiveam:is (member "webSearch" tool-names :test #'string=))
             (fiveam:is (member "hyperspecSearch" tool-names :test #'string=))
+            (fiveam:is (member "fetchUrl" tool-names :test #'string=))
             (fiveam:is (member "submitPlan" tool-names :test #'string=))
             (fiveam:is (member "abortPlan" tool-names :test #'string=))
             (fiveam:is-false (member "eval" tool-names :test #'string=))

@@ -22,6 +22,9 @@
 (define-builtin-tool "hyperspecSearch" (bot arguments)
   (execute-hyperspec-search-tool bot arguments tool-name))
 
+(define-builtin-tool "fetchUrl" (bot arguments)
+  (execute-fetch-url-tool bot arguments tool-name))
+
 (define-builtin-tool "gitCall" (bot arguments)
   (execute-git-call-tool bot arguments tool-name))
 

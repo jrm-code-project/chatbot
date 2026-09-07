@@ -188,6 +188,26 @@
                          "query"
                          tool-name)))
 
+(defun execute-fetch-url-tool (bot arguments tool-name)
+  "Runs the built-in fetchUrl tool, retrieving the raw content of a web page."
+  (unless (chatbot-web-tools-p bot)
+    (error 'mcp-tool-execution-error
+           :tool-name tool-name
+           :reason "Web grounding tools are not enabled."))
+  (let ((url (normalize-builtin-tool-string-argument
+              (or (mcp-val "url" arguments)
+                  (mcp-val :url arguments))
+              "url"
+              tool-name)))
+    (handler-case
+        (get-web-request url)
+      (mcp-tool-execution-error (e)
+        (error e))
+      (error (e)
+        (error 'mcp-tool-execution-error
+               :tool-name tool-name
+               :reason (format nil "Failed to fetch URL ~S: ~A" url e))))))
+
 (defun execute-eval-tool (bot arguments tool-name)
   "Runs the built-in eval tool after approval."
   (unless (chatbot-enable-eval-p bot)

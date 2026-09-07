@@ -49,7 +49,7 @@
      (:file "tool-arguments"     :pathname "mcp/tool-arguments" :depends-on ("package" "mcp"))
      (:file "filesystem-tools"   :pathname "mcp/filesystem-tools" :depends-on ("package" "vars" "data" "json-utils" "mcp" "tool-arguments"))
      (:file "chatbot-state-tools" :pathname "mcp/chatbot-state-tools" :depends-on ("package" "data" "json-utils" "mcp" "tool-arguments"))
-     (:file "eval-grounding-tools" :pathname "mcp/eval-grounding-tools" :depends-on ("package" "vars" "json-utils" "mcp" "tool-arguments"))
+     (:file "eval-grounding-tools" :pathname "mcp/eval-grounding-tools" :depends-on ("package" "vars" "json-utils" "mcp" "tool-arguments" "http-utils"))
      (:file "git-tools"          :pathname "mcp/git-tools" :depends-on ("package" "data" "mcp"))
      (:file "shell-tools"        :pathname "mcp/shell-tools" :depends-on ("package" "data" "mcp" "tool-arguments"))
      (:file "planner-minion-tools" :pathname "mcp/planner-minion-tools" :depends-on ("package" "vars" "data" "json-utils" "mcp" "tool-arguments"))
