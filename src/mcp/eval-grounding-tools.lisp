@@ -162,14 +162,16 @@
     (error 'mcp-tool-execution-error
            :tool-name tool-name
            :reason "Web grounding tools are not enabled."))
-  (run-grounding-search tool-name
-                        "Web search"
-                        *web-search-function*
-                        (normalize-builtin-tool-string-argument
-                         (or (mcp-val "query" arguments)
-                             (mcp-val :query arguments))
-                         "query"
-                         tool-name)))
+  (let ((query (normalize-builtin-tool-string-argument
+                (or (mcp-val "query" arguments)
+                    (mcp-val :query arguments))
+                "query"
+                tool-name)))
+    (format t "~&Googling: ~A~%" query)
+    (run-grounding-search tool-name
+                         "Web search"
+                         *web-search-function*
+                         query)))
 
 (defun execute-hyperspec-search-tool (bot arguments tool-name)
   "Runs the built-in HyperSpec grounding search tool."
