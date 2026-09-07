@@ -35,6 +35,39 @@
   "Formats MODEL as a prompt prefix like [model: gemini-3-flash]."
   (format nil "[model: ~A]" model))
 
+(defun pluralize-elapsed-time-unit (count unit)
+  "Formats COUNT and UNIT as e.g. \"1 hour\" or \"17 minutes\"."
+  (format nil "~D ~A~:[s~;~]" count unit (= count 1)))
+
+(defun format-elapsed-time (elapsed-seconds)
+  "Formats ELAPSED-SECONDS as a prompt suffix like
+\"[1 hour 17 minutes have elapsed since the last prompt]\",
+\"[2 minutes 15 seconds have elapsed since the last prompt]\", or
+\"[1 minute has elapsed since the last prompt]\" when only a single unit of 1 is reported."
+  (let* ((total (max 0 (round elapsed-seconds)))
+         (days (floor total 86400))
+         (day-remainder (mod total 86400))
+         (hours (floor day-remainder 3600))
+         (hour-remainder (mod day-remainder 3600))
+         (minutes (floor hour-remainder 60))
+         (seconds (mod hour-remainder 60)))
+    (multiple-value-bind (phrase singular-p)
+        (cond
+          ((> days 0)
+           (if (> hours 0)
+               (values (format nil "~A ~A" (pluralize-elapsed-time-unit days "day") (pluralize-elapsed-time-unit hours "hour")) nil)
+               (values (pluralize-elapsed-time-unit days "day") (= days 1))))
+          ((> hours 0)
+           (if (> minutes 0)
+               (values (format nil "~A ~A" (pluralize-elapsed-time-unit hours "hour") (pluralize-elapsed-time-unit minutes "minute")) nil)
+               (values (pluralize-elapsed-time-unit hours "hour") (= hours 1))))
+          ((> minutes 0)
+           (if (> seconds 0)
+               (values (format nil "~A ~A" (pluralize-elapsed-time-unit minutes "minute") (pluralize-elapsed-time-unit seconds "second")) nil)
+               (values (pluralize-elapsed-time-unit minutes "minute") (= minutes 1))))
+          (t (values (pluralize-elapsed-time-unit seconds "second") (= seconds 1))))
+      (format nil "[~A ~:[have~;has~] elapsed since the last prompt]" phrase singular-p))))
+
 (defun resolve-prompt-model-override (chatbot input)
   "Returns INPUT with any supported per-turn model override marker removed.
 
@@ -294,6 +327,13 @@ using QUERY-TEXT as the query, filtering out any that do not pass THRESHOLD (def
               (push (format-prompt-model-indicator (or effective-model
                                                       (chatbot-model chatbot)))
                     parts))
+            (when (and (chatbot-include-elapsed-time-p chatbot) conversation)
+              (let ((now (get-universal-time))
+                    (last-prompt-time (conversation-last-prompt-universal-time conversation)))
+                (when last-prompt-time
+                  (push (format-elapsed-time (- now last-prompt-time)) parts))
+                ;; For backward-compatible bridge phase, update the conversation object's internal slot
+                (setf (conversation-last-prompt-universal-time conversation) now)))
             (let* ((suffix-parts nil))
               (when parts
                 (push (format nil "~{~A~^ ~}" (reverse parts)) suffix-parts))

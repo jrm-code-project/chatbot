@@ -113,7 +113,7 @@
       :owner-bot bot)
      (chatbot-runtime-context bot))))
 
-(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p (content-cache-policy +default-content-cache-policy+) (content-cache-ttl-seconds *default-content-cache-ttl-seconds*) (content-cache-min-tokens *default-content-cache-min-tokens*) google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p enable-eval-p enable-shell-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path inbox-s3-path (backend :gemini) runtime-context subordinates persona-name persona-source-name checkpoint-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p cached-content-name cached-content-key cached-content-metadata (turns-since-cache-reload 0))
+(defun new-chat (&key model system-instruction system-instruction-path (system-instruction-storage-kind :transient) temperature top-p (content-cache-policy +default-content-cache-policy+) (content-cache-ttl-seconds *default-content-cache-ttl-seconds*) (content-cache-min-tokens *default-content-cache-min-tokens*) google-search-p (gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+) web-tools-p code-execution-p include-timestamp-p include-model-p include-elapsed-time-p enable-eval-p enable-shell-p (enable-git-tools-p nil) filesystem-tools-p filesystem-root-directory filesystem-allowed-directories filesystem-allowlist-path inbox-s3-path (backend :gemini) runtime-context subordinates persona-name persona-source-name checkpoint-name parent-name (depth 1) token-budget (spent-tokens 0) scoped-directory filesystem-read-only-p planner-p cached-content-name cached-content-key cached-content-metadata (turns-since-cache-reload 0))
   "Creates a new chatbot instance and returns an initialized conversation object.
 If model is NIL, a sensible default model is chosen based on the backend.
 Personas are optional; use NEW-CHAT-PERSONA only when you want persona-specific
@@ -146,6 +146,7 @@ configuration, instructions, or preloaded memory."
                                  :code-execution-p code-execution-p
                                  :include-timestamp-p include-timestamp-p
                                  :include-model-p include-model-p
+                                 :include-elapsed-time-p include-elapsed-time-p
                                  :enable-eval-p enable-eval-p :enable-shell-p enable-shell-p :enable-git-tools-p enable-git-tools-p
                                  :filesystem-tools-p filesystem-tools-p
                                  :filesystem-root-directory (or scoped-directory filesystem-root-directory)
@@ -216,6 +217,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                 (code-execution-p (safe-getf config :code-execution-p))
                 (include-timestamp-p (safe-getf config :include-timestamp))
                 (include-model-p (safe-getf config :include-model))
+                (include-elapsed-time-p (safe-getf config :include-elapsed-time))
                 (enable-eval-p (safe-getf config :enable-eval))
                 (config-enable-shell-p (safe-getf config :enable-shell))
                 (config-enable-git-tools-p (safe-getf config :enable-git-tools)) (config-filesystem-tools-p (safe-getf config :enable-filesystem-tools))
@@ -240,6 +242,7 @@ Use NEW-CHAT instead when no persona should be loaded."
                                :code-execution-p code-execution-p
                                :include-timestamp-p include-timestamp-p
                                :include-model-p include-model-p
+                               :include-elapsed-time-p include-elapsed-time-p
                                :enable-eval-p enable-eval-p
                                :enable-shell-p (if enable-shell-supplied-p enable-shell-p config-enable-shell-p)
                                :enable-git-tools-p (if enable-git-tools-supplied-p enable-git-tools-p config-enable-git-tools-p) :filesystem-tools-p (if filesystem-tools-supplied-p filesystem-tools-p config-filesystem-tools-p)

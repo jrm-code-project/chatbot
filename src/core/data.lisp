@@ -309,6 +309,11 @@
     :accessor prompt-config-include-model-p
     :initform nil
     :documentation "Flag to prepend the active model name to each live user prompt.")
+   (include-elapsed-time-p
+    :initarg :include-elapsed-time-p
+    :accessor prompt-config-include-elapsed-time-p
+    :initform nil
+    :documentation "Flag to prepend the elapsed time since the previous live user prompt to each live user prompt.")
    (gemini-fallback-to-google-p
     :initarg :gemini-fallback-to-google-p
     :accessor prompt-config-gemini-fallback-to-google-p
@@ -578,7 +583,12 @@ are naturally shared across multiple conversation snapshots."
     :initarg :adaptive-context-pruning-max-tokens
     :accessor metrics-adaptive-context-pruning-max-tokens
     :initform nil
-    :documentation "Optional per-conversation estimated total-token ceiling updated after history compression.")))
+    :documentation "Optional per-conversation estimated total-token ceiling updated after history compression.")
+   (last-prompt-universal-time
+    :initarg :last-prompt-universal-time
+    :accessor metrics-last-prompt-universal-time
+    :initform nil
+    :documentation "Universal time the previous live user prompt was decorated and sent, or NIL if no prompt has been sent yet.")))
 
 ;;; Redefined CONVERSATION Class
 (defclass conversation ()
@@ -613,7 +623,7 @@ are naturally shared across multiple conversation snapshots."
                                        persona-memory persona-diary-entries prompt-decorations messages
                                        cached-content-name cached-content-key cached-content-metadata (turns-since-cache-reload nil turns-since-supplied-p)
                                        (swp-streak nil swp-streak-supplied-p) (swp-max-streak nil swp-max-streak-supplied-p)
-                                       adaptive-context-pruning-max-tokens
+                                       adaptive-context-pruning-max-tokens last-prompt-universal-time
                                        &allow-other-keys)
   (let ((swp-obj (if (typep swp-state 'conversation-swp-state) swp-state nil))
         (swp-val (if (typep swp-state 'conversation-swp-state) nil swp-state)))
@@ -640,7 +650,8 @@ are naturally shared across multiple conversation snapshots."
     (setf (slot-value conv 'metrics)
           (or metrics
               (make-instance 'conversation-metrics
-                             :adaptive-context-pruning-max-tokens adaptive-context-pruning-max-tokens)))))
+                             :adaptive-context-pruning-max-tokens adaptive-context-pruning-max-tokens
+                             :last-prompt-universal-time last-prompt-universal-time)))))
 
 ;;; Legacy Forwarding Reader/Writer Methods for CHATBOT
 (defmethod chatbot-persona-name ((bot chatbot)) (identity-persona-name (chatbot-identity bot)))
@@ -678,6 +689,9 @@ are naturally shared across multiple conversation snapshots."
 
 (defmethod chatbot-include-model-p ((bot chatbot)) (prompt-config-include-model-p (chatbot-prompt-config bot)))
 (defmethod (setf chatbot-include-model-p) (val (bot chatbot)) (setf (prompt-config-include-model-p (chatbot-prompt-config bot)) val))
+
+(defmethod chatbot-include-elapsed-time-p ((bot chatbot)) (prompt-config-include-elapsed-time-p (chatbot-prompt-config bot)))
+(defmethod (setf chatbot-include-elapsed-time-p) (val (bot chatbot)) (setf (prompt-config-include-elapsed-time-p (chatbot-prompt-config bot)) val))
 
 (defmethod chatbot-gemini-fallback-to-google-p ((bot chatbot)) (prompt-config-gemini-fallback-to-google-p (chatbot-prompt-config bot)))
 (defmethod (setf chatbot-gemini-fallback-to-google-p) (val (bot chatbot)) (setf (prompt-config-gemini-fallback-to-google-p (chatbot-prompt-config bot)) val))
@@ -797,6 +811,9 @@ are naturally shared across multiple conversation snapshots."
 
 (defmethod conversation-adaptive-context-pruning-max-tokens ((conv conversation)) (metrics-adaptive-context-pruning-max-tokens (%conversation-metrics conv)))
 (defmethod (setf conversation-adaptive-context-pruning-max-tokens) (val (conv conversation)) (setf (metrics-adaptive-context-pruning-max-tokens (%conversation-metrics conv)) val))
+
+(defmethod conversation-last-prompt-universal-time ((conv conversation)) (metrics-last-prompt-universal-time (%conversation-metrics conv)))
+(defmethod (setf conversation-last-prompt-universal-time) (val (conv conversation)) (setf (metrics-last-prompt-universal-time (%conversation-metrics conv)) val))
 
 (defclass round-robin-participant ()
   ((name
@@ -931,6 +948,7 @@ are naturally shared across multiple conversation snapshots."
                   :system-instruction-storage-kind (prompt-config-system-instruction-storage-kind old-prompt)
                   :include-timestamp-p (prompt-config-include-timestamp-p old-prompt)
                   :include-model-p (prompt-config-include-model-p old-prompt)
+                  :include-elapsed-time-p (prompt-config-include-elapsed-time-p old-prompt)
                   :gemini-fallback-to-google-p (prompt-config-gemini-fallback-to-google-p old-prompt)
                   :content-cache-policy (cache-config-content-cache-policy old-cache)
                   :content-cache-ttl-seconds (cache-config-content-cache-ttl-seconds old-cache)
@@ -989,7 +1007,8 @@ are naturally shared across multiple conversation snapshots."
                   :swp-state (swp-state-swp-state old-swp)
                   :swp-streak (swp-state-swp-streak old-swp)
                   :swp-max-streak (swp-state-swp-max-streak old-swp)
-                  :adaptive-context-pruning-max-tokens (metrics-adaptive-context-pruning-max-tokens old-metrics))
+                  :adaptive-context-pruning-max-tokens (metrics-adaptive-context-pruning-max-tokens old-metrics)
+                  :last-prompt-universal-time (metrics-last-prompt-universal-time old-metrics))
             initarg-overrides))))
 
 (defun copy-chatbot (bot &rest initarg-overrides)

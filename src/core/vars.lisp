@@ -414,7 +414,7 @@ CURRENT-ACTIVE-CONVERSATION with an explicit runtime context instead.")
                                        persona-name persona-source-name checkpoint-name
                                        model (backend nil backend-supplied-p) temperature top-p
                                        system-instruction system-instruction-path system-instruction-storage-kind
-                                       include-timestamp-p include-model-p gemini-fallback-to-google-p
+                                       include-timestamp-p include-model-p include-elapsed-time-p gemini-fallback-to-google-p
                                        content-cache-policy content-cache-ttl-seconds content-cache-min-tokens
                                        google-search-p web-tools-p code-execution-p enable-eval-p enable-shell-p enable-git-tools-p
                                        filesystem-tools-p filesystem-root-directory filesystem-allowed-directories
@@ -445,6 +445,7 @@ CURRENT-ACTIVE-CONVERSATION with an explicit runtime context instead.")
                            :system-instruction-storage-kind (or system-instruction-storage-kind :transient)
                            :include-timestamp-p include-timestamp-p
                            :include-model-p include-model-p
+                           :include-elapsed-time-p include-elapsed-time-p
                            :gemini-fallback-to-google-p (or gemini-fallback-to-google-p +default-gemini-fallback-to-google-p+))))
   (setf (slot-value bot 'cache-config)
         (or cache-config
