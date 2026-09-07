@@ -233,11 +233,22 @@ Each function is called with arguments (bot tool-name arguments result).")
   "Interprets and executes a list of declarative EFFECTS."
   (mapc #'interpret-effect effects))
 
+(defun maybe-print-fetch-tool-notice (tool-name arguments)
+  "Prints \"Fetching: <url>\" to standard output when TOOL-NAME appears to be a
+URL-fetching tool (its name contains \"fetch\", e.g. the \"fetch\" MCP tool)
+invoked with a \"url\" argument."
+  (when (and (stringp tool-name) (search "fetch" tool-name :test #'char-equal))
+    (let ((url (or (mcp-val "url" arguments)
+                  (mcp-val :url arguments))))
+      (when url
+        (format t "~&Fetching: ~A~%" url)))))
+
 (defun execute-chatbot-tool (bot source tool-name arguments)
   "Executes SOURCE as either a built-in or MCP tool for BOT."
   (call-with-runtime-context
    (chatbot-runtime-context bot)
    (lambda ()
+     (maybe-print-fetch-tool-notice tool-name arguments)
      (let ((result (if (eq source :built-in)
                        (default-execute-builtin-chatbot-tool bot tool-name arguments)
                        (execute-mcp-tool source tool-name arguments))))
