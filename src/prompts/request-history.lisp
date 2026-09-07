@@ -120,7 +120,9 @@ Accepted signatures:
     (setf (conversation-swp-state target)
           (conversation-swp-state source))
     (setf (conversation-swp-streak target)
-          (conversation-swp-streak source))))
+          (conversation-swp-streak source))
+    (setf (conversation-last-prompt-universal-time target)
+          (conversation-last-prompt-universal-time source))))
 
 (defun apply-chat-turn-result (result &optional conversation)
   "Applies RESULT to CONVERSATION, defaulting to RESULT's target conversation."
