@@ -101,7 +101,7 @@ pinned to *texttospeech-voice-name*/*texttospeech-voice-language-code*."
     (values octets elapsed-seconds)))
 
 (defun speak-chat-response (text)
-  "Synthesizes TEXT with the en-US-Studio-O voice and plays it back, when a Text-to-Speech
+  "Synthesizes TEXT with the en-US-Journey-O voice and plays it back, when a Text-to-Speech
 API key is configured. Logs and skips silently when *TEXTTOSPEECH-ENABLED-P* is NIL or no key
 is found; synthesis or playback failures are logged and swallowed so they never interrupt the
 surrounding chat turn."

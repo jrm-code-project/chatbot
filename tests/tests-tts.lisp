@@ -42,7 +42,7 @@
          (input (mcp-val :input payload))
          (audio-config (mcp-val :audio-config payload)))
     (fiveam:is (string= "Hello there" (mcp-val :text input)))
-    (fiveam:is (string= "en-US-Studio-O" (mcp-val :name voice)))
+    (fiveam:is (string= "en-US-Journey-O" (mcp-val :name voice)))
     (fiveam:is (string= "en-US" (mcp-val :language-code voice)))
     (fiveam:is (string= "MP3" (mcp-val :audio-encoding audio-config)))))
 
