@@ -42,10 +42,13 @@
       (error 'mcp-tool-execution-error
              :tool-name tool-name
              :reason "No eval approval function is configured."))
-    (unless (funcall approval-function bot expression tool-name)
-      (error 'mcp-tool-execution-error
-             :tool-name tool-name
-             :reason "Evaluation denied by user."))
+    (let ((approval (funcall approval-function bot expression tool-name)))
+      (unless (and approval (not (stringp approval)))
+        (error 'mcp-tool-execution-error
+               :tool-name tool-name
+               :reason (tool-approval-denied-reason
+                        approval
+                        "Evaluation denied by user."))))
     t))
 
 (defun eval-tool-result-json (values stdout stderr)

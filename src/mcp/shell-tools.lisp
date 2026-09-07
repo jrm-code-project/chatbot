@@ -16,10 +16,13 @@
                    tool-name))
          (dir (or (chatbot-scoped-directory bot)
                   (namestring (uiop:getcwd)))))
-    (unless (funcall *shell-approval-function* bot command tool-name)
-      (error 'mcp-tool-execution-error
-             :tool-name tool-name
-             :reason "Shell command execution denied by user."))
+    (let ((approval (funcall *shell-approval-function* bot command tool-name)))
+      (unless (and approval (not (stringp approval)))
+        (error 'mcp-tool-execution-error
+               :tool-name tool-name
+               :reason (tool-approval-denied-reason
+                        approval
+                        "Shell command execution denied by user."))))
     (multiple-value-bind (stdout stderr exit-code)
         (uiop:run-program command
                           :directory dir

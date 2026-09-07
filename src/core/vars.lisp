@@ -69,6 +69,22 @@ When no key can be found, text-to-speech playback is skipped (not an error).")
 (defparameter *hyperspec-search-function* #'google:hyperspec-search
   "Function used by the built-in HyperSpec grounding search tool.")
 
+(defun classify-approval-response (raw)
+  "Classifies RAW approval input as T (yes), NIL (no), or the trimmed hint string when it is neither."
+  (let ((trimmed (string-trim '(#\Space #\Tab #\Return #\Newline) (or raw ""))))
+    (cond
+      ((member trimmed '("" "y" "Y" "yes" "Yes" "YES") :test #'string=) t)
+      ((member trimmed '("n" "N" "no" "No" "NO") :test #'string=) nil)
+      (t trimmed))))
+
+(defun read-approval-response (control &rest args)
+  "Prompts with CONTROL/ARGS followed by \" [Y/N]\", reads a line of input, and
+returns T for an affirmative response, NIL for a negative response, or the raw
+trimmed response string (an 'abort-with-hint') when the response is neither."
+  (format *query-io* "~&~? [Y/N] " control args)
+  (force-output *query-io*)
+  (classify-approval-response (read-line *query-io* nil "")))
+
 (defun default-filesystem-access-approval-function (bot directory tool-name)
   "Prompts the user to approve BOT access to DIRECTORY for TOOL-NAME."
   (declare (ignore bot))
@@ -83,12 +99,12 @@ When no key can be found, text-to-speech playback is skipped (not an error).")
   "When T, bypasses interactive evaluation approval and automatically returns T.")
 
 (defun default-eval-approval-function (bot source tool-name)
-  "Prompts the user to approve evaluating SOURCE for TOOL-NAME."
-  (declare (ignore bot))
+  "Prompts the user to approve evaluating SOURCE for TOOL-NAME.
+Returns T when approved, NIL when denied, or a hint string when the user
+typed something other than a plain yes/no response."
+  (declare (ignore bot tool-name))
   (or *bypass-eval-approval-p*
-      (y-or-n-p "~&Allow ~A to evaluate this expression?~%~A~% "
-                tool-name
-                source)))
+      (read-approval-response "Evaluate ~A?" source)))
 
 (defparameter *eval-approval-function* #'default-eval-approval-function
   "Function used to approve evaluation of a specific expression for the eval tool.")
@@ -97,15 +113,24 @@ When no key can be found, text-to-speech playback is skipped (not an error).")
   "When T, bypasses interactive shell approval and automatically returns T.")
 
 (defun default-shell-approval-function (bot command tool-name)
-  "Prompts the user to approve executing COMMAND for TOOL-NAME."
-  (declare (ignore bot))
+  "Prompts the user to approve executing COMMAND for TOOL-NAME.
+Returns T when approved, NIL when denied, or a hint string when the user
+typed something other than a plain yes/no response."
+  (declare (ignore bot tool-name))
   (or *bypass-shell-approval-p*
-      (progn
-        (format t "~&Shell command to execute: ~A~%" command)
-        (yes-or-no-p "Allow ~A to execute this command? " tool-name))))
+      (read-approval-response "Run this shell command ~S?" command)))
 
 (defparameter *shell-approval-function* #'default-shell-approval-function
   "Function used to approve running a specific shell command for the shell tool.")
+
+(defun tool-approval-denied-reason (approval generic-reason)
+  "Returns the tool-execution-error reason for a denied APPROVAL.
+When APPROVAL is a non-empty hint string, appends it to the aborted-execution
+message; otherwise returns GENERIC-REASON."
+  (if (and (stringp approval) (plusp (length approval)))
+      (format nil "Execution aborted by user. User hint: ~A" approval)
+      generic-reason))
+
 
 (defparameter *user-homedir-pathname-function* #'user-homedir-pathname
   "Function used to resolve the current user's home directory pathname.")
