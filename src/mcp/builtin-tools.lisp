@@ -124,6 +124,15 @@
                                                 (:description . "The absolute URL of the web page to fetch.")))))
                       (:required . ("url"))))))
 
+(defun builtin-query-memory-tool ()
+  "Returns the built-in queryMemory tool definition."
+  '((:name . "queryMemory")
+    (:description . "Proactively queries the persona's semantic memory (vector database) and returns the top 3 most relevant matches for the given query.")
+    (:input-schema . ((:type . "object")
+                      (:properties . (("query" . ((:type . "string")
+                                                  (:description . "The natural-language query to run against semantic memory.")))))
+                      (:required . ("query"))))))
+
 (defun builtin-read-system-instructions-tool ()
   "Returns the built-in readSystemInstructions tool definition."
   '((:name . "readSystemInstructions")
@@ -456,6 +465,8 @@
           (push (cons :built-in (builtin-hyperspec-search-tool)) tools)
           (push (cons :built-in (builtin-web-search-tool)) tools)
           (push (cons :built-in (builtin-fetch-url-tool)) tools))
+        (when (chatbot-persona-name bot)
+          (push (cons :built-in (builtin-query-memory-tool)) tools))
         (when (chatbot-enable-eval-p bot)
           (push (cons :built-in (builtin-eval-tool)) tools))
         (when (chatbot-enable-shell-p bot)

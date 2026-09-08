@@ -208,6 +208,22 @@
                :tool-name tool-name
                :reason (format nil "Failed to fetch URL ~S: ~A" url e))))))
 
+(defun execute-query-memory-tool (bot arguments tool-name)
+  "Runs the built-in queryMemory tool, proactively querying BOT's persona-scoped ChromaDB
+Memory collection (the same vector database consulted automatically before each prompt)
+for the top 3 semantic matches to the given query."
+  (let ((persona (chatbot-persona-name bot)))
+    (unless persona
+      (error 'mcp-tool-execution-error
+             :tool-name tool-name
+             :reason "Semantic memory is not available (no persona is configured)."))
+    (let ((query (normalize-builtin-tool-string-argument
+                  (or (mcp-val "query" arguments)
+                      (mcp-val :query arguments))
+                  "query"
+                  tool-name)))
+      (query-persona-memory-tool-text persona query 3))))
+
 (defun execute-eval-tool (bot arguments tool-name)
   "Runs the built-in eval tool after approval."
   (unless (chatbot-enable-eval-p bot)

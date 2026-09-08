@@ -243,6 +243,43 @@ using QUERY-TEXT as the query, filtering out any that do not pass *chroma-memory
                               ("error" . ,(princ-to-string e))))
       nil)))
 
+(defun query-persona-memory-tool-text (persona-name query-text &optional (n-results 3))
+  "Proactively queries the PERSONA-NAME's ChromaDB Memory collection for the top N-RESULTS
+matches to QUERY-TEXT (unfiltered by relevance threshold) and returns a formatted string
+suitable for returning to the model, or a \"no results\" message when nothing is found."
+  (handler-case
+      (if (not (and persona-name (chroma-alive-p)))
+          "No semantic memory results found (memory store is unavailable)."
+          (let* ((collection-name (format nil "~A_Memory" (string persona-name)))
+                 (collection (or (chroma-get-collection collection-name)
+                                 (chroma-create-collection collection-name :get-or-create t))))
+            (if (not collection)
+                "No semantic memory results found (memory store is unavailable)."
+                (let* ((collection-id (cdr (assoc :id collection)))
+                       (query-vector (string->embedding-vector query-text :model "gemini-embedding-2"))
+                       (query-resp (chroma-query collection-id (list query-vector) :n-results n-results))
+                       (results (extract-chroma-query-results query-resp)))
+                  (if (not results)
+                      "No semantic memory results found."
+                      (with-output-to-string (s)
+                        (format s "Top ~D semantic memory match~:P for query ~S:~%" (length results) query-text)
+                        (dolist (res results)
+                          (let* ((doc (getf res :document))
+                                 (meta (getf res :metadata))
+                                 (entity (cdr (assoc :entity meta)))
+                                 (entity-type (cdr (assoc :entity--type meta)))
+                                 (dist (getf res :distance)))
+                            (format s "---~%")
+                            (when entity (format s "Entity: ~A~%" entity))
+                            (when entity-type (format s "Entity Type: ~A~%" entity-type))
+                            (when dist (format s "Relevance Distance: ~,3F~%" dist))
+                            (format s "Memory: ~A~%" doc))))))))) 
+    (error (e)
+      (log-message :warn "Failed to query persona memory"
+                   :context `(("persona" . ,persona-name)
+                              ("error" . ,(princ-to-string e))))
+      "Failed to query semantic memory.")))
+
 (defun get-relevant-skills (persona-name query-text &key (n-results 5) (threshold 0.5))
   "Retrieves up to N-RESULTS relevant skills from ChromaDB for the given PERSONA-NAME,
 using QUERY-TEXT as the query, filtering out any that do not pass THRESHOLD (default 0.5)."
