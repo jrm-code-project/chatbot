@@ -86,11 +86,13 @@ trimmed response string (an 'abort-with-hint') when the response is neither."
   (classify-approval-response (read-line *query-io* nil "")))
 
 (defun default-filesystem-access-approval-function (bot directory tool-name)
-  "Prompts the user to approve BOT access to DIRECTORY for TOOL-NAME."
+  "Prompts the user to approve BOT access to DIRECTORY for TOOL-NAME.
+Returns T when approved, NIL when denied, or a hint string when the user
+typed something other than a plain yes/no response."
   (declare (ignore bot))
-  (y-or-n-p "~&Allow ~A to access directory ~A and remember it for this persona? "
-            tool-name
-            (namestring directory)))
+  (read-approval-response "Allow ~A to access directory ~A and remember it for this persona?"
+                          tool-name
+                          (namestring directory)))
 
 (defparameter *filesystem-access-approval-function* #'default-filesystem-access-approval-function
   "Function used to approve persona filesystem access outside the current allowlist.")

@@ -74,10 +74,13 @@
       (error 'mcp-tool-execution-error
              :tool-name tool-name
              :reason "No filesystem access approval function is configured."))
-    (unless (funcall approval-function bot directory tool-name)
-      (error 'mcp-tool-execution-error
-             :tool-name tool-name
-             :reason (format nil "Access to directory denied: ~A" directory)))
+    (let ((approval (funcall approval-function bot directory tool-name)))
+      (unless (and approval (not (stringp approval)))
+        (error 'mcp-tool-execution-error
+               :tool-name tool-name
+               :reason (tool-approval-denied-reason
+                        approval
+                        (format nil "Access to directory denied: ~A" directory)))))
     (setf (chatbot-filesystem-allowed-directories bot)
           (canonicalize-allowed-filesystem-directories
            (cons directory (or (chatbot-filesystem-allowed-directories bot) nil))))
