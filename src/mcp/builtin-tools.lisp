@@ -127,7 +127,7 @@
 (defun builtin-query-memory-tool ()
   "Returns the built-in queryMemory tool definition."
   '((:name . "queryMemory")
-    (:description . "Proactively queries the persona's semantic memory (vector database) and returns the top 3 most relevant matches for the given query.")
+    (:description . "Proactively queries the persona's semantic memory (vector database) and returns the top 3 most relevant matches for the given query.  Consider using this tool if drawing a blank on some subject.")
     (:input-schema . ((:type . "object")
                       (:properties . (("query" . ((:type . "string")
                                                   (:description . "The natural-language query to run against semantic memory.")))))
