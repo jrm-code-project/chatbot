@@ -413,3 +413,103 @@ target."
       (log-message :info "Ingested plan as transient system instruction"
                    :context `(("file" . ,filename)))
       (format nil "Plan from ~A successfully loaded as a transient system instruction." filename))))
+
+
+(defun scrub-conversation-tool-responses (&key (conversation (resolve-chat-conversation nil nil))
+                                               (max-characters 1000)
+                                               (keep-recent-messages 10))
+  "Surgically scrubs large tool execution results from CONVERSATION's history.
+Replaces the tool-result text of any tool response older than the most recent
+KEEP-RECENT-MESSAGES stored messages whose length exceeds MAX-CHARACTERS with a
+concise summary marker. Handles both Gemini/Google-style \"parts\"-based
+functionResponse messages (covering both the success \"result\" payload and
+the error \"message\" payload) and OpenAI/Grok/LM-Studio-style flat
+\"tool\"-role \"content\" messages.
+When any response is scrubbed, also clears CONVERSATION's cached interaction
+id: Gemini's Interactions API only resends the full message history on the
+first turn of an interaction chain and otherwise relies on server-side state
+via previous_interaction_id, so without this reset a Gemini-backed
+conversation would keep sending the untrimmed original history to the model
+regardless of what was scrubbed here (mirroring the same reset performed by
+COMPRESS-CONVERSATION-CONTEXT-IF-NEEDED).
+Returns the count of pruned responses and the total characters saved."
+  (let* ((conv (resolve-chat-conversation conversation nil))
+         (msgs (conversation-messages conv))
+         (total (length msgs))
+         (cutoff (max 0 (- total keep-recent-messages)))
+         (scrubbed-count 0)
+         (saved-chars 0))
+    (labels ((alist-replace (alist key new-value)
+               "Returns ALIST with KEY's value replaced by NEW-VALUE, preserving all other entries and their order."
+               (mapcar (lambda (cell)
+                        (if (string= (car cell) key) (cons key new-value) cell))
+                      alist))
+             (scrub-text-value (value tool-name)
+               "Returns VALUE, or a pruned-marker replacement (tallying SCRUBBED-COUNT/SAVED-CHARS) when
+VALUE is a string longer than MAX-CHARACTERS."
+               (if (and (stringp value) (> (length value) max-characters))
+                   (let* ((orig-len (length value))
+                          (new-value (format nil "[Tool response pruned: ~A, originally ~D chars]"
+                                             (or tool-name "unknown") orig-len)))
+                     (incf scrubbed-count)
+                     (incf saved-chars (- orig-len (length new-value)))
+                     new-value)
+                   value))
+             (function-response-value-key (response)
+               "Returns whichever of \"result\" (success) or \"message\" (error) is present in RESPONSE."
+               (cond
+                 ((assoc "result" response :test #'string=) "result")
+                 ((assoc "message" response :test #'string=) "message")
+                 (t nil)))
+             (scrub-function-response-part (part)
+               "Scrubs a Gemini/Google-style functionResponse PART's \"result\" or \"message\" payload text."
+               (let ((fn-resp (cdr (assoc "functionResponse" part :test #'string=))))
+                 (if (null fn-resp)
+                     part
+                     (let* ((name (cdr (assoc "name" fn-resp :test #'string=)))
+                            (response (cdr (assoc "response" fn-resp :test #'string=)))
+                            (value-key (function-response-value-key response)))
+                       (if (null value-key)
+                           part
+                           (let* ((value (cdr (assoc value-key response :test #'string=)))
+                                  (new-value (scrub-text-value value name)))
+                             (if (eq new-value value)
+                                 part
+                                 (let* ((new-response (alist-replace response value-key new-value))
+                                        (new-fn-resp (alist-replace fn-resp "response" new-response)))
+                                   (list (cons "functionResponse" new-fn-resp))))))))))
+             (scrub-tool-role-message (msg)
+               "Scrubs an OpenAI/Grok/LM-Studio-style \"tool\"-role MSG's \"content\" text."
+               (let* ((content (cdr (assoc "content" msg :test #'string=)))
+                      (name (cdr (assoc "name" msg :test #'string=)))
+                      (new-content (scrub-text-value content name)))
+                 (if (eq new-content content)
+                     msg
+                     (alist-replace msg "content" new-content))))
+             (scrub-msg (msg idx)
+               (if (>= idx cutoff)
+                   msg
+                   (let ((parts (cdr (assoc "parts" msg :test #'string=)))
+                        (role (cdr (assoc "role" msg :test #'string=))))
+                     (cond
+                       ((vectorp parts)
+                        (alist-replace msg "parts" (map 'vector #'scrub-function-response-part parts)))
+                       ((and (stringp role) (string= role "tool"))
+                        (scrub-tool-role-message msg))
+                       (t msg))))))
+      (let ((new-msgs (loop for m in msgs for i from 0 collect (scrub-msg m i))))
+        (setf (conversation-messages conv) new-msgs)
+        (when (plusp scrubbed-count)
+          (setf (conversation-interaction-id conv) nil))
+        (values scrubbed-count saved-chars)))))
+
+(defun trim-context (&key (conversation (resolve-chat-conversation nil nil))
+                          (max-characters 1000)
+                          (keep-recent-messages 10))
+  "Convenience REPL wrapper for SCRUB-CONVERSATION-TOOL-RESPONSES."
+  (multiple-value-bind (scrubbed saved)
+      (scrub-conversation-tool-responses :conversation conversation
+                                         :max-characters max-characters
+                                         :keep-recent-messages keep-recent-messages)
+    (format nil "Trimmed context: ~D tool response~:P scrubbed, ~D character~:P (~,1F KB) saved."
+            scrubbed saved (/ saved 1024.0))))
