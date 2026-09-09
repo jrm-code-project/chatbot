@@ -168,6 +168,18 @@ message; otherwise returns GENERIC-REASON."
 (defparameter *execute-mcp-tool-function* nil
   "Optional test seam for executing an MCP tool and returning text content.")
 
+(defparameter *disabled-mcp-tool-names* '("read_graph")
+  "Names of remote MCP tools that are hidden from the model and refused at execution time.
+read_graph (from the memory MCP server) dumps a persona's entire knowledge graph and was
+found to dramatically bloat conversation context; use the built-in queryMemory,
+search_nodes, or open_nodes tools instead for scoped lookups.")
+
+(defun mcp-tool-name-disabled-p (tool-name)
+  "Returns true when TOOL-NAME is in *DISABLED-MCP-TOOL-NAMES* (case-insensitive)."
+  (and tool-name
+       (member tool-name *disabled-mcp-tool-names* :test #'string-equal)
+       t))
+
 (defun default-persona-memory-compression-thread-function (thunk thread-name)
   "Starts a background thread for persona memory compression."
   (sb-thread:make-thread thunk :name thread-name))

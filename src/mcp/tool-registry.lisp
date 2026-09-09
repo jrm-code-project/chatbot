@@ -23,14 +23,16 @@
       ("parameters" . ,(gemini-tool-parameters input-schema)))))
 
 (defun default-get-all-mcp-tools (bot)
-  "Retrieves all tools from all connected MCP servers as a list of (server . tool-plist)."
+  "Retrieves all tools from all connected MCP servers as a list of (server . tool-plist),
+excluding any tool named in *DISABLED-MCP-TOOL-NAMES*."
   (let ((all-tools nil))
     (dolist (server (chatbot-mcp-servers bot))
       (handler-case
           (let* ((response (mcp-list-tools server))
                  (tools (mcp-val :tools response)))
             (dolist (tool tools)
-              (push (cons server tool) all-tools)))
+              (unless (mcp-tool-name-disabled-p (mcp-val :name tool))
+                (push (cons server tool) all-tools))))
         (error (e)
           (format *error-output* "Error listing tools from MCP server ~A: ~A~%" (mcp-server-name server) e))))
     (nreverse all-tools)))

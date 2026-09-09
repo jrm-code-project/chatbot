@@ -4,21 +4,25 @@
 (in-package "CHATBOT")
 
 (defun default-find-mcp-server-and-tool (bot tool-name)
-  "Find the connected MCP server and tool definition that matches tool-name."
-  (dolist (server (chatbot-mcp-servers bot))
-    (handler-case
-        (let* ((response (mcp-list-tools server))
-               (tools (mcp-val :tools response)))
-          (dolist (tool tools)
-            (let ((name (mcp-val :name tool)))
-              (when (string= name tool-name)
-                (return-from default-find-mcp-server-and-tool (values server tool))))))
-      (error (e)
-        (error 'mcp-tool-lookup-error
-               :tool-name tool-name
-               :server-name (mcp-server-name server)
-               :reason (princ-to-string e)))))
-  (values nil nil))
+  "Find the connected MCP server and tool definition that matches tool-name.
+Tools named in *DISABLED-MCP-TOOL-NAMES* are treated as not found."
+  (if (mcp-tool-name-disabled-p tool-name)
+      (values nil nil)
+      (progn
+        (dolist (server (chatbot-mcp-servers bot))
+          (handler-case
+              (let* ((response (mcp-list-tools server))
+                     (tools (mcp-val :tools response)))
+                (dolist (tool tools)
+                  (let ((name (mcp-val :name tool)))
+                    (when (string= name tool-name)
+                      (return-from default-find-mcp-server-and-tool (values server tool))))))
+            (error (e)
+              (error 'mcp-tool-lookup-error
+                     :tool-name tool-name
+                     :server-name (mcp-server-name server)
+                     :reason (princ-to-string e)))))
+        (values nil nil))))
 
 (defun find-mcp-server-and-tool (bot tool-name)
   "Finds an MCP tool by name, honoring the configured test seam when present."
