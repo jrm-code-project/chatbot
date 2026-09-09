@@ -243,15 +243,73 @@ invoked with a \"url\" argument."
       (when url
         (format t "~&Fetching: ~A~%" url)))))
 
+(defparameter *protected-entity-names* '("The Boss")
+  "Knowledge-graph entity names too large to safely return via an unconstrained
+open_nodes dump (hundreds of observations/relations can blow out the context
+window). Requests naming any of these entities are refused with a hint to use
+search_nodes or queryMemory with narrower keywords instead.")
+
+(defun normalize-protected-entity-name (name)
+  "Normalizes NAME for protected-entity comparison: downcases and collapses whitespace/underscores."
+  (remove #\_
+          (remove #\Space
+                  (string-trim '(#\Space #\Tab #\Return #\Linefeed #\_)
+                              (string-downcase (string name))))))
+
+(defun protected-entity-name-p (name)
+  "Returns true when NAME matches a protected entity, ignoring case, whitespace, and underscores."
+  (and (stringp name)
+       (let ((normalized (normalize-protected-entity-name name)))
+         (some (lambda (protected)
+                 (string= normalized (normalize-protected-entity-name protected)))
+               *protected-entity-names*))))
+
+(defun open-nodes-requested-names (arguments)
+  "Extracts the list of requested entity name strings from open_nodes ARGUMENTS."
+  (normalize-to-list (or (mcp-val "names" arguments)
+                        (mcp-val :names arguments))))
+
+(defun open-nodes-protected-entity-block-reason (tool-name arguments)
+  "Returns a hint string when TOOL-NAME is open_nodes and ARGUMENTS request a
+protected entity, or NIL when the request should proceed unblocked."
+  (when (string-equal tool-name "open_nodes")
+    (let ((blocked (remove-if-not #'protected-entity-name-p (open-nodes-requested-names arguments))))
+      (when blocked
+        (format nil "Entit~[ies~;y~] ~{~S~^, ~} ~[are~;is~] protected from full open_nodes expansion due to payload size. Use search_nodes or queryMemory with specific topic keywords instead."
+                (if (= (length blocked) 1) 1 0)
+                blocked
+                (if (= (length blocked) 1) 1 0))))))
+
+(defparameter *max-tool-response-characters* 8000
+  "Maximum character length for a single tool response before it is truncated with
+a notice, as defense-in-depth against oversized MCP tool payloads (e.g. an
+open_nodes/read_graph dump) blowing out the conversation context window.")
+
+(defun clamp-tool-result-text (tool-name result)
+  "Truncates RESULT to *MAX-TOOL-RESPONSE-CHARACTERS* when it is a string exceeding
+that limit, appending a truncation notice naming TOOL-NAME and the original length."
+  (if (and (stringp result) (> (length result) *max-tool-response-characters*))
+      (format nil "~A~%~%[TRUNCATED: ~A response was ~D characters, exceeding the ~D character safety limit. Use a narrower/more specific query instead of requesting the full payload.]"
+              (subseq result 0 *max-tool-response-characters*)
+              tool-name
+              (length result)
+              *max-tool-response-characters*)
+      result))
+
 (defun execute-chatbot-tool (bot source tool-name arguments)
   "Executes SOURCE as either a built-in or MCP tool for BOT."
   (call-with-runtime-context
    (chatbot-runtime-context bot)
    (lambda ()
      (maybe-print-fetch-tool-notice tool-name arguments)
-     (let ((result (if (eq source :built-in)
-                       (default-execute-builtin-chatbot-tool bot tool-name arguments)
-                       (execute-mcp-tool source tool-name arguments))))
+     (let ((block-reason (open-nodes-protected-entity-block-reason tool-name arguments)))
+       (when block-reason
+         (error 'mcp-tool-execution-error :tool-name tool-name :reason block-reason)))
+     (let ((result (clamp-tool-result-text
+                    tool-name
+                    (if (eq source :built-in)
+                        (default-execute-builtin-chatbot-tool bot tool-name arguments)
+                        (execute-mcp-tool source tool-name arguments)))))
        ;; Evaluate pure side-effects first
        (let ((effects (evaluate-tool-after-execution-effects bot tool-name arguments result)))
          ;; Interpret and execute the side-effects in the Imperative Shell
@@ -262,3 +320,4 @@ invoked with a \"url\" argument."
        result))
    :default-conversation-compatibility-p nil
    :legacy-function-seam-compatibility-p nil))
+
