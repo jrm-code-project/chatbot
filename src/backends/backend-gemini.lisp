@@ -32,8 +32,13 @@
 
 (defun gemini-request-state (input conversation file-attachments effective-model effective-generation-config
                                   &key messages persona-memory persona-diary-entries
-                                    original-interaction-id current-interaction-id live-user-input)
-  "Builds the provider-runner state for a Gemini Interactions turn."
+                                    original-interaction-id current-interaction-id live-user-input
+                                    force-fresh-interaction-p)
+  "Builds the provider-runner state for a Gemini Interactions turn.
+When FORCE-FRESH-INTERACTION-P is true, both interaction ids are forced to nil so the
+turn is submitted as a brand-new interaction instead of chaining onto a prior
+previous_interaction_id (used to recover from a corrupted server-side thought/signature
+chain; see GEMINI-FUNCTION-RESPONSE-TURN-ERROR-P)."
   (let ((decorated (decorate-live-user-input (conversation-chatbot conversation) input
                                              :effective-model effective-model
                                              :conversation conversation)))
@@ -46,10 +51,12 @@
           :messages (or messages (conversation-messages conversation))
           :persona-memory (or persona-memory (conversation-persona-memory conversation))
           :persona-diary-entries (or persona-diary-entries (conversation-persona-diary-entries conversation))
-          :original-interaction-id (or original-interaction-id
-                                       (conversation-interaction-id conversation))
-          :current-interaction-id (or current-interaction-id
-                                      (conversation-interaction-id conversation)))))
+          :original-interaction-id (unless force-fresh-interaction-p
+                                     (or original-interaction-id
+                                         (conversation-interaction-id conversation)))
+          :current-interaction-id (unless force-fresh-interaction-p
+                                     (or current-interaction-id
+                                         (conversation-interaction-id conversation))))))
 
 (defun gemini-function-result-payload (type name id signature result-part)
   "Returns one Gemini Interactions function_result payload, echoing SIGNATURE when present.
@@ -310,6 +317,15 @@ no longer consistent (\"function response turn ... immediately after a function 
       :usage (gemini-stream-state-completed-usage stream-state)
       :thought-text (coerce (gemini-stream-state-full-thought-text stream-state) 'string)))))
 
+(defun gemini-function-response-turn-error-p (message)
+  "Returns true when MESSAGE (a downcased error string) is Gemini's 400 error for a
+function response not immediately following its function call turn. This is a known,
+intermittent server-side defect (the Interactions API occasionally returns a reasoning
+'thought' step with an invalid/empty signature, which then poisons the stateful
+previous_interaction_id chain for every later turn) rather than a client-side mistake;
+recovery requires abandoning the poisoned interaction chain and starting fresh."
+  (search "function response turn" message))
+
 (defun gemini-api-key-or-error ()
   "Returns the configured Gemini API key or signals when it is missing."
   (let ((api-key (gemini-api-key)))
@@ -375,13 +391,18 @@ no longer consistent (\"function response turn ... immediately after a function 
 (defun chat-gemini (bot input conversation callback &key file-attachments effective-model effective-generation-config
                                                      return-turn-result-p
                                                      (recursion-depth 0)
-                                                     bypass-cache-p)
-  "Sends user input to the active conversation using the Gemini Interactions API."
+                                                     bypass-cache-p
+                                                     force-fresh-interaction-p)
+  "Sends user input to the active conversation using the Gemini Interactions API.
+When FORCE-FRESH-INTERACTION-P is true, the turn is submitted without chaining onto any
+prior previous_interaction_id (see GEMINI-REQUEST-STATE); this is used internally to
+recover once from GEMINI-FUNCTION-RESPONSE-TURN-ERROR-P."
   (declare (ignore bypass-cache-p))
   (let ((result
           (run-provider-turn-loop
            :gemini
-           (gemini-request-state input conversation file-attachments effective-model effective-generation-config)
+           (gemini-request-state input conversation file-attachments effective-model effective-generation-config
+                                 :force-fresh-interaction-p force-fresh-interaction-p)
            (lambda (state current-depth)
              (declare (ignore current-depth))
              (submit-gemini-turn bot callback state))
@@ -425,22 +446,39 @@ no longer consistent (\"function response turn ... immediately after a function 
                 :thought-text (provider-turn-outcome-thought-text outcome))))
            :error-handler
            (lambda (state condition current-depth)
-             (declare (ignore current-depth))
              (let ((message (string-downcase (princ-to-string condition))))
-               (if (and (gemini-fallback-to-google-enabled-p bot)
-                        (search "/interactions?alt=sse" message)
-                        (search "404" message)
-                        (search "not found" message))
-                   (chat-google bot
-                                (getf state :input)
-                                conversation
-                                callback
-                                :file-attachments (getf state :file-attachments)
-                                :effective-model (getf state :effective-model)
-                                :effective-generation-config (getf state :effective-generation-config)
-                                :return-turn-result-p t
-                                :recursion-depth recursion-depth)
-                   (error "Gemini Chat Error: ~A" condition))))
+               (cond
+                 ((and (gemini-fallback-to-google-enabled-p bot)
+                       (search "/interactions?alt=sse" message)
+                       (search "404" message)
+                       (search "not found" message))
+                  (chat-google bot
+                               (getf state :input)
+                               conversation
+                               callback
+                               :file-attachments (getf state :file-attachments)
+                               :effective-model (getf state :effective-model)
+                               :effective-generation-config (getf state :effective-generation-config)
+                               :return-turn-result-p t
+                               :recursion-depth recursion-depth))
+                 ((and (not force-fresh-interaction-p)
+                       (gemini-function-response-turn-error-p message)
+                       (getf state :live-user-input))
+                  (log-message :warn
+                               "Gemini Interactions API returned a poisoned function-response-turn error; retrying once as a fresh interaction"
+                               :context (list (cons "interaction-id" (getf state :current-interaction-id))
+                                              (cons "recursion-depth" current-depth)))
+                  (chat-gemini bot
+                               (getf state :live-user-input)
+                               conversation
+                               callback
+                               :file-attachments (getf state :file-attachments)
+                               :effective-model (getf state :effective-model)
+                               :effective-generation-config (getf state :effective-generation-config)
+                               :return-turn-result-p t
+                               :recursion-depth current-depth
+                               :force-fresh-interaction-p t))
+                 (t (error "Gemini Chat Error: ~A" condition)))))
            :initial-recursion-depth recursion-depth)))
     (if return-turn-result-p
         result
