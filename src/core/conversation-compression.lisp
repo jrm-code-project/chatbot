@@ -72,6 +72,28 @@
   (let ((role (cdr (assoc "role" message :test #'string=))))
     (and role (string-downcase role))))
 
+(defun message-part-with-key-p (part key)
+  "Returns true when PART is an alist containing KEY."
+  (and (consp part)
+       (listp (car part))
+       (assoc key part :test #'string=)))
+
+(defun message-function-response-p (message)
+  "Returns true when MESSAGE carries a Gemini/Google functionResponse part.
+Such messages use role \"user\" but are tool-result turns, not genuine user
+turns, and must stay immediately after their paired functionCall message."
+  (let ((parts (cdr (assoc "parts" message :test #'string=))))
+    (and parts
+         (some (lambda (part) (message-part-with-key-p part "functionResponse"))
+               (coerce parts 'list)))))
+
+(defun genuine-user-turn-message-p (message)
+  "Returns true when MESSAGE is a real user-authored turn.
+Excludes functionResponse tool-result messages, which are also stored with
+role \"user\" but must never be split from their preceding functionCall."
+  (and (string= "user" (or (message-role-string message) ""))
+       (not (message-function-response-p message))))
+
 (defun state-digest-message-p (message)
   "Returns true when MESSAGE is one synthetic compression digest."
   (let ((content (cdr (assoc "content" message :test #'string=))))
@@ -250,9 +272,7 @@ target."
           (push message kept)
           (incf kept-tokens message-tokens))))
     (let* ((first-user-index
-             (position-if (lambda (message)
-                            (string= "user" (or (message-role-string message) "")))
-                          kept)))
+             (position-if #'genuine-user-turn-message-p kept)))
       (cond
         ((or (null kept) (zerop first-user-index))
          kept)
