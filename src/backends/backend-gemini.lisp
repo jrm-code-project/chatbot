@@ -51,23 +51,30 @@
           :current-interaction-id (or current-interaction-id
                                       (conversation-interaction-id conversation)))))
 
+(defun gemini-function-result-payload (type name id signature result-part)
+  "Returns one Gemini Interactions function_result payload, echoing SIGNATURE when present.
+Gemini requires the thought signature carried on the originating function_call step to be
+echoed back on its function_result, or later turns are rejected once the reasoning chain is
+no longer consistent (\"function response turn ... immediately after a function call turn\")."
+  (append
+   `(("type" . ,type)
+     ("name" . ,name)
+     ("call_id" . ,id))
+   (when signature
+     (list (cons "signature" signature)))
+   `(("result" . ,(list result-part)))))
+
 (defun gemini-tool-result-message (id name args-str res-text tool-call)
   "Returns the Gemini Interactions function_result payload for a successful tool call."
-  (declare (ignore args-str tool-call))
-  `(("type" . "function_result")
-    ("name" . ,name)
-    ("call_id" . ,id)
-    ("result" . ,(list `(("type" . "text")
-                         ("text" . ,res-text))))))
+  (declare (ignore args-str))
+  (gemini-function-result-payload "function_result" name id (cdr (assoc :signature tool-call))
+                                  `(("type" . "text") ("text" . ,res-text))))
 
 (defun gemini-tool-error-message (id name args-str condition tool-call)
   "Returns the Gemini Interactions function_result payload for a failed tool call."
-  (declare (ignore args-str tool-call))
-  `(("type" . "function_result")
-    ("name" . ,name)
-    ("call_id" . ,id)
-    ("result" . ,(list `(("type" . "text")
-                         ("text" . ,(chatbot-tool-error-text name condition)))))))
+  (declare (ignore args-str))
+  (gemini-function-result-payload "function_result" name id (cdr (assoc :signature tool-call))
+                                  `(("type" . "text") ("text" . ,(chatbot-tool-error-text name condition)))))
 
 (defun gemini-tool-arguments-log-label (name tool-call)
   "Returns the debug label for one Gemini tool request."
@@ -120,10 +127,11 @@
         do (vector-push-extend char buffer))
   buffer)
 
-(defun gemini-empty-function-call (id name)
-  "Returns a fresh function-call accumulator for ID and NAME."
+(defun gemini-empty-function-call (id name &optional signature)
+  "Returns a fresh function-call accumulator for ID, NAME, and SIGNATURE."
   (list (cons :id id)
         (cons :name name)
+        (cons :signature signature)
         (cons :arguments (make-array 0 :element-type 'character
                                     :fill-pointer 0
                                     :adjustable t))))
@@ -176,10 +184,11 @@
   (let* ((step (cdr (assoc :step event)))
          (type (cdr (assoc :type step)))
          (id (cdr (assoc :id step)))
-         (name (cdr (assoc :name step))))
+         (name (cdr (assoc :name step)))
+         (signature (cdr (assoc :signature step))))
     (when (string= type "function_call")
       (setf (getf stream-state :active-fn-call)
-           (gemini-empty-function-call id name))))
+           (gemini-empty-function-call id name signature))))
   stream-state)
 
 (defun gemini-handle-step-delta (stream-state delta callback)
