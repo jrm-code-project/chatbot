@@ -227,10 +227,13 @@ Uses only the most recent (last) 8 diary entries."
                       (cons "content" (persona-diary-entry-message-text entry))))
               recent-entries))))
 
-(defun build-request-history-messages (messages input &key chatbot persona-memory persona-diary-entries effective-model)
-  "Builds request history by prepending persona preload ahead of ordinary MESSAGES and INPUT."
+(defun build-request-history-messages (messages input &key chatbot persona-memory persona-diary-entries effective-model relevant-fact-card-messages)
+  "Builds request history by prepending persona preload ahead of ordinary MESSAGES and INPUT.
+RELEVANT-FACT-CARD-MESSAGES, when supplied, are inserted between persona preload and
+MESSAGES (see RELEVANT-TURN-FACT-CARD-MESSAGES)."
   (append ;(persona-memory-messages persona-memory)
           (persona-diary-messages persona-diary-entries)
+          relevant-fact-card-messages
           (append-user-input-to-conversation-messages
            messages
            (decorate-live-user-input chatbot input :effective-model effective-model))))

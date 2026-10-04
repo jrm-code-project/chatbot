@@ -96,6 +96,57 @@ mocked HTTP response queues.")
                         :documents (list fact-card-text)
                         :metadatas (list metadata)))))))
 
+(defun fact-card-query-result->entry (result)
+  "Returns a (:turn-number :document :distance) plist for one fact-card query RESULT,
+or NIL when RESULT carries no turn-number metadata."
+  (let* ((meta (getf result :metadata))
+         (turn-number (cdr (assoc :turn--number meta))))
+    (when turn-number
+      (list :turn-number turn-number
+            :document (getf result :document)
+            :distance (getf result :distance)))))
+
+(defun retrieve-relevant-turn-fact-cards (persona-name query-text &optional (limit 8))
+  "Returns up to LIMIT fact-card entries (:turn-number :document :distance)
+from PERSONA-NAME's ChromaDB Facts collection most relevant to QUERY-TEXT by
+cosine similarity, deduplicated by turn number and sorted in ascending
+turn-number order (so callers can prepend them chronologically). Returns NIL
+when PERSONA-NAME or QUERY-TEXT is absent, ChromaDB is unreachable, or no
+Facts collection yet exists for this persona."
+  (handler-case
+      (when (and persona-name (stringp query-text) (string/= "" query-text) (chroma-alive-p))
+        (let* ((collection-name (format nil "~A_Facts" (string persona-name)))
+               (collection (chroma-get-collection collection-name)))
+          (when collection
+            (let* ((collection-id (cdr (assoc :id collection)))
+                   (query-vector (string->embedding-vector query-text :model "gemini-embedding-2"))
+                   (query-resp (chroma-query collection-id (list query-vector) :n-results limit))
+                   (entries (remove nil (mapcar #'fact-card-query-result->entry
+                                               (extract-chroma-query-results query-resp)))))
+              (sort (delete-duplicates entries :key (lambda (entry) (getf entry :turn-number)) :test #'= :from-end t)
+                    #'< :key (lambda (entry) (getf entry :turn-number)))))))
+    (error (e)
+      (log-message :warn "Failed to retrieve relevant turn fact cards"
+                   :context `(("persona" . ,persona-name) ("error" . ,(princ-to-string e))))
+      nil)))
+
+(defun fact-card-preload-message (entry)
+  "Returns a synthetic preload message presenting one retrieved fact-card ENTRY."
+  (list (cons "role" "model")
+        (cons "content" (format nil "[Relevant Memory (Turn ~D)]~%~A"
+                               (getf entry :turn-number)
+                               (getf entry :document)))))
+
+(defun relevant-turn-fact-card-messages (persona-name query-text recent-messages &optional (limit 8))
+  "Returns up to LIMIT synthetic preload messages for the fact cards most
+relevant to QUERY-TEXT, in ascending turn-number order. Any fact card whose
+turn number is already present in RECENT-MESSAGES is omitted, so a
+retrieved memory is never sent twice alongside its own literal turn."
+  (let ((excluded-turn-numbers (remove-duplicates (remove nil (mapcar #'message-turn-number recent-messages)))))
+    (mapcar #'fact-card-preload-message
+            (remove-if (lambda (entry) (member (getf entry :turn-number) excluded-turn-numbers))
+                       (retrieve-relevant-turn-fact-cards persona-name query-text limit)))))
+
 (defun generate-and-persist-turn-fact-card (bot persona-name a-turn)
   "Generates and persists one Dense Fact Card for A-TURN, logging and swallowing any error."
   (handler-case

@@ -89,7 +89,7 @@
           (append ;(persona-memory-messages persona-memory)
                   (persona-diary-messages persona-diary-entries))))
 
-(defun build-generate-content-request-contents (messages input &key chatbot persona-memory persona-diary-entries file-attachments effective-model omit-preloaded-history-p)
+(defun build-generate-content-request-contents (messages input &key chatbot persona-memory persona-diary-entries file-attachments effective-model omit-preloaded-history-p relevant-fact-card-messages)
   "Builds the Google generateContent contents list for the current turn."
   (let ((history (build-request-history-messages messages
                                                  nil
@@ -98,7 +98,8 @@
                                                                   persona-memory)
                                                  :persona-diary-entries (unless omit-preloaded-history-p
                                                                          persona-diary-entries)
-                                                 :effective-model effective-model))
+                                                 :effective-model effective-model
+                                                 :relevant-fact-card-messages relevant-fact-card-messages))
         (current-user-message (generate-content-live-user-message chatbot
                                                                  input
                                                                  file-attachments

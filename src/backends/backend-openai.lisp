@@ -8,6 +8,7 @@
   "Builds the provider-runner state for an OpenAI-compatible turn."
   (let* ((system-inst (chatbot-system-instruction bot))
          (current-messages (conversation-messages conversation))
+         (recent-messages (recent-turns-messages current-messages))
          (persona-memory (conversation-persona-memory conversation))
          (persona-diary-entries (conversation-persona-diary-entries conversation))
          (decorated (decorate-live-user-input bot input :conversation conversation)))
@@ -20,12 +21,18 @@
                                (stateless-history-messages current-messages decorated))
           :request-messages (or request-messages
                                 (build-openai-request-messages system-inst
-                                                               (recent-turns-messages current-messages)
+                                                               recent-messages
                                                                input
                                                                :chatbot bot
                                                                :persona-memory persona-memory
                                                                :persona-diary-entries persona-diary-entries
-                                                               :file-attachments file-attachments)))))
+                                                               :file-attachments file-attachments
+                                                               :relevant-fact-card-messages
+                                                               (when (stringp input)
+                                                                 (relevant-turn-fact-card-messages
+                                                                  (chatbot-persona-name bot)
+                                                                  input
+                                                                  recent-messages)))))))
 
 (defun openai-tool-result-message (id name args-str res-text tool-call)
   "Returns the OpenAI-compatible tool role message for a successful tool call."

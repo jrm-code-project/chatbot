@@ -100,6 +100,7 @@
                               &key request-contents history-messages malformed-response-fallback-attempted-p cached-content-name bypass-cache-p)
   "Builds the provider-runner state for a Google generateContent turn."
   (let* ((current-messages (conversation-messages conversation))
+         (recent-messages (recent-turns-messages current-messages))
          (persona-memory (conversation-persona-memory conversation))
          (persona-diary-entries (conversation-persona-diary-entries conversation))
          (decorated (decorate-live-user-input bot input :effective-model effective-model :conversation conversation))
@@ -118,14 +119,20 @@
           :history-messages (or history-messages
                               (stateless-history-messages current-messages decorated))
           :request-contents (or request-contents
-                               (build-generate-content-request-contents (recent-turns-messages current-messages)
+                               (build-generate-content-request-contents recent-messages
                                                                         decorated
                                                                         :chatbot bot
                                                                         :persona-memory persona-memory
                                                                         :persona-diary-entries persona-diary-entries
                                                                         :file-attachments file-attachments
                                                                         :effective-model effective-model
-                                                                        :omit-preloaded-history-p (and resolved-cached-content-name t))))))
+                                                                        :omit-preloaded-history-p (and resolved-cached-content-name t)
+                                                                        :relevant-fact-card-messages
+                                                                        (when (stringp input)
+                                                                          (relevant-turn-fact-card-messages
+                                                                           (chatbot-persona-name bot)
+                                                                           input
+                                                                           recent-messages)))))))
 
 (defun google-model-override-active-p (bot effective-model)
   "Returns true when the malformed-response fallback override model is already active."

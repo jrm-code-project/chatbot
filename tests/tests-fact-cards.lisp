@@ -152,3 +152,74 @@ even for an otherwise-eligible persona conversation."
          (messages (list (test-message "user" "hi" 0) (test-message "model" "hello" 0)))
          (conv (make-instance 'conversation :chatbot bot :messages messages)))
     (fiveam:is-false (maybe-generate-turn-fact-card-in-background conv))))
+
+(fiveam:test test-retrieve-relevant-turn-fact-cards-sorts-dedups-and-limits-results
+  "RETRIEVE-RELEVANT-TURN-FACT-CARDS returns entries deduplicated by turn number and
+sorted into ascending turn-number order."
+  (let ((context (make-test-backend-runtime-context nil)))
+    (setf (runtime-context-http-get-function context)
+          (lambda (url &rest args)
+            (declare (ignore args))
+            (cond
+              ((search "/heartbeat" url) "{\"nanosecond heartbeat\": 1}")
+              ((search "/collections/V_Facts" url)
+               "{\"name\": \"V_Facts\", \"id\": \"v-facts-uuid\", \"metadata\": null}")
+              (t (error "Unexpected GET URL: ~A" url)))))
+    (setf (runtime-context-http-post-function context)
+          (lambda (url &rest args)
+            (declare (ignore args))
+            (cond
+              ((search "embedContent" url)
+               "{\"embedding\": {\"values\": [0.1, 0.2, 0.3]}}")
+              ((search "/query" url)
+               "{\"documents\": [[\"Fact about turn 9\", \"Fact about turn 3\", \"Duplicate turn 3\"]], \"metadatas\": [[{\"turn_number\": 9}, {\"turn_number\": 3}, {\"turn_number\": 3}]], \"distances\": [[0.1, 0.2, 0.9]]}")
+              (t (error "Unexpected POST URL: ~A" url)))))
+    (call-with-runtime-context context
+      (lambda ()
+        (let ((entries (retrieve-relevant-turn-fact-cards "V" "what happened?" 8)))
+          (fiveam:is (= 2 (length entries)))
+          (fiveam:is (equal '(3 9) (mapcar (lambda (e) (getf e :turn-number)) entries)))
+          (fiveam:is (string= "Fact about turn 3" (getf (first entries) :document))))))))
+
+(fiveam:test test-retrieve-relevant-turn-fact-cards-returns-nil-without-persona-or-query
+  "RETRIEVE-RELEVANT-TURN-FACT-CARDS is a no-op without a persona name or query text."
+  (let ((context (make-test-backend-runtime-context nil)))
+    (setf (runtime-context-http-get-function context)
+          (lambda (&rest args) (declare (ignore args)) (error "Unexpected GET.")))
+    (setf (runtime-context-http-post-function context)
+          (lambda (&rest args) (declare (ignore args)) (error "Unexpected POST.")))
+    (call-with-runtime-context context
+      (lambda ()
+        (fiveam:is-false (retrieve-relevant-turn-fact-cards nil "query"))
+        (fiveam:is-false (retrieve-relevant-turn-fact-cards "V" nil))
+        (fiveam:is-false (retrieve-relevant-turn-fact-cards "V" ""))))))
+
+(fiveam:test test-relevant-turn-fact-card-messages-excludes-turns-already-recent
+  "RELEVANT-TURN-FACT-CARD-MESSAGES omits any retrieved turn already present in
+RECENT-MESSAGES, and formats the rest as model-role preload messages in turn order."
+  (let ((context (make-test-backend-runtime-context nil))
+        (recent-messages (list (test-message "user" "hi" 9) (test-message "model" "hello" 9))))
+    (setf (runtime-context-http-get-function context)
+          (lambda (url &rest args)
+            (declare (ignore args))
+            (cond
+              ((search "/heartbeat" url) "{\"nanosecond heartbeat\": 1}")
+              ((search "/collections/V_Facts" url)
+               "{\"name\": \"V_Facts\", \"id\": \"v-facts-uuid\", \"metadata\": null}")
+              (t (error "Unexpected GET URL: ~A" url)))))
+    (setf (runtime-context-http-post-function context)
+          (lambda (url &rest args)
+            (declare (ignore args))
+            (cond
+              ((search "embedContent" url)
+               "{\"embedding\": {\"values\": [0.1, 0.2, 0.3]}}")
+              ((search "/query" url)
+               "{\"documents\": [[\"Fact about turn 9\", \"Fact about turn 3\"]], \"metadatas\": [[{\"turn_number\": 9}, {\"turn_number\": 3}]], \"distances\": [[0.1, 0.2]]}")
+              (t (error "Unexpected POST URL: ~A" url)))))
+    (call-with-runtime-context context
+      (lambda ()
+        (let ((messages (relevant-turn-fact-card-messages "V" "what happened?" recent-messages 8)))
+          (fiveam:is (= 1 (length messages)))
+          (fiveam:is (string= "model" (cdr (assoc "role" (first messages) :test #'string=))))
+          (fiveam:is (search "Turn 3" (cdr (assoc "content" (first messages) :test #'string=))))
+          (fiveam:is (search "Fact about turn 3" (cdr (assoc "content" (first messages) :test #'string=)))))))))

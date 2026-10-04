@@ -54,8 +54,10 @@ Converts any Gemini/Google-style nested parts or non-string structures into clea
      (openai-normalize-message-content (coerce content 'list)))
     (t (princ-to-string content))))
 
-(defun build-openai-request-messages (system-inst messages input &key chatbot persona-memory persona-diary-entries file-attachments)
-  "Builds the OpenAI chat-completions message list for the current turn."
+(defun build-openai-request-messages (system-inst messages input &key chatbot persona-memory persona-diary-entries file-attachments relevant-fact-card-messages)
+  "Builds the OpenAI chat-completions message list for the current turn.
+RELEVANT-FACT-CARD-MESSAGES, when supplied, are inserted between persona preload and
+MESSAGES (see RELEVANT-TURN-FACT-CARD-MESSAGES)."
   (let ((history (mapcar (lambda (message)
                            (let* ((role (cdr (assoc "role" message :test #'string=)))
                                   (content (cdr (assoc "content" message :test #'string=)))
@@ -68,6 +70,7 @@ Converts any Gemini/Google-style nested parts or non-string structures into clea
                                  message)))
                          (append ;(persona-memory-messages persona-memory)
                                  (persona-diary-messages persona-diary-entries)
+                                 relevant-fact-card-messages
                                  messages)))
         (current-user-message (openai-live-user-message chatbot input file-attachments)))
     (if system-inst
