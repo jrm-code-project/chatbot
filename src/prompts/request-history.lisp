@@ -34,10 +34,13 @@
   (1+ (ensure-chatbot-tool-recursion-depth backend recursion-depth max-depth)))
 
 (defun append-user-input-to-conversation-messages (messages input)
-  "Returns MESSAGES with the current user INPUT appended when present."
+  "Returns MESSAGES with the current user INPUT appended when present, starting a new turn."
   (if input
-      (append messages (list (list (cons "role" "user")
-                                   (cons "content" input))))
+      (append messages
+              (list (tag-message-starting-new-turn
+                     (list (cons "role" "user")
+                           (cons "content" input))
+                     messages)))
       messages))
 
 (defun stateless-history-messages (current-messages input)
@@ -57,17 +60,22 @@
 
 Accepted signatures:
   (HISTORY-MESSAGES RECURSION-MESSAGES CONTINUATION)
-  (CONVERSATION HISTORY-MESSAGES RECURSION-MESSAGES CONTINUATION)"
+  (CONVERSATION HISTORY-MESSAGES RECURSION-MESSAGES CONTINUATION)
+
+RECURSION-MESSAGES are all tagged as continuing the turn already open at the
+end of HISTORY-MESSAGES, so tool call/response exchanges are never split
+from the turn that triggered them."
   (destructuring-bind (conversation history-messages recursion-messages continuation)
       (if (= (length args) 3)
           (list nil (first args) (second args) (third args))
           args)
-    (let ((updated-history (apply #'update-conversation-stateless-history
-                                  history-messages
-                                  recursion-messages)))
+    (let* ((tagged-recursion-messages (tag-messages-continuing-turn recursion-messages history-messages))
+           (updated-history (apply #'update-conversation-stateless-history
+                                   history-messages
+                                   tagged-recursion-messages)))
       (when conversation
         (setf (conversation-messages conversation) updated-history))
-      (funcall continuation updated-history recursion-messages))))
+      (funcall continuation updated-history tagged-recursion-messages))))
 
 (defun make-chat-turn-result (text &key messages interaction-id usage thought-text conversation)
   "Returns the normalized result of one chat turn."
@@ -180,8 +188,10 @@ Accepted signatures:
               :messages
               (update-conversation-stateless-history
                history-messages
-               (list (cons "role" role)
-                     (cons "content" sanitized-text)))
+               (tag-message-continuing-turn
+                (list (cons "role" role)
+                      (cons "content" sanitized-text))
+                history-messages))
               :interaction-id interaction-id
               :usage usage
               :thought-text thought-text

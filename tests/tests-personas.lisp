@@ -1585,5 +1585,5 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
                        (list (cons "role" "model") (cons "content" "m3"))))
          (kept (select-recent-messages-for-pruning history)))
     (fiveam:is (string= "user" (cdr (assoc "role" (first kept) :test #'string=))))
-    (fiveam:is (equal '(("role" . "user") ("content" . "u2"))
+    (fiveam:is (equal '(("turn" . 1) ("role" . "user") ("content" . "u2"))
                      (first kept)))))

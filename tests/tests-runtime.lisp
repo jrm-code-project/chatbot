@@ -122,10 +122,13 @@
                                   (list (cons "role" "tool")
                                         (cons "tool_call_id" "call-1")
                                         (cons "content" "tool result"))))
+        ;; Recursion messages continue the turn already open at the end of
+        ;; HISTORY-MESSAGES (turn 0, since its only message is untagged).
+        (tagged-recursion-messages (tag-messages-continuing-turn recursion-messages history-messages))
         (captured-history nil)
         (captured-messages nil))
     (fiveam:is
-     (equal (append history-messages recursion-messages)
+     (equal (append history-messages tagged-recursion-messages)
            (continue-stateless-tool-recursion
             conversation
             history-messages
@@ -134,11 +137,11 @@
               (setf captured-history updated-history)
               (setf captured-messages updated-messages)
               updated-history))))
-    (fiveam:is (equal (append history-messages recursion-messages)
+    (fiveam:is (equal (append history-messages tagged-recursion-messages)
                      (conversation-messages conversation)))
-    (fiveam:is (equal (append history-messages recursion-messages)
+    (fiveam:is (equal (append history-messages tagged-recursion-messages)
                      captured-history))
-    (fiveam:is (equal recursion-messages captured-messages))))
+    (fiveam:is (equal tagged-recursion-messages captured-messages))))
 
 (fiveam:test test-emit-chat-response-text-handles-formatting-usage-and-callback
   (reset-global-token-grand-totals)
@@ -220,7 +223,8 @@
                                                      "Shared final"))))
     (fiveam:is (search "Shared final" (get-output-stream-string stream)))
     (fiveam:is (equal (append history-messages
-                             (list (list (cons "role" "model")
+                             (list (list (cons "turn" 0)
+                                         (cons "role" "model")
                                          (cons "content" "Shared final"))))
                      (conversation-messages conversation)))))
 
@@ -239,7 +243,8 @@
      (fiveam:is (search "Shared final" output))
      (fiveam:is-false (search "secret" output)))
     (fiveam:is (equal (append history-messages
-                             (list (list (cons "role" "model")
+                             (list (list (cons "turn" 0)
+                                         (cons "role" "model")
                                          (cons "content" "Shared final"))))
                      (conversation-messages conversation)))))
 

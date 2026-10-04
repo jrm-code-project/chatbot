@@ -539,6 +539,142 @@ are naturally shared across multiple conversation snapshots."
 (defmethod (setf history-messages) (val (history conversation-history))
   (setf (slot-value history 'messages) (list-to-history-node val)))
 
+;;; Turns
+;;;
+;;; A "turn" is the formal grouping of one live user prompt together with
+;;; everything the model did in response to it -- including any function/tool
+;;; call and response exchanges -- ending with the model's final text. Turns
+;;; are numbered with increasing integers starting at 0 for the first live
+;;; interaction. Turn membership is recorded on each message at append time
+;;; (see TAG-MESSAGE-STARTING-NEW-TURN / TAG-MESSAGE-CONTINUING-TURN below)
+;;; rather than inferred later from message content: Gemini function-response
+;;; messages are stored with role "user" just like genuine user input, which
+;;; previously made after-the-fact boundary detection fragile.
+
+(defun message-turn-number (message)
+  "Returns MESSAGE's tagged turn number, or NIL when untagged (e.g. legacy history)."
+  (cdr (assoc "turn" message :test #'string=)))
+
+(defun message-with-turn-number (message turn-number)
+  "Returns a copy of MESSAGE tagged with TURN-NUMBER."
+  (acons "turn" turn-number (remove "turn" message :key #'car :test #'string=)))
+
+(defun next-turn-number-for-messages (messages)
+  "Returns the turn number a brand-new, live user prompt should receive after MESSAGES."
+  (if (null messages)
+      0
+      (let ((last-number (message-turn-number (car (last messages)))))
+        (if last-number (1+ last-number) 0))))
+
+(defun current-turn-number-for-messages (messages)
+  "Returns the turn number that a continuation message appended after MESSAGES belongs to."
+  (if (null messages)
+      0
+      (or (message-turn-number (car (last messages))) 0)))
+
+(defun tag-message-starting-new-turn (message messages)
+  "Returns MESSAGE tagged as the start of a new turn following MESSAGES."
+  (message-with-turn-number message (next-turn-number-for-messages messages)))
+
+(defun tag-message-continuing-turn (message messages)
+  "Returns MESSAGE tagged as a continuation of the turn currently open at the end of MESSAGES."
+  (message-with-turn-number message (current-turn-number-for-messages messages)))
+
+(defun tag-messages-continuing-turn (new-messages messages)
+  "Returns NEW-MESSAGES each tagged as continuing the turn currently open at the end of MESSAGES."
+  (let ((turn-number (current-turn-number-for-messages messages)))
+    (mapcar (lambda (message) (message-with-turn-number message turn-number))
+            new-messages)))
+
+(defstruct (turn (:constructor %make-turn))
+  "One formal conversation turn: a live user prompt plus every message
+produced while responding to it (function/tool call and response exchanges,
+and the final model text), in chronological order."
+  (number nil :type (or null integer) :read-only t)
+  (messages nil :type list :read-only t))
+
+(defun partition-messages-into-turns (messages)
+  "Returns MESSAGES grouped into a chronological list of TURN structures by
+their tagged turn number. Consecutive messages sharing the same (or equally
+absent) turn number are grouped together; callers that need authoritative
+numbering for untagged legacy history should backfill turn numbers first."
+  (let ((turns nil)
+        (current-number :unset)
+        (current-messages nil))
+    (flet ((flush ()
+             (when current-messages
+               (push (%make-turn :number (if (eq current-number :unset) nil current-number)
+                                 :messages (reverse current-messages))
+                     turns))))
+      (dolist (message messages)
+        (let ((number (message-turn-number message)))
+          (unless (eql number current-number)
+            (flush)
+            (setf current-number number
+                  current-messages nil))
+          (push message current-messages)))
+      (flush))
+    (reverse turns)))
+
+(defun conversation-turns (conversation)
+  "Returns CONVERSATION's messages grouped into a chronological list of TURN structures."
+  (partition-messages-into-turns (conversation-messages conversation)))
+
+(defun conversation-turn-count (conversation)
+  "Returns the number of formal turns recorded in CONVERSATION."
+  (count-if #'turn-number (conversation-turns conversation)))
+
+(defun message-role-string (message)
+  "Returns MESSAGE's role as a lowercase string when present."
+  (let ((role (cdr (assoc "role" message :test #'string=))))
+    (and role (string-downcase role))))
+
+(defun message-part-with-key-p (part key)
+  "Returns true when PART is an alist containing KEY."
+  (and (consp part)
+       (listp (car part))
+       (assoc key part :test #'string=)))
+
+(defun message-function-response-p (message)
+  "Returns true when MESSAGE carries a Gemini/Google functionResponse part.
+Such messages use role \"user\" but are tool-result turns, not genuine user
+turns, and must stay immediately after their paired functionCall message."
+  (let ((parts (cdr (assoc "parts" message :test #'string=))))
+    (and parts
+         (some (lambda (part) (message-part-with-key-p part "functionResponse"))
+               (coerce parts 'list)))))
+
+(defun genuine-user-turn-message-p (message)
+  "Returns true when MESSAGE is a real user-authored turn.
+Excludes functionResponse tool-result messages, which are also stored with
+role \"user\" but must never be split from their preceding functionCall."
+  (and (string= "user" (or (message-role-string message) ""))
+       (not (message-function-response-p message))))
+
+(defun backfill-message-turn-numbers (messages)
+  "Returns MESSAGES with every untagged message assigned a turn number, using
+GENUINE-USER-TURN-MESSAGE-P to detect legacy turn boundaries. Already-tagged
+messages are returned unchanged (the common case once every message is tagged
+at append time). This exists purely to migrate history captured before turns
+were formally tracked; new history is always tagged when appended."
+  (if (every #'message-turn-number messages)
+      messages
+      (let ((turn-number -1))
+        (mapcar (lambda (message)
+                  (if (message-turn-number message)
+                      message
+                      (progn
+                        (when (genuine-user-turn-message-p message)
+                          (incf turn-number))
+                        (if (minusp turn-number)
+                            message
+                            (message-with-turn-number message turn-number)))))
+                messages))))
+
+(defun get-conversation-turn (conversation number)
+  "Returns CONVERSATION's TURN structure numbered NUMBER, or NIL when absent."
+  (find number (conversation-turns conversation) :key #'turn-number))
+
 (defclass conversation-cache-state ()
   ((cached-content-name
     :initarg :cached-content-name

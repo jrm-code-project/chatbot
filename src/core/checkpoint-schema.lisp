@@ -12,14 +12,18 @@
        (string= value "")))
 
 (defun persisted-message-field (msg key-kw key-str)
-  "Safely retrieves a field value from MSG (supporting keyword alist, string alist, or plist)."
+  "Safely retrieves a field value from MSG (supporting keyword alist, string alist, or plist).
+Only falls back to plist-style traversal when MSG is not alist-shaped: an
+alist whose entries are conses legitimately has no matching entry for some
+keys (e.g. a message with no \"turn\" tag yet), and must not be misread as a
+flat plist in that case, which would error (or silently misread content)."
   (cond
-    ((listp msg)
+    ((and (listp msg) (every #'consp msg))
      (let ((assoc-val (or (assoc key-kw msg)
                           (assoc key-str msg :test #'string-equal))))
-       (if (consp assoc-val)
-           (cdr assoc-val)
-           (get-string-plist-value msg key-str))))
+       (and (consp assoc-val) (cdr assoc-val))))
+    ((listp msg)
+     (get-string-plist-value msg key-str))
     (t nil)))
 
 (defun persisted-backend-keyword (backend-str)
@@ -118,14 +122,19 @@
     (t nil)))
 
 (defun normalize-persisted-message (msg)
-  "Returns MSG normalized to the internal role/content alist shape."
-  (list (cons "role" (persisted-message-field msg :role "role"))
-        (cons "content" (persisted-message-field msg :content "content"))))
+  "Returns MSG normalized to the internal role/content alist shape, preserving
+the turn tag when present so turn numbering survives a checkpoint round-trip."
+  (let ((turn-number (persisted-message-field msg :turn "turn")))
+    (append (list (cons "role" (persisted-message-field msg :role "role"))
+                  (cons "content" (persisted-message-field msg :content "content")))
+            (when turn-number
+              (list (cons "turn" turn-number))))))
 
 (defun normalize-persisted-history (messages)
-  "Returns MESSAGES normalized to the internal role/content alist shape."
+  "Returns MESSAGES normalized to the internal role/content alist shape,
+backfilling any legacy messages that predate turn tagging."
   (if (and messages (listp messages))
-      (mapcar #'normalize-persisted-message messages)
+      (backfill-message-turn-numbers (mapcar #'normalize-persisted-message messages))
       nil))
 
 (defun recovery-handshake-message ()
@@ -135,9 +144,9 @@
               "[SYSTEM: Recovered from unexpected shutdown. Please review your context and resume your last uncompleted task.]")))
 
 (defun maybe-append-recovery-handshake (history append-recovery-handshake-p)
-  "Returns HISTORY, optionally appending the synthetic recovery handshake."
+  "Returns HISTORY, optionally appending the synthetic recovery handshake as a new turn."
   (if append-recovery-handshake-p
-      (append history (list (recovery-handshake-message)))
+      (append history (list (tag-message-starting-new-turn (recovery-handshake-message) history)))
       history))
 
 (defun conversation-persistence-worker-kind (conversation)

@@ -116,4 +116,5 @@
      (:file "tests-mcp"         :depends-on ("tests"))
      (:file "tests-agentic-loops" :depends-on ("tests"))
      (:file "tests-chromadb"     :depends-on ("tests"))
-     (:file "tests-tts"          :depends-on ("tests"))))))
+     (:file "tests-tts"          :depends-on ("tests"))
+     (:file "tests-turns"        :depends-on ("tests"))))))

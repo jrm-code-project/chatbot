@@ -34,6 +34,7 @@ Single tests are FiveAM test symbols loaded by the `chatbot/tests` ASDF system; 
 
 ## Key conventions
 
+- Personas live under `~/.Personas/<Name>/` (`config.lisp` plist + `system-instructions.md`); see `README.md` for the REPL-facing API (`chat`, `new-chat`, `new-chat-persona`, `spawn-persona`/`list-personas`/`remove-persona`, `round-robin-chat`, `run-arena`) and `chat`'s per-turn keyword args (`:conversation`, `:file`/`:files`, `:temperature`/`:top-p`, `:callback`).
 - Every source file lives in `(in-package "CHATBOT")`.
 - `src/core/package.lisp` shadowing-imports `DEFUN`, `FUNCALL`, `LET*`, `MULTIPLE-VALUE-BIND` from `SERIES`, `LET`/`NAMED-LAMBDA` from `NAMED-LET`, and `COMPOSE` from `FUNCTION`. Inside this package, do not assume you are using the plain `CL` variants of those names.
 - When seeding or inspecting stored conversation history, assistant-side preload messages should use the `"model"` role. The backend adapters normalize roles for OpenAI and Google when building requests.

@@ -102,16 +102,21 @@
     entry))
 
 (defun build-round-robin-history-messages (transcript participant-name)
-  "Returns provider-neutral history for PARTICIPANT-NAME from shared TRANSCRIPT."
-  (mapcar (lambda (entry)
-            (list (cons "role"
-                        (if (and (eq (round-robin-entry-speaker-kind entry) :bot)
-                                 (string= participant-name
-                                          (round-robin-entry-speaker-name entry)))
-                            "assistant"
-                            "user"))
-                  (cons "content" (labeled-round-robin-entry-content entry))))
-          transcript))
+  "Returns provider-neutral history for PARTICIPANT-NAME from shared TRANSCRIPT.
+Each transcript entry is re-derived fresh on every participant turn (it is not
+appended incrementally), so entries are tagged with sequential turn numbers by
+their transcript position rather than inheriting any prior tag."
+  (loop for entry in transcript
+        for turn-number from 0
+        collect (message-with-turn-number
+                 (list (cons "role"
+                             (if (and (eq (round-robin-entry-speaker-kind entry) :bot)
+                                      (string= participant-name
+                                               (round-robin-entry-speaker-name entry)))
+                                 "assistant"
+                                 "user"))
+                       (cons "content" (labeled-round-robin-entry-content entry)))
+                 turn-number)))
 
 (defun split-round-robin-transcript-for-live-turn (transcript)
   "Returns the prefix and latest entry from TRANSCRIPT."

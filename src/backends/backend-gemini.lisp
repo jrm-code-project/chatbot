@@ -428,13 +428,22 @@ recover once from GEMINI-FUNCTION-RESPONSE-TURN-ERROR-P."
            :finalize-turn
            (lambda (state outcome)
              (let* ((text (provider-turn-outcome-text outcome))
-                    (updated-history
-                      (update-conversation-stateless-history
-                       (getf state :messages)
+                    (prior-messages (getf state :messages))
+                    (new-user-message
+                      (tag-message-starting-new-turn
                        (list (cons "role" "user")
                              (cons "content" (getf state :live-user-input)))
+                       prior-messages))
+                    (new-model-message
+                      (tag-message-continuing-turn
                        (list (cons "role" "model")
-                             (cons "content" text)))))
+                             (cons "content" text))
+                       (append prior-messages (list new-user-message))))
+                    (updated-history
+                      (update-conversation-stateless-history
+                       prior-messages
+                       new-user-message
+                       new-model-message)))
                (emit-chat-response-text text
                                         :usage (provider-turn-outcome-usage outcome)
                                         :thought-text (provider-turn-outcome-thought-text outcome))

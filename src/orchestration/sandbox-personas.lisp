@@ -311,12 +311,17 @@ Example:
     resolved))
 
 (defun extend-persona-history (history input response)
-  "Returns HISTORY extended with one user INPUT and assistant RESPONSE pair."
-  (append history
-          (list (list (cons "role" "user")
-                      (cons "content" input))
-                (list (cons "role" "assistant")
-                      (cons "content" response)))))
+  "Returns HISTORY extended with one user INPUT and assistant RESPONSE pair,
+tagged as a new formal turn."
+  (let* ((user-message (tag-message-starting-new-turn
+                        (list (cons "role" "user")
+                              (cons "content" input))
+                        history))
+         (model-message (tag-message-continuing-turn
+                         (list (cons "role" "assistant")
+                               (cons "content" response))
+                         (append history (list user-message)))))
+    (append history (list user-message model-message))))
 
 (defun sandbox-query-chat-arguments (&key file files temperature include-temperature-p top-p include-top-p)
   "Returns CHAT keyword arguments for one sandbox persona query."

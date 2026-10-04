@@ -2506,7 +2506,7 @@
              (fiveam:is (string= "fingerprint-1" (conversation-cached-content-key restored)))
              (fiveam:is (equal '((:ttl . "1800s") (:display-name . "Test cache"))
                                (conversation-cached-content-metadata restored)))
-             (fiveam:is (equal (list (list (cons "role" "user") (cons "content" "Original Msg")))
+             (fiveam:is (equal (list (list (cons "turn" 0) (cons "role" "user") (cons "content" "Original Msg")))
                                (conversation-messages restored)))))
       (when (probe-file checkpoint-file)
         (delete-file checkpoint-file)))))

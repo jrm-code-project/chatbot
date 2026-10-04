@@ -148,11 +148,14 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
                  (error condition))))))))
 
 (defun append-conversation-user-message (conversation text)
-  "Appends a transient user TEXT message to CONVERSATION and returns CONVERSATION."
-  (setf (conversation-messages conversation)
-        (append (conversation-messages conversation)
-                (list (list (cons "role" "user")
-                            (cons "content" text)))))
+  "Appends a transient user TEXT message to CONVERSATION, starting a new turn, and returns CONVERSATION."
+  (let ((messages (conversation-messages conversation)))
+    (setf (conversation-messages conversation)
+          (append messages
+                  (list (tag-message-starting-new-turn
+                         (list (cons "role" "user")
+                               (cons "content" text))
+                         messages)))))
   conversation)
 
 (defun attach-subordinate-conversation (bot sub-conv)
@@ -549,10 +552,13 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
     (format t "~&[PLAN SUBMITTED]~%Filename: ~A~%~%Content:~%~A~%" filename plan-content)
     (let ((parent-conv (current-active-planner-parent-conversation (chatbot-runtime-context bot))))
       (when parent-conv
-        (setf (conversation-messages parent-conv)
-              (append (conversation-messages parent-conv)
-                      (list (list (cons "role" "user")
-                                  (cons "content" (format nil "[System: Plan saved to ~A]" filename))))))))
+        (let ((messages (conversation-messages parent-conv)))
+          (setf (conversation-messages parent-conv)
+                (append messages
+                        (list (tag-message-starting-new-turn
+                               (list (cons "role" "user")
+                                     (cons "content" (format nil "[System: Plan saved to ~A]" filename)))
+                               messages)))))))
     (dismiss-active-planner-conversation bot)
     (format nil "Plan saved successfully to ~A and exited Planner Mode." filename)))
 
@@ -564,10 +570,13 @@ Do not add commentary before or after the JSON. Do not wrap it in Markdown."
     (format t "~&[PLAN ABORTED]~%Reason: ~A~%" reason)
     (let ((parent-conv (current-active-planner-parent-conversation (chatbot-runtime-context bot))))
       (when parent-conv
-        (setf (conversation-messages parent-conv)
-              (append (conversation-messages parent-conv)
-                      (list (list (cons "role" "user")
-                                  (cons "content" "[System: Planner mode aborted.]")))))))
+        (let ((messages (conversation-messages parent-conv)))
+          (setf (conversation-messages parent-conv)
+                (append messages
+                        (list (tag-message-starting-new-turn
+                               (list (cons "role" "user")
+                                     (cons "content" "[System: Planner mode aborted.]"))
+                               messages)))))))
     (dismiss-active-planner-conversation bot)
     (format nil "Planner mode aborted: ~A" reason)))
 

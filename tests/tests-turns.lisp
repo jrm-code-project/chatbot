@@ -1,0 +1,138 @@
+;;; tests-turns.lisp - tests for the formal conversation "turn" concept
+
+(in-package "CHATBOT")
+(fiveam:in-suite chatbot-suite)
+
+(defun test-message (role content &optional turn-number)
+  "Returns a minimal role/content message alist, tagged with TURN-NUMBER when supplied."
+  (let ((message (list (cons "role" role) (cons "content" content))))
+    (if turn-number
+        (message-with-turn-number message turn-number)
+        message)))
+
+(fiveam:test test-tag-message-starting-new-turn-begins-at-zero
+  "A turn-starting tag on an empty history begins numbering at 0."
+  (let ((tagged (tag-message-starting-new-turn (test-message "user" "hi") nil)))
+    (fiveam:is (= 0 (message-turn-number tagged)))))
+
+(fiveam:test test-tag-message-starting-new-turn-increments
+  "A turn-starting tag increments relative to the prior last message's turn number."
+  (let* ((history (list (test-message "user" "hi" 0) (test-message "model" "hello" 0)))
+         (tagged (tag-message-starting-new-turn (test-message "user" "again") history)))
+    (fiveam:is (= 1 (message-turn-number tagged)))))
+
+(fiveam:test test-tag-message-continuing-turn-matches-current
+  "A turn-continuing tag matches the current last message's turn number."
+  (let* ((history (list (test-message "user" "hi" 3)))
+         (tagged (tag-message-continuing-turn (test-message "model" "hello") history)))
+    (fiveam:is (= 3 (message-turn-number tagged)))))
+
+(fiveam:test test-tag-messages-continuing-turn-tags-batch
+  "A batch of continuation messages are all tagged with the same current turn number."
+  (let* ((history (list (test-message "user" "hi" 2)))
+         (tagged (tag-messages-continuing-turn
+                  (list (test-message "assistant" "call") (test-message "tool" "result"))
+                  history)))
+    (fiveam:is (every (lambda (message) (= 2 (message-turn-number message))) tagged))))
+
+(fiveam:test test-partition-messages-into-turns-groups-contiguous-runs
+  "Messages sharing a turn tag are grouped into one turn structure, in order."
+  (let* ((messages (list (test-message "user" "hi" 0)
+                         (test-message "model" "hello" 0)
+                         (test-message "user" "bye" 1)
+                         (test-message "model" "goodbye" 1)))
+         (turns (partition-messages-into-turns messages)))
+    (fiveam:is (= 2 (length turns)))
+    (fiveam:is (= 0 (turn-number (first turns))))
+    (fiveam:is (= 2 (length (turn-messages (first turns)))))
+    (fiveam:is (= 1 (turn-number (second turns))))
+    (fiveam:is (= 2 (length (turn-messages (second turns)))))))
+
+(fiveam:test test-turn-contains-function-call-and-response
+  "A single turn legitimately contains its function call/response exchange plus final text."
+  (let* ((messages (list (test-message "user" "do the thing" 0)
+                         (test-message "assistant" "calling tool" 0)
+                         (test-message "tool" "tool result" 0)
+                         (test-message "model" "done" 0)))
+         (turns (partition-messages-into-turns messages)))
+    (fiveam:is (= 1 (length turns)))
+    (fiveam:is (= 4 (length (turn-messages (first turns)))))))
+
+(fiveam:test test-conversation-turn-count-excludes-untagged-digest-messages
+  "CONVERSATION-TURN-COUNT excludes untagged pseudo-turns such as compression digests."
+  (let* ((bot (make-instance 'chatbot :model "gemini-2.5-flash" :backend :google))
+         (messages (list (test-message "system" "[State Digest: ...]")
+                         (test-message "user" "hi" 0)
+                         (test-message "model" "hello" 0)))
+         (conv (make-instance 'conversation :chatbot bot :messages messages)))
+    (fiveam:is (= 1 (conversation-turn-count conv)))
+    (fiveam:is (= 2 (length (conversation-turns conv))))))
+
+(fiveam:test test-get-conversation-turn-finds-numbered-turn
+  "GET-CONVERSATION-TURN retrieves the turn with the requested number, or NIL."
+  (let* ((bot (make-instance 'chatbot :model "gemini-2.5-flash" :backend :google))
+         (messages (list (test-message "user" "hi" 0)
+                         (test-message "model" "hello" 0)
+                         (test-message "user" "bye" 1)
+                         (test-message "model" "goodbye" 1)))
+         (conv (make-instance 'conversation :chatbot bot :messages messages)))
+    (fiveam:is (= 2 (length (turn-messages (get-conversation-turn conv 1)))))
+    (fiveam:is-false (get-conversation-turn conv 99))))
+
+(fiveam:test test-backfill-message-turn-numbers-is-noop-when-fully-tagged
+  "BACKFILL-MESSAGE-TURN-NUMBERS returns an already-tagged history unchanged."
+  (let ((messages (list (test-message "user" "hi" 0) (test-message "model" "hello" 0))))
+    (fiveam:is (equal messages (backfill-message-turn-numbers messages)))))
+
+(fiveam:test test-backfill-message-turn-numbers-assigns-legacy-gemini-history
+  "Legacy untagged history is backfilled using genuine-user-turn detection, keeping a
+Gemini functionResponse message (role user) attached to its preceding turn rather than
+starting a new one."
+  (let* ((messages (list (test-message "user" "do the thing")
+                         (list (cons "role" "model")
+                               (cons "parts" (list (list (cons "functionCall" "tool")))))
+                         (list (cons "role" "user")
+                               (cons "parts" (list (list (cons "functionResponse" "result")))))
+                         (test-message "model" "done")
+                         (test-message "user" "next request")
+                         (test-message "model" "next response")))
+         (backfilled (backfill-message-turn-numbers messages))
+         (turns (partition-messages-into-turns backfilled)))
+    (fiveam:is (= 2 (length turns)))
+    (fiveam:is (= 4 (length (turn-messages (first turns)))))
+    (fiveam:is (= 2 (length (turn-messages (second turns)))))))
+
+(fiveam:test test-select-recent-messages-for-pruning-keeps-whole-turns
+  "Pruning never splits a turn's internal messages between kept and dropped halves."
+  (let* ((big-text (make-string 5000 :initial-element #\a))
+         (turn-0-messages (list (test-message "user" big-text 0)
+                                (test-message "assistant" "calling tool" 0)
+                                (test-message "tool" "tool result" 0)
+                                (test-message "model" big-text 0)))
+         (messages (append turn-0-messages
+                           (list (test-message "user" big-text 1)
+                                 (test-message "model" big-text 1)
+                                 (test-message "user" big-text 2)
+                                 (test-message "model" big-text 2))))
+         (kept (select-recent-messages-for-pruning messages :target-tokens 100))
+         (kept-turns (partition-messages-into-turns kept)))
+    ;; Turn 0 either survives whole (all 4 of its messages) or is entirely dropped;
+    ;; it must never appear as a partial (split) run of messages.
+    (let ((kept-turn-0 (find 0 kept-turns :key #'turn-number)))
+      (when kept-turn-0
+        (fiveam:is (= (length turn-0-messages) (length (turn-messages kept-turn-0))))))
+    ;; At least the configured minimum of 2 most recent turns must survive.
+    (fiveam:is (>= (count-if #'turn-number kept-turns) 2))))
+
+(fiveam:test test-checkpoint-normalize-preserves-turn-tag
+  "Round-tripping a message through checkpoint normalization preserves its turn tag."
+  (let* ((persisted (list (cons :role "user") (cons :content "hi") (cons :turn 2)))
+         (normalized (normalize-persisted-message persisted)))
+    (fiveam:is (= 2 (message-turn-number normalized)))))
+
+(fiveam:test test-checkpoint-normalize-history-backfills-legacy-messages
+  "NORMALIZE-PERSISTED-HISTORY backfills turn numbers for legacy checkpoints lacking them."
+  (let* ((persisted (list (list (cons :role "user") (cons :content "hi"))
+                          (list (cons :role "model") (cons :content "hello"))))
+         (normalized (normalize-persisted-history persisted)))
+    (fiveam:is (every #'message-turn-number normalized))))

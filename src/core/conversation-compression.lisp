@@ -67,33 +67,6 @@
   "Returns a coarse token estimate for one conversation MESSAGE."
   (estimate-text-token-count (message-content-string message)))
 
-(defun message-role-string (message)
-  "Returns MESSAGE's role as a lowercase string when present."
-  (let ((role (cdr (assoc "role" message :test #'string=))))
-    (and role (string-downcase role))))
-
-(defun message-part-with-key-p (part key)
-  "Returns true when PART is an alist containing KEY."
-  (and (consp part)
-       (listp (car part))
-       (assoc key part :test #'string=)))
-
-(defun message-function-response-p (message)
-  "Returns true when MESSAGE carries a Gemini/Google functionResponse part.
-Such messages use role \"user\" but are tool-result turns, not genuine user
-turns, and must stay immediately after their paired functionCall message."
-  (let ((parts (cdr (assoc "parts" message :test #'string=))))
-    (and parts
-         (some (lambda (part) (message-part-with-key-p part "functionResponse"))
-               (coerce parts 'list)))))
-
-(defun genuine-user-turn-message-p (message)
-  "Returns true when MESSAGE is a real user-authored turn.
-Excludes functionResponse tool-result messages, which are also stored with
-role \"user\" but must never be split from their preceding functionCall."
-  (and (string= "user" (or (message-role-string message) ""))
-       (not (message-function-response-p message))))
-
 (defun state-digest-message-p (message)
   "Returns true when MESSAGE is one synthetic compression digest."
   (let ((content (cdr (assoc "content" message :test #'string=))))
@@ -260,26 +233,34 @@ target."
     (min configured-target
          (max 1 (floor (* max-tokens 0.9))))))
 
-(defun select-recent-messages-for-pruning (history &key (target-tokens (effective-context-pruning-target-tokens)))
-  "Returns the newest raw messages to keep after compressing HISTORY."
-  (let ((minimum-keep-count 4)
-        (kept nil)
+(defun turn-token-count (a-turn)
+  "Returns the estimated token count for every message in A-TURN."
+  (reduce #'+ (turn-messages a-turn) :key #'estimate-message-token-count :initial-value 0))
+
+(defun select-recent-turns-for-pruning (turns &key (target-tokens (effective-context-pruning-target-tokens))
+                                                 (minimum-keep-turns 2))
+  "Returns the newest whole TURNS to keep, accumulating from the most recent
+turn backward until TARGET-TOKENS is reached, but never fewer than
+MINIMUM-KEEP-TURNS. Operating on whole turns guarantees a turn's internal
+call/response exchanges are never split across the kept/dropped boundary."
+  (let ((kept nil)
         (kept-tokens 0))
-    (dolist (message (reverse history))
-      (let ((message-tokens (estimate-message-token-count message)))
-        (when (or (< (length kept) minimum-keep-count)
-                  (<= (+ kept-tokens message-tokens) target-tokens))
-          (push message kept)
-          (incf kept-tokens message-tokens))))
-    (let* ((first-user-index
-             (position-if #'genuine-user-turn-message-p kept)))
-      (cond
-        ((or (null kept) (zerop first-user-index))
-         kept)
-        (first-user-index
-         (subseq kept first-user-index))
-        (t
-         kept)))))
+    (dolist (a-turn (reverse turns))
+      (let ((turn-tokens (turn-token-count a-turn)))
+        (when (or (< (length kept) minimum-keep-turns)
+                  (<= (+ kept-tokens turn-tokens) target-tokens))
+          (push a-turn kept)
+          (incf kept-tokens turn-tokens))))
+    kept))
+
+(defun select-recent-messages-for-pruning (history &key (target-tokens (effective-context-pruning-target-tokens)))
+  "Returns the newest raw messages to keep after compressing HISTORY, selecting
+whole turns (via the authoritative per-message turn tag) so a turn's
+call/response exchanges are never split between the kept and dropped halves."
+  (let* ((backfilled-history (backfill-message-turn-numbers history))
+         (turns (partition-messages-into-turns backfilled-history))
+         (kept-turns (select-recent-turns-for-pruning turns :target-tokens target-tokens)))
+    (apply #'append (mapcar #'turn-messages kept-turns))))
 
 (defun make-context-digest-message (digest)
   "Returns a synthetic system message containing DIGEST."

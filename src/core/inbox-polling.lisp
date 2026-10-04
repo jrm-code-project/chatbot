@@ -379,8 +379,18 @@ email is rejected/quarantined."
                       (getf parsed-email :body)))))
 
 (defun inject-inbox-messages (messages parsed-emails)
-  "Pure function returning MESSAGES with one synthetic notification message appended per entry in PARSED-EMAILS."
-  (append messages (mapcar #'make-inbox-notification-message parsed-emails)))
+  "Pure function returning MESSAGES with one synthetic notification message appended per entry in PARSED-EMAILS.
+Each notification starts its own new turn: as an asynchronous event rather than
+a continuation of whatever turn last ended, it must not be left untagged, since
+an untagged trailing message would make the next live user turn's tag
+computation see no turn number and incorrectly restart numbering at 0."
+  (let ((result messages))
+    (dolist (parsed-email parsed-emails result)
+      (setf result
+            (append result
+                    (list (tag-message-starting-new-turn
+                           (make-inbox-notification-message parsed-email)
+                           result)))))))
 
 (defun poll-and-inject-persona-inbox (bot messages)
   "Returns MESSAGES with any pending S3 inbox emails for BOT folded in as synthetic system messages.
