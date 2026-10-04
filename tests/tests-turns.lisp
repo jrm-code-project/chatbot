@@ -224,3 +224,51 @@ starting a new one."
          (kept-turns (partition-messages-into-turns (recent-turns-messages messages))))
     (fiveam:is (= 3 (length kept-turns)))
     (fiveam:is (equal '(17 18 19) (mapcar #'turn-number kept-turns)))))
+
+(fiveam:test test-messages-without-turn-tags-strips-the-turn-key
+  "MESSAGES-WITHOUT-TURN-TAGS removes the internal \"turn\" bookkeeping field
+from every message, leaving all other fields untouched."
+  (let* ((tagged (list (test-message "user" "hi" 3) (test-message "model" "hello" 3)))
+         (stripped (messages-without-turn-tags tagged)))
+    (dolist (message stripped)
+      (fiveam:is-false (assoc "turn" message :test #'string=)))
+    (fiveam:is (string= "hi" (cdr (assoc "content" (first stripped) :test #'string=))))))
+
+(fiveam:test test-google-tool-recursion-state-never-leaks-turn-tag-into-request-contents
+  "GOOGLE-TOOL-RECURSION-STATE's :REQUEST-CONTENTS never carries the internal
+\"turn\" bookkeeping field, since providers reject unrecognized fields."
+  (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-flash-latest" :persona-name "V"))
+         (history (list (test-message "user" "hi" 0)))
+         (conv (make-instance 'conversation :chatbot bot :messages history))
+         (outcome (list :request-contents (list (list (cons "role" "user") (cons "content" "hi")))
+                       :file-attachments nil
+                       :effective-model "gemini-flash-latest"
+                       :effective-generation-config nil
+                       :cached-content-name nil
+                       :bypass-cache-p t
+                       :malformed-response-fallback-attempted-p nil))
+         (tagged-recursion-messages
+           (tag-messages-continuing-turn
+            (list (test-message "model" "functionCall-ish") (test-message "user" "functionResponse-ish"))
+            history))
+         (state (google-tool-recursion-state bot conv outcome history tagged-recursion-messages)))
+    (dolist (message (getf state :request-contents))
+      (fiveam:is-false (assoc "turn" message :test #'string=)))))
+
+(fiveam:test test-openai-tool-recursion-state-never-leaks-turn-tag-into-request-messages
+  "OPENAI-TOOL-RECURSION-STATE's :REQUEST-MESSAGES never carries the internal
+\"turn\" bookkeeping field, since providers reject unrecognized fields."
+  (let* ((bot (make-instance 'chatbot :backend :openai :model "gpt-5" :persona-name "V"))
+         (history (list (test-message "user" "hi" 0)))
+         (conv (make-instance 'conversation :chatbot bot :messages history))
+         (outcome (list :request-messages (list (list (cons "role" "user") (cons "content" "hi")))
+                       :file-attachments nil
+                       :effective-generation-config nil
+                       :malformed-response-retry-attempted-p nil))
+         (tagged-recursion-messages
+           (tag-messages-continuing-turn
+            (list (test-message "assistant" "tool-call-ish") (test-message "tool" "tool-result-ish"))
+            history))
+         (state (openai-tool-recursion-state bot conv outcome history tagged-recursion-messages)))
+    (dolist (message (getf state :request-messages))
+      (fiveam:is-false (assoc "turn" message :test #'string=)))))

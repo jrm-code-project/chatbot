@@ -559,6 +559,15 @@ are naturally shared across multiple conversation snapshots."
   "Returns a copy of MESSAGE tagged with TURN-NUMBER."
   (acons "turn" turn-number (remove "turn" message :key #'car :test #'string=)))
 
+(defun message-without-turn-tag (message)
+  "Returns a copy of MESSAGE with its \"turn\" tag removed, suitable for sending
+to a provider API, which has no knowledge of this internal bookkeeping field."
+  (remove "turn" message :key #'car :test #'string=))
+
+(defun messages-without-turn-tags (messages)
+  "Returns MESSAGES with each message's \"turn\" tag removed; see MESSAGE-WITHOUT-TURN-TAG."
+  (mapcar #'message-without-turn-tag messages))
+
 (defun next-turn-number-for-messages (messages)
   "Returns the turn number a brand-new, live user prompt should receive after MESSAGES."
   (if (null messages)

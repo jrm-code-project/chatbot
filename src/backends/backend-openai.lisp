@@ -85,7 +85,7 @@
                         (getf outcome :effective-generation-config)
                         :history-messages recursive-history
                         :request-messages (append (getf outcome :request-messages)
-                                                  recursion-messages)))
+                                                  (messages-without-turn-tags recursion-messages))))
 
 (defun continue-openai-provider-tool-recursion (bot conversation outcome next-depth step)
   "Continues the OpenAI-compatible turn loop after the model requested tool execution."

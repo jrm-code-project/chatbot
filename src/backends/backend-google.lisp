@@ -289,7 +289,7 @@
    (getf outcome :effective-model)
    (getf outcome :effective-generation-config)
    :request-contents (append (getf outcome :request-contents)
-                            recursion-messages)
+                            (messages-without-turn-tags recursion-messages))
    :history-messages recursive-history
    :cached-content-name (getf outcome :cached-content-name)
    :bypass-cache-p (getf outcome :bypass-cache-p)
