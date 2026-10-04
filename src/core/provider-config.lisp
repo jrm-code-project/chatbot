@@ -68,16 +68,29 @@ Unknown backends fall back to the Gemini default."
 (defparameter *cheap-summarization-models*
   '((:gemini . "gemini-flash-lite-latest")
     (:google . "gemini-flash-lite-latest")
-    (:openai . "gpt-4o-mini")
-    (:grok . "grok-4.7"))
+    (:openai . "gpt-4o-mini"))
   "Cheap model names, keyed by backend, used for internal history-digest
 summarization instead of the parent conversation's (potentially expensive)
 model. Backends without a configured entry fall back to the caller-supplied
 default model.")
 
+(defparameter *cheap-summarization-backend-overrides*
+  '((:grok . :google))
+  "Backend overrides used for internal history-digest summarization.
+Backends listed here lack a suitable cheap model of their own, so cheap
+summarization requests are instead routed to the overriding backend.")
+
+(defun cheap-summarization-backend (backend)
+  "Returns the backend that should actually run a cheap summarization request
+on BACKEND's behalf, per *CHEAP-SUMMARIZATION-BACKEND-OVERRIDES*."
+  (or (cdr (assoc backend *cheap-summarization-backend-overrides*))
+      backend))
+
 (defun cheap-summarization-model (backend default-model)
   "Returns the configured cheap summarization model for BACKEND, or
-DEFAULT-MODEL when BACKEND has no cheaper model configured."
+DEFAULT-MODEL when BACKEND has no cheaper model configured. BACKEND should
+already be resolved through CHEAP-SUMMARIZATION-BACKEND when the caller
+intends to dispatch the summarization request to a different backend."
   (or (cdr (assoc backend *cheap-summarization-models*))
       default-model))
 

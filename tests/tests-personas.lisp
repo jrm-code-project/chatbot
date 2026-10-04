@@ -1512,6 +1512,32 @@ data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"id\":\"sessio
         (fiveam:is (stringp digest))
         (fiveam:is (<= (estimate-text-token-count digest) 8))))))
 
+(fiveam:test test-summarize-old-history-routes-grok-backend-to-google-cheap-model
+  "SUMMARIZE-OLD-HISTORY routes a :GROK conversation's cheap summarization request
+to the :GOOGLE backend's gemini-flash-lite-latest model, since Grok has no
+suitable cheap model of its own."
+  (let* ((*context-pruning-threshold-characters* nil)
+        (*context-pruning-estimated-max-tokens* 100)
+        (*context-pruning-estimated-target-tokens* 20)
+        (*context-pruning-max-digest-tokens* 8)
+        (conversation (new-chat :backend :grok))
+        (long-summary (make-string 200 :initial-element #\D))
+        captured-url)
+    (let ((*gemini-api-key-function* (lambda () "mocked-api-key"))
+         (*http-post-function*
+           (lambda (url &rest args)
+             (declare (ignore args))
+             (setf captured-url url)
+             (values
+              (format nil "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"~A\"}], \"role\": \"model\"}}]}" long-summary)
+              200))))
+      (summarize-old-history
+       (list (list (cons "role" "user") (cons "content" "First turn"))
+             (list (cons "role" "model") (cons "content" "Second turn")))
+       conversation)
+      (fiveam:is (search "generativelanguage.googleapis.com" captured-url))
+      (fiveam:is (search "gemini-flash-lite-latest" captured-url)))))
+
 (fiveam:test test-context-pruning-does-not-trigger-when-fixed-context-alone-exceeds-budget
   (let* ((*context-pruning-threshold-characters* nil)
         (*context-pruning-estimated-max-tokens* 100)

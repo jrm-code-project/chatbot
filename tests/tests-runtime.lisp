@@ -1299,6 +1299,20 @@ After fence.")
                         (chatbot-model (conversation-chatbot (new-chat :backend :lm-studio)))))
     (fiveam:is (string= "gemini-custom" (backend-default-model :unknown-backend)))))
 
+(fiveam:test test-cheap-summarization-backend-overrides-grok-to-google
+  "CHEAP-SUMMARIZATION-BACKEND redirects :GROK to :GOOGLE (no cheap Grok model
+exists), while leaving other backends unchanged."
+  (fiveam:is (eq :google (cheap-summarization-backend :grok)))
+  (fiveam:is (eq :gemini (cheap-summarization-backend :gemini)))
+  (fiveam:is (eq :google (cheap-summarization-backend :google)))
+  (fiveam:is (eq :openai (cheap-summarization-backend :openai))))
+
+(fiveam:test test-cheap-summarization-model-for-redirected-grok-backend
+  "Resolving :GROK through CHEAP-SUMMARIZATION-BACKEND yields the Gemini-family
+cheap model gemini-flash-lite-latest."
+  (fiveam:is (string= "gemini-flash-lite-latest"
+                      (cheap-summarization-model (cheap-summarization-backend :grok) "grok-4.7"))))
+
 (fiveam:test test-chatbot-direct-instance-uses-configured-default-model
   (let ((*backend-default-models*
           '((:gemini . "gemini-direct")

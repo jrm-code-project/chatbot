@@ -29,8 +29,9 @@
          ;; Always summarize with a cheap model, regardless of the parent
          ;; conversation's (potentially expensive) model, since digest
          ;; generation is the largest single input this system ever sends.
-         (conv (new-chat :backend (chatbot-backend bot)
-                         :model (cheap-summarization-model (chatbot-backend bot) (chatbot-model bot))
+         (conv (new-chat :backend (cheap-summarization-backend (chatbot-backend bot))
+                         :model (cheap-summarization-model (cheap-summarization-backend (chatbot-backend bot))
+                                                           (chatbot-model bot))
                          :runtime-context (chatbot-runtime-context bot)))
          (summary
            (call-with-runtime-context
@@ -334,8 +335,9 @@ call/response exchanges are never split between the kept and dropped halves."
                 (digest (getf final-pass :digest))
                 (breakdown (conversation-context-token-breakdown conversation compressed-history))
                 (main-model (chatbot-model (conversation-chatbot conversation)))
-                (digest-model (cheap-summarization-model (chatbot-backend (conversation-chatbot conversation))
-                                                          main-model))
+                (digest-model (cheap-summarization-model
+                               (cheap-summarization-backend (chatbot-backend (conversation-chatbot conversation)))
+                               main-model))
                 (main-model-price (estimated-gemini-model-input-price-per-token main-model))
                 (digest-model-price (estimated-gemini-model-input-price-per-token digest-model))
                 (old-messages-tokens (estimated-history-token-count old-messages))
