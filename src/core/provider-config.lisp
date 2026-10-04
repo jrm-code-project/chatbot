@@ -69,7 +69,7 @@ Unknown backends fall back to the Gemini default."
   '((:gemini . "gemini-flash-lite-latest")
     (:google . "gemini-flash-lite-latest")
     (:openai . "gpt-4o-mini")
-    (:grok . "grok-2"))
+    (:grok . "grok-4.7"))
   "Cheap model names, keyed by backend, used for internal history-digest
 summarization instead of the parent conversation's (potentially expensive)
 model. Backends without a configured entry fall back to the caller-supplied
