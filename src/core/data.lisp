@@ -675,6 +675,30 @@ were formally tracked; new history is always tagged when appended."
   "Returns CONVERSATION's TURN structure numbered NUMBER, or NIL when absent."
   (find number (conversation-turns conversation) :key #'turn-number))
 
+;;; Not to be confused with the unrelated ROUND-ROBIN-SESSION-TRANSCRIPT,
+;;; which records shared dialogue across multiple participants rather than
+;;; one conversation's own turns.
+(defstruct (chat-transcript (:constructor %make-chat-transcript))
+  "The formal, ordered record of a conversation: the chronological series of
+TURN structures a conversation accumulates, one new turn per live interaction
+with the model. It is a derived, read-only view (like CONVERSATION-TURNS,
+which it wraps) rather than separately stored state, so it is always
+consistent with CONVERSATION-MESSAGES and never needs to be kept in sync by
+callers."
+  (turns nil :type list :read-only t))
+
+(defun conversation-chat-transcript (conversation)
+  "Returns CONVERSATION's CHAT-TRANSCRIPT: its turns in chronological order."
+  (%make-chat-transcript :turns (conversation-turns conversation)))
+
+(defun chat-transcript-turn-count (a-chat-transcript)
+  "Returns the number of formal turns recorded in A-CHAT-TRANSCRIPT."
+  (count-if #'turn-number (chat-transcript-turns a-chat-transcript)))
+
+(defun get-chat-transcript-turn (a-chat-transcript number)
+  "Returns A-CHAT-TRANSCRIPT's TURN structure numbered NUMBER, or NIL when absent."
+  (find number (chat-transcript-turns a-chat-transcript) :key #'turn-number))
+
 (defclass conversation-cache-state ()
   ((cached-content-name
     :initarg :cached-content-name

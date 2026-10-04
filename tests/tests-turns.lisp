@@ -136,3 +136,54 @@ starting a new one."
                           (list (cons :role "model") (cons :content "hello"))))
          (normalized (normalize-persisted-history persisted)))
     (fiveam:is (every #'message-turn-number normalized))))
+
+(fiveam:test test-conversation-chat-transcript-wraps-conversation-turns
+  "CONVERSATION-CHAT-TRANSCRIPT is a CHAT-TRANSCRIPT wrapping CONVERSATION-TURNS."
+  (let* ((bot (make-instance 'chatbot :model "gemini-2.5-flash" :backend :google))
+         (messages (list (test-message "user" "hi" 0)
+                         (test-message "model" "hello" 0)
+                         (test-message "user" "bye" 1)
+                         (test-message "model" "goodbye" 1)))
+         (conv (make-instance 'conversation :chatbot bot :messages messages))
+         (a-chat-transcript (conversation-chat-transcript conv)))
+    (fiveam:is (chat-transcript-p a-chat-transcript))
+    (fiveam:is (equal (mapcar #'turn-number (conversation-turns conv))
+                     (mapcar #'turn-number (chat-transcript-turns a-chat-transcript))))
+    (fiveam:is (equal (mapcar #'turn-messages (conversation-turns conv))
+                     (mapcar #'turn-messages (chat-transcript-turns a-chat-transcript))))
+    (fiveam:is (= 2 (chat-transcript-turn-count a-chat-transcript)))
+    (fiveam:is (= 1 (turn-number (get-chat-transcript-turn a-chat-transcript 1))))
+    (fiveam:is-false (get-chat-transcript-turn a-chat-transcript 99))))
+
+(fiveam:test test-chat-transcript-excludes-untagged-digest-messages
+  "CHAT-TRANSCRIPT-TURN-COUNT excludes untagged pseudo-turns such as compression digests."
+  (let* ((bot (make-instance 'chatbot :model "gemini-2.5-flash" :backend :google))
+         (messages (list (test-message "system" "[State Digest: ...]")
+                         (test-message "user" "hi" 0)
+                         (test-message "model" "hello" 0)))
+         (conv (make-instance 'conversation :chatbot bot :messages messages))
+         (a-chat-transcript (conversation-chat-transcript conv)))
+    (fiveam:is (= 1 (chat-transcript-turn-count a-chat-transcript)))
+    (fiveam:is (= 2 (length (chat-transcript-turns a-chat-transcript))))))
+
+(fiveam:test test-chat-transcript-gains-one-turn-per-live-model-interaction
+  "Each live interaction with the model appends exactly one new turn to the transcript."
+  (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
+         (conv (make-instance 'conversation :chatbot bot))
+         (reply-text "placeholder"))
+    (flet ((mocked-google-response (url &rest args)
+             (declare (ignore url args))
+             (values (format nil "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"~A\"}], \"role\": \"model\"}}]}"
+                            reply-text)
+                     200)))
+      (let ((*gemini-api-key-function* (lambda () "mocked-google-api-key"))
+            (*http-post-function* #'mocked-google-response))
+        (fiveam:is (= 0 (chat-transcript-turn-count (conversation-chat-transcript conv))))
+        (setf reply-text "First reply")
+        (test-chat-google bot "First prompt" conv nil)
+        (fiveam:is (= 1 (chat-transcript-turn-count (conversation-chat-transcript conv))))
+        (setf reply-text "Second reply")
+        (test-chat-google bot "Second prompt" conv nil)
+        (fiveam:is (= 2 (chat-transcript-turn-count (conversation-chat-transcript conv))))
+        (let ((turns (chat-transcript-turns (conversation-chat-transcript conv))))
+          (fiveam:is (equal '(0 1) (mapcar #'turn-number turns))))))))
