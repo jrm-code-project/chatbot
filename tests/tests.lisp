@@ -131,7 +131,14 @@ existing RUN-ALL-TESTS contract while using FiveAM's public result API."
               (*texttospeech-api-key* nil)
               (*play-audio-file-function* (lambda (path)
                                             (declare (ignore path))
-                                            nil)))
+                                            nil))
+              ;; Master kill-switch: prevents any test from spawning a real background
+              ;; Dense Fact Card LLM/ChromaDB call (e.g. when a real ChromaDB server
+              ;; happens to be reachable on the developer's machine), which would race
+              ;; against and consume entries from unrelated tests' own mocked HTTP
+              ;; response queues. Individual tests may locally shadow
+              ;; *fact-cards-enabled-p* to exercise the feature with their own mocks.
+              (*fact-cards-enabled-p* nil))
           (let ((results (fiveam:run 'chatbot-suite)))
             (fiveam:explain! results)
             (test-results-passed-p results)))))

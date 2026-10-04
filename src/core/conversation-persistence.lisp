@@ -60,6 +60,7 @@
     (let ((text (apply-chat-turn-result result effective-conversation)))
       (when effective-conversation
         (decrement-prompt-decorations effective-conversation)
+        (maybe-generate-turn-fact-card-in-background effective-conversation)
         (compress-conversation-context-if-needed effective-conversation)
         (checkpoint-conversation-after-chat effective-conversation))
       (speak-chat-response-in-background text)
