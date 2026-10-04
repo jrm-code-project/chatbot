@@ -187,3 +187,40 @@ starting a new one."
         (fiveam:is (= 2 (chat-transcript-turn-count (conversation-chat-transcript conv))))
         (let ((turns (chat-transcript-turns (conversation-chat-transcript conv))))
           (fiveam:is (equal '(0 1) (mapcar #'turn-number turns))))))))
+
+(fiveam:test test-recent-turns-messages-is-noop-within-limit
+  "RECENT-TURNS-MESSAGES returns MESSAGES unchanged when at most MAX-TURNS turns are present."
+  (let ((messages (list (test-message "user" "hi" 0) (test-message "model" "hello" 0))))
+    (fiveam:is (equal messages (recent-turns-messages messages 16)))))
+
+(fiveam:test test-recent-turns-messages-drops-oldest-turns-beyond-the-limit
+  "RECENT-TURNS-MESSAGES keeps only the MAX-TURNS most recent numbered turns."
+  (let* ((messages (loop for n from 0 below 20
+                        append (list (test-message "user" (format nil "prompt ~D" n) n)
+                                   (test-message "model" (format nil "reply ~D" n) n))))
+         (kept (recent-turns-messages messages 16))
+         (kept-turns (partition-messages-into-turns kept)))
+    (fiveam:is (= 16 (length kept-turns)))
+    (fiveam:is (equal (loop for n from 4 below 20 collect n)
+                     (mapcar #'turn-number kept-turns)))))
+
+(fiveam:test test-recent-turns-messages-always-keeps-untagged-digest-messages
+  "RECENT-TURNS-MESSAGES preserves untagged compression-digest messages regardless of MAX-TURNS."
+  (let* ((messages (append (list (test-message "system" "[State Digest: ...]"))
+                          (loop for n from 0 below 20
+                                append (list (test-message "user" (format nil "prompt ~D" n) n)
+                                           (test-message "model" (format nil "reply ~D" n) n)))))
+         (kept (recent-turns-messages messages 16))
+         (kept-turns (partition-messages-into-turns kept)))
+    (fiveam:is (null (turn-number (first kept-turns))))
+    (fiveam:is (= 16 (count-if #'turn-number kept-turns)))))
+
+(fiveam:test test-recent-turns-messages-defaults-to-max-context-turns
+  "RECENT-TURNS-MESSAGES defaults its limit to *MAX-CONTEXT-TURNS*."
+  (let* ((messages (loop for n from 0 below 20
+                        append (list (test-message "user" (format nil "prompt ~D" n) n)
+                                   (test-message "model" (format nil "reply ~D" n) n))))
+         (*max-context-turns* 3)
+         (kept-turns (partition-messages-into-turns (recent-turns-messages messages))))
+    (fiveam:is (= 3 (length kept-turns)))
+    (fiveam:is (equal '(17 18 19) (mapcar #'turn-number kept-turns)))))

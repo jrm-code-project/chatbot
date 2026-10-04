@@ -118,7 +118,7 @@
           :history-messages (or history-messages
                               (stateless-history-messages current-messages decorated))
           :request-contents (or request-contents
-                               (build-generate-content-request-contents current-messages
+                               (build-generate-content-request-contents (recent-turns-messages current-messages)
                                                                         decorated
                                                                         :chatbot bot
                                                                         :persona-memory persona-memory

@@ -19,7 +19,9 @@
           :history-messages (or history-messages
                                (stateless-history-messages current-messages decorated))
           :request-messages (or request-messages
-                                (build-openai-request-messages system-inst current-messages input
+                                (build-openai-request-messages system-inst
+                                                               (recent-turns-messages current-messages)
+                                                               input
                                                                :chatbot bot
                                                                :persona-memory persona-memory
                                                                :persona-diary-entries persona-diary-entries

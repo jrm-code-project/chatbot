@@ -624,6 +624,26 @@ numbering for untagged legacy history should backfill turn numbers first."
   "Returns the number of formal turns recorded in CONVERSATION."
   (count-if #'turn-number (conversation-turns conversation)))
 
+(defparameter *max-context-turns* 16
+  "Maximum number of most-recent numbered turns included when building the
+message history sent to the model for one request. This bounds only the
+per-request context window -- CONVERSATION-MESSAGES itself is never
+truncated by this, so turn numbering, checkpointing, and compression
+continue to operate on full history.")
+
+(defun recent-turns-messages (messages &optional (max-turns *max-context-turns*))
+  "Returns MESSAGES restricted to the MAX-TURNS most recently numbered turns,
+preserving any untagged (e.g. compressed-digest) messages in their original
+position. A no-op when MESSAGES already contains at most MAX-TURNS numbered
+turns."
+  (let* ((turns (partition-messages-into-turns messages))
+         (numbered-turn-numbers (remove nil (mapcar #'turn-number turns)))
+         (kept-numbers (last numbered-turn-numbers max-turns)))
+    (loop for a-turn in turns
+          when (or (null (turn-number a-turn))
+                   (member (turn-number a-turn) kept-numbers))
+            append (turn-messages a-turn))))
+
 (defun message-role-string (message)
   "Returns MESSAGE's role as a lowercase string when present."
   (let ((role (cdr (assoc "role" message :test #'string=))))
