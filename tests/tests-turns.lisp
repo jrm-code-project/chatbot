@@ -3,37 +3,48 @@
 (in-package "CHATBOT")
 (fiveam:in-suite chatbot-suite)
 
-(defun test-message (role content &optional turn-number)
-  "Returns a minimal role/content message alist, tagged with TURN-NUMBER when supplied."
+(defun test-message (role content &optional turn-timestamp)
+  "Returns a minimal role/content message alist, tagged with TURN-TIMESTAMP when supplied."
   (let ((message (list (cons "role" role) (cons "content" content))))
-    (if turn-number
-        (message-with-turn-number message turn-number)
+    (if turn-timestamp
+        (message-with-turn-timestamp message turn-timestamp)
         message)))
 
 (fiveam:test test-tag-message-starting-new-turn-begins-at-zero
-  "A turn-starting tag on an empty history begins numbering at 0."
-  (let ((tagged (tag-message-starting-new-turn (test-message "user" "hi") nil)))
-    (fiveam:is (= 0 (message-turn-number tagged)))))
+  "A turn-starting tag on an empty history receives the current wall-clock timestamp."
+  (let* ((*current-turn-timestamp-function* (lambda () 100))
+         (tagged (tag-message-starting-new-turn (test-message "user" "hi") nil)))
+    (fiveam:is (= 100 (message-turn-timestamp tagged)))))
 
 (fiveam:test test-tag-message-starting-new-turn-increments
-  "A turn-starting tag increments relative to the prior last message's turn number."
+  "A turn-starting tag receives a timestamp strictly greater than the prior last message's."
   (let* ((history (list (test-message "user" "hi" 0) (test-message "model" "hello" 0)))
+         (*current-turn-timestamp-function* (lambda () 1))
          (tagged (tag-message-starting-new-turn (test-message "user" "again") history)))
-    (fiveam:is (= 1 (message-turn-number tagged)))))
+    (fiveam:is (= 1 (message-turn-timestamp tagged)))))
+
+(fiveam:test test-tag-message-starting-new-turn-advances-when-clock-does-not
+  "When the wall clock would not exceed the previous turn's timestamp, the new
+turn's timestamp is advanced by *TURN-TIMESTAMP-MINIMUM-INCREMENT* instead,
+guaranteeing strictly increasing turn timestamps even under a stalled clock."
+  (let* ((history (list (test-message "user" "hi" 5)))
+         (*current-turn-timestamp-function* (lambda () 5))
+         (tagged (tag-message-starting-new-turn (test-message "user" "again") history)))
+    (fiveam:is (= (+ 5 *turn-timestamp-minimum-increment*) (message-turn-timestamp tagged)))))
 
 (fiveam:test test-tag-message-continuing-turn-matches-current
-  "A turn-continuing tag matches the current last message's turn number."
+  "A turn-continuing tag matches the current last message's turn timestamp."
   (let* ((history (list (test-message "user" "hi" 3)))
          (tagged (tag-message-continuing-turn (test-message "model" "hello") history)))
-    (fiveam:is (= 3 (message-turn-number tagged)))))
+    (fiveam:is (= 3 (message-turn-timestamp tagged)))))
 
 (fiveam:test test-tag-messages-continuing-turn-tags-batch
-  "A batch of continuation messages are all tagged with the same current turn number."
+  "A batch of continuation messages are all tagged with the same current turn timestamp."
   (let* ((history (list (test-message "user" "hi" 2)))
          (tagged (tag-messages-continuing-turn
                   (list (test-message "assistant" "call") (test-message "tool" "result"))
                   history)))
-    (fiveam:is (every (lambda (message) (= 2 (message-turn-number message))) tagged))))
+    (fiveam:is (every (lambda (message) (= 2 (message-turn-timestamp message))) tagged))))
 
 (fiveam:test test-partition-messages-into-turns-groups-contiguous-runs
   "Messages sharing a turn tag are grouped into one turn structure, in order."
@@ -43,9 +54,9 @@
                          (test-message "model" "goodbye" 1)))
          (turns (partition-messages-into-turns messages)))
     (fiveam:is (= 2 (length turns)))
-    (fiveam:is (= 0 (turn-number (first turns))))
+    (fiveam:is (= 0 (turn-timestamp (first turns))))
     (fiveam:is (= 2 (length (turn-messages (first turns)))))
-    (fiveam:is (= 1 (turn-number (second turns))))
+    (fiveam:is (= 1 (turn-timestamp (second turns))))
     (fiveam:is (= 2 (length (turn-messages (second turns)))))))
 
 (fiveam:test test-turn-contains-function-call-and-response
@@ -68,8 +79,8 @@
     (fiveam:is (= 1 (conversation-turn-count conv)))
     (fiveam:is (= 2 (length (conversation-turns conv))))))
 
-(fiveam:test test-get-conversation-turn-finds-numbered-turn
-  "GET-CONVERSATION-TURN retrieves the turn with the requested number, or NIL."
+(fiveam:test test-get-conversation-turn-finds-timestamped-turn
+  "GET-CONVERSATION-TURN retrieves the turn with the requested timestamp, or NIL."
   (let* ((bot (make-instance 'chatbot :model "gemini-2.5-flash" :backend :google))
          (messages (list (test-message "user" "hi" 0)
                          (test-message "model" "hello" 0)
@@ -79,12 +90,23 @@
     (fiveam:is (= 2 (length (turn-messages (get-conversation-turn conv 1)))))
     (fiveam:is-false (get-conversation-turn conv 99))))
 
-(fiveam:test test-backfill-message-turn-numbers-is-noop-when-fully-tagged
-  "BACKFILL-MESSAGE-TURN-NUMBERS returns an already-tagged history unchanged."
-  (let ((messages (list (test-message "user" "hi" 0) (test-message "model" "hello" 0))))
-    (fiveam:is (equal messages (backfill-message-turn-numbers messages)))))
+(fiveam:test test-conversation-turns-sorted-by-increasing-timestamp
+  "CONVERSATION-TURNS returns turns ordered by increasing timestamp even when the
+underlying messages were appended out of chronological order."
+  (let* ((bot (make-instance 'chatbot :model "gemini-2.5-flash" :backend :google))
+         (messages (list (test-message "user" "second" 5)
+                         (test-message "model" "second reply" 5)
+                         (test-message "user" "first" 1)
+                         (test-message "model" "first reply" 1)))
+         (conv (make-instance 'conversation :chatbot bot :messages messages)))
+    (fiveam:is (equal '(1 5) (mapcar #'turn-timestamp (conversation-turns conv))))))
 
-(fiveam:test test-backfill-message-turn-numbers-assigns-legacy-gemini-history
+(fiveam:test test-backfill-message-turn-timestamps-is-noop-when-fully-tagged
+  "BACKFILL-MESSAGE-TURN-TIMESTAMPS returns an already-tagged history unchanged."
+  (let ((messages (list (test-message "user" "hi" 0) (test-message "model" "hello" 0))))
+    (fiveam:is (equal messages (backfill-message-turn-timestamps messages)))))
+
+(fiveam:test test-backfill-message-turn-timestamps-assigns-legacy-gemini-history
   "Legacy untagged history is backfilled using genuine-user-turn detection, keeping a
 Gemini functionResponse message (role user) attached to its preceding turn rather than
 starting a new one."
@@ -96,7 +118,7 @@ starting a new one."
                          (test-message "model" "done")
                          (test-message "user" "next request")
                          (test-message "model" "next response")))
-         (backfilled (backfill-message-turn-numbers messages))
+         (backfilled (backfill-message-turn-timestamps messages))
          (turns (partition-messages-into-turns backfilled)))
     (fiveam:is (= 2 (length turns)))
     (fiveam:is (= 4 (length (turn-messages (first turns)))))
@@ -118,24 +140,24 @@ starting a new one."
          (kept-turns (partition-messages-into-turns kept)))
     ;; Turn 0 either survives whole (all 4 of its messages) or is entirely dropped;
     ;; it must never appear as a partial (split) run of messages.
-    (let ((kept-turn-0 (find 0 kept-turns :key #'turn-number)))
+    (let ((kept-turn-0 (find 0 kept-turns :key #'turn-timestamp :test #'=)))
       (when kept-turn-0
         (fiveam:is (= (length turn-0-messages) (length (turn-messages kept-turn-0))))))
     ;; At least the configured minimum of 2 most recent turns must survive.
-    (fiveam:is (>= (count-if #'turn-number kept-turns) 2))))
+    (fiveam:is (>= (count-if #'turn-timestamp kept-turns) 2))))
 
 (fiveam:test test-checkpoint-normalize-preserves-turn-tag
   "Round-tripping a message through checkpoint normalization preserves its turn tag."
   (let* ((persisted (list (cons :role "user") (cons :content "hi") (cons :turn 2)))
          (normalized (normalize-persisted-message persisted)))
-    (fiveam:is (= 2 (message-turn-number normalized)))))
+    (fiveam:is (= 2 (message-turn-timestamp normalized)))))
 
 (fiveam:test test-checkpoint-normalize-history-backfills-legacy-messages
-  "NORMALIZE-PERSISTED-HISTORY backfills turn numbers for legacy checkpoints lacking them."
+  "NORMALIZE-PERSISTED-HISTORY backfills turn timestamps for legacy checkpoints lacking them."
   (let* ((persisted (list (list (cons :role "user") (cons :content "hi"))
                           (list (cons :role "model") (cons :content "hello"))))
          (normalized (normalize-persisted-history persisted)))
-    (fiveam:is (every #'message-turn-number normalized))))
+    (fiveam:is (every #'message-turn-timestamp normalized))))
 
 (fiveam:test test-conversation-chat-transcript-wraps-conversation-turns
   "CONVERSATION-CHAT-TRANSCRIPT is a CHAT-TRANSCRIPT wrapping CONVERSATION-TURNS."
@@ -147,12 +169,12 @@ starting a new one."
          (conv (make-instance 'conversation :chatbot bot :messages messages))
          (a-chat-transcript (conversation-chat-transcript conv)))
     (fiveam:is (chat-transcript-p a-chat-transcript))
-    (fiveam:is (equal (mapcar #'turn-number (conversation-turns conv))
-                     (mapcar #'turn-number (chat-transcript-turns a-chat-transcript))))
+    (fiveam:is (equal (mapcar #'turn-timestamp (conversation-turns conv))
+                     (mapcar #'turn-timestamp (chat-transcript-turns a-chat-transcript))))
     (fiveam:is (equal (mapcar #'turn-messages (conversation-turns conv))
                      (mapcar #'turn-messages (chat-transcript-turns a-chat-transcript))))
     (fiveam:is (= 2 (chat-transcript-turn-count a-chat-transcript)))
-    (fiveam:is (= 1 (turn-number (get-chat-transcript-turn a-chat-transcript 1))))
+    (fiveam:is (= 1 (turn-timestamp (get-chat-transcript-turn a-chat-transcript 1))))
     (fiveam:is-false (get-chat-transcript-turn a-chat-transcript 99))))
 
 (fiveam:test test-chat-transcript-excludes-untagged-digest-messages
@@ -170,14 +192,16 @@ starting a new one."
   "Each live interaction with the model appends exactly one new turn to the transcript."
   (let* ((bot (make-instance 'chatbot :backend :google :model "gemini-3.5-flash"))
          (conv (make-instance 'conversation :chatbot bot))
-         (reply-text "placeholder"))
+         (reply-text "placeholder")
+         (clock 0))
     (flet ((mocked-google-response (url &rest args)
              (declare (ignore url args))
              (values (format nil "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"~A\"}], \"role\": \"model\"}}]}"
                             reply-text)
                      200)))
       (let ((*gemini-api-key-function* (lambda () "mocked-google-api-key"))
-            (*http-post-function* #'mocked-google-response))
+            (*http-post-function* #'mocked-google-response)
+            (*current-turn-timestamp-function* (lambda () (incf clock))))
         (fiveam:is (= 0 (chat-transcript-turn-count (conversation-chat-transcript conv))))
         (setf reply-text "First reply")
         (test-chat-google bot "First prompt" conv nil)
@@ -186,7 +210,7 @@ starting a new one."
         (test-chat-google bot "Second prompt" conv nil)
         (fiveam:is (= 2 (chat-transcript-turn-count (conversation-chat-transcript conv))))
         (let ((turns (chat-transcript-turns (conversation-chat-transcript conv))))
-          (fiveam:is (equal '(0 1) (mapcar #'turn-number turns))))))))
+          (fiveam:is (equal '(1 2) (mapcar #'turn-timestamp turns))))))))
 
 (fiveam:test test-recent-turns-messages-is-noop-within-limit
   "RECENT-TURNS-MESSAGES returns MESSAGES unchanged when at most MAX-TURNS turns are present."
@@ -194,7 +218,7 @@ starting a new one."
     (fiveam:is (equal messages (recent-turns-messages messages 16)))))
 
 (fiveam:test test-recent-turns-messages-drops-oldest-turns-beyond-the-limit
-  "RECENT-TURNS-MESSAGES keeps only the MAX-TURNS most recent numbered turns."
+  "RECENT-TURNS-MESSAGES keeps only the MAX-TURNS most recently timestamped turns."
   (let* ((messages (loop for n from 0 below 20
                         append (list (test-message "user" (format nil "prompt ~D" n) n)
                                    (test-message "model" (format nil "reply ~D" n) n))))
@@ -202,7 +226,7 @@ starting a new one."
          (kept-turns (partition-messages-into-turns kept)))
     (fiveam:is (= 16 (length kept-turns)))
     (fiveam:is (equal (loop for n from 4 below 20 collect n)
-                     (mapcar #'turn-number kept-turns)))))
+                     (mapcar #'turn-timestamp kept-turns)))))
 
 (fiveam:test test-recent-turns-messages-always-keeps-untagged-digest-messages
   "RECENT-TURNS-MESSAGES preserves untagged compression-digest messages regardless of MAX-TURNS."
@@ -212,8 +236,8 @@ starting a new one."
                                            (test-message "model" (format nil "reply ~D" n) n)))))
          (kept (recent-turns-messages messages 16))
          (kept-turns (partition-messages-into-turns kept)))
-    (fiveam:is (null (turn-number (first kept-turns))))
-    (fiveam:is (= 16 (count-if #'turn-number kept-turns)))))
+    (fiveam:is (null (turn-timestamp (first kept-turns))))
+    (fiveam:is (= 16 (count-if #'turn-timestamp kept-turns)))))
 
 (fiveam:test test-recent-turns-messages-defaults-to-max-context-turns
   "RECENT-TURNS-MESSAGES defaults its limit to *MAX-CONTEXT-TURNS*."
@@ -223,7 +247,7 @@ starting a new one."
          (*max-context-turns* 3)
          (kept-turns (partition-messages-into-turns (recent-turns-messages messages))))
     (fiveam:is (= 3 (length kept-turns)))
-    (fiveam:is (equal '(17 18 19) (mapcar #'turn-number kept-turns)))))
+    (fiveam:is (equal '(17 18 19) (mapcar #'turn-timestamp kept-turns)))))
 
 (fiveam:test test-messages-without-turn-tags-strips-the-turn-key
   "MESSAGES-WITHOUT-TURN-TAGS removes the internal \"turn\" bookkeeping field

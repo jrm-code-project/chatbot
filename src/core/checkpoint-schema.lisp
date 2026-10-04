@@ -123,18 +123,18 @@ flat plist in that case, which would error (or silently misread content)."
 
 (defun normalize-persisted-message (msg)
   "Returns MSG normalized to the internal role/content alist shape, preserving
-the turn tag when present so turn numbering survives a checkpoint round-trip."
-  (let ((turn-number (persisted-message-field msg :turn "turn")))
+the turn tag when present so turn timestamps survive a checkpoint round-trip."
+  (let ((turn-timestamp (persisted-message-field msg :turn "turn")))
     (append (list (cons "role" (persisted-message-field msg :role "role"))
                   (cons "content" (persisted-message-field msg :content "content")))
-            (when turn-number
-              (list (cons "turn" turn-number))))))
+            (when turn-timestamp
+              (list (cons "turn" turn-timestamp))))))
 
 (defun normalize-persisted-history (messages)
   "Returns MESSAGES normalized to the internal role/content alist shape,
 backfilling any legacy messages that predate turn tagging."
   (if (and messages (listp messages))
-      (backfill-message-turn-numbers (mapcar #'normalize-persisted-message messages))
+      (backfill-message-turn-timestamps (mapcar #'normalize-persisted-message messages))
       nil))
 
 (defun recovery-handshake-message ()

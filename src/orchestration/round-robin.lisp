@@ -104,11 +104,11 @@
 (defun build-round-robin-history-messages (transcript participant-name)
   "Returns provider-neutral history for PARTICIPANT-NAME from shared TRANSCRIPT.
 Each transcript entry is re-derived fresh on every participant turn (it is not
-appended incrementally), so entries are tagged with sequential turn numbers by
-their transcript position rather than inheriting any prior tag."
+appended incrementally), so entries are tagged with sequential turn timestamps
+by their transcript position rather than inheriting any prior tag."
   (loop for entry in transcript
-        for turn-number from 0
-        collect (message-with-turn-number
+        for turn-timestamp from 0
+        collect (message-with-turn-timestamp
                  (list (cons "role"
                              (if (and (eq (round-robin-entry-speaker-kind entry) :bot)
                                       (string= participant-name
@@ -116,7 +116,7 @@ their transcript position rather than inheriting any prior tag."
                                  "assistant"
                                  "user"))
                        (cons "content" (labeled-round-robin-entry-content entry)))
-                 turn-number)))
+                 turn-timestamp)))
 
 (defun split-round-robin-transcript-for-live-turn (transcript)
   "Returns the prefix and latest entry from TRANSCRIPT."

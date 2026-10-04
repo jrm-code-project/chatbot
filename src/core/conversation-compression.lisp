@@ -258,7 +258,7 @@ call/response exchanges are never split across the kept/dropped boundary."
   "Returns the newest raw messages to keep after compressing HISTORY, selecting
 whole turns (via the authoritative per-message turn tag) so a turn's
 call/response exchanges are never split between the kept and dropped halves."
-  (let* ((backfilled-history (backfill-message-turn-numbers history))
+  (let* ((backfilled-history (backfill-message-turn-timestamps history))
          (turns (partition-messages-into-turns backfilled-history))
          (kept-turns (select-recent-turns-for-pruning turns :target-tokens target-tokens)))
     (apply #'append (mapcar #'turn-messages kept-turns))))

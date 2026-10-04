@@ -544,20 +544,39 @@ are naturally shared across multiple conversation snapshots."
 ;;; A "turn" is the formal grouping of one live user prompt together with
 ;;; everything the model did in response to it -- including any function/tool
 ;;; call and response exchanges -- ending with the model's final text. Turns
-;;; are numbered with increasing integers starting at 0 for the first live
-;;; interaction. Turn membership is recorded on each message at append time
-;;; (see TAG-MESSAGE-STARTING-NEW-TURN / TAG-MESSAGE-CONTINUING-TURN below)
-;;; rather than inferred later from message content: Gemini function-response
+;;; are tagged with the wall-clock timestamp (in universal-time seconds, with
+;;; sub-second precision) at which they began, so that turns retrieved from
+;;; different sources (the live conversation window, ChromaDB RAG retrieval)
+;;; can always be merged back into one chronologically ordered sequence. Turn
+;;; membership is recorded on each message at append time (see
+;;; TAG-MESSAGE-STARTING-NEW-TURN / TAG-MESSAGE-CONTINUING-TURN below) rather
+;;; than inferred later from message content: Gemini function-response
 ;;; messages are stored with role "user" just like genuine user input, which
 ;;; previously made after-the-fact boundary detection fragile.
 
-(defun message-turn-number (message)
-  "Returns MESSAGE's tagged turn number, or NIL when untagged (e.g. legacy history)."
+(defun current-wall-clock-timestamp ()
+  "Returns the current time as a real number of universal-time seconds with
+added sub-second precision, used to tag conversation turns chronologically."
+  (+ (get-universal-time)
+     (/ (mod (get-internal-real-time) internal-time-units-per-second)
+        (float internal-time-units-per-second 1.0d0))))
+
+(defparameter *current-turn-timestamp-function* #'current-wall-clock-timestamp
+  "Function returning the current wall-clock timestamp used to tag a new
+conversation turn. Overridable for deterministic tests.")
+
+(defparameter *turn-timestamp-minimum-increment* 1/1000000
+  "Minimum amount by which a new turn's timestamp must exceed the previous
+turn's timestamp, enforced when the wall clock lacks enough resolution to
+naturally keep consecutive turns distinct.")
+
+(defun message-turn-timestamp (message)
+  "Returns MESSAGE's tagged turn timestamp, or NIL when untagged (e.g. legacy history)."
   (cdr (assoc "turn" message :test #'string=)))
 
-(defun message-with-turn-number (message turn-number)
-  "Returns a copy of MESSAGE tagged with TURN-NUMBER."
-  (acons "turn" turn-number (remove "turn" message :key #'car :test #'string=)))
+(defun message-with-turn-timestamp (message turn-timestamp)
+  "Returns a copy of MESSAGE tagged with TURN-TIMESTAMP."
+  (acons "turn" turn-timestamp (remove "turn" message :key #'car :test #'string=)))
 
 (defun message-without-turn-tag (message)
   "Returns a copy of MESSAGE with its \"turn\" tag removed, suitable for sending
@@ -568,89 +587,99 @@ to a provider API, which has no knowledge of this internal bookkeeping field."
   "Returns MESSAGES with each message's \"turn\" tag removed; see MESSAGE-WITHOUT-TURN-TAG."
   (mapcar #'message-without-turn-tag messages))
 
-(defun next-turn-number-for-messages (messages)
-  "Returns the turn number a brand-new, live user prompt should receive after MESSAGES."
-  (if (null messages)
-      0
-      (let ((last-number (message-turn-number (car (last messages)))))
-        (if last-number (1+ last-number) 0))))
+(defun next-turn-timestamp-for-messages (messages)
+  "Returns the timestamp a brand-new, live user turn should receive after MESSAGES:
+the current wall-clock time, or, when that would not be strictly greater than
+the previous turn's timestamp (e.g. because the clock lacks enough
+resolution), the previous timestamp advanced by *TURN-TIMESTAMP-MINIMUM-INCREMENT*."
+  (let ((now (funcall *current-turn-timestamp-function*)))
+    (if (null messages)
+        now
+        (let ((last-timestamp (message-turn-timestamp (car (last messages)))))
+          (if (and last-timestamp (<= now last-timestamp))
+              (+ last-timestamp *turn-timestamp-minimum-increment*)
+              now)))))
 
-(defun current-turn-number-for-messages (messages)
-  "Returns the turn number that a continuation message appended after MESSAGES belongs to."
+(defun current-turn-timestamp-for-messages (messages)
+  "Returns the timestamp that a continuation message appended after MESSAGES belongs to."
   (if (null messages)
-      0
-      (or (message-turn-number (car (last messages))) 0)))
+      (funcall *current-turn-timestamp-function*)
+      (or (message-turn-timestamp (car (last messages)))
+          (funcall *current-turn-timestamp-function*))))
 
 (defun tag-message-starting-new-turn (message messages)
   "Returns MESSAGE tagged as the start of a new turn following MESSAGES."
-  (message-with-turn-number message (next-turn-number-for-messages messages)))
+  (message-with-turn-timestamp message (next-turn-timestamp-for-messages messages)))
 
 (defun tag-message-continuing-turn (message messages)
   "Returns MESSAGE tagged as a continuation of the turn currently open at the end of MESSAGES."
-  (message-with-turn-number message (current-turn-number-for-messages messages)))
+  (message-with-turn-timestamp message (current-turn-timestamp-for-messages messages)))
 
 (defun tag-messages-continuing-turn (new-messages messages)
   "Returns NEW-MESSAGES each tagged as continuing the turn currently open at the end of MESSAGES."
-  (let ((turn-number (current-turn-number-for-messages messages)))
-    (mapcar (lambda (message) (message-with-turn-number message turn-number))
+  (let ((turn-timestamp (current-turn-timestamp-for-messages messages)))
+    (mapcar (lambda (message) (message-with-turn-timestamp message turn-timestamp))
             new-messages)))
 
 (defstruct (turn (:constructor %make-turn))
   "One formal conversation turn: a live user prompt plus every message
 produced while responding to it (function/tool call and response exchanges,
 and the final model text), in chronological order."
-  (number nil :type (or null integer) :read-only t)
+  (timestamp nil :type (or null real) :read-only t)
   (messages nil :type list :read-only t))
 
 (defun partition-messages-into-turns (messages)
   "Returns MESSAGES grouped into a chronological list of TURN structures by
-their tagged turn number. Consecutive messages sharing the same (or equally
-absent) turn number are grouped together; callers that need authoritative
-numbering for untagged legacy history should backfill turn numbers first."
+their tagged turn timestamp. Consecutive messages sharing the same (or
+equally absent) turn timestamp are grouped together; callers that need
+authoritative timestamps for untagged legacy history should backfill turn
+timestamps first."
   (let ((turns nil)
-        (current-number :unset)
+        (current-timestamp :unset)
         (current-messages nil))
     (flet ((flush ()
              (when current-messages
-               (push (%make-turn :number (if (eq current-number :unset) nil current-number)
+               (push (%make-turn :timestamp (if (eq current-timestamp :unset) nil current-timestamp)
                                  :messages (reverse current-messages))
                      turns))))
       (dolist (message messages)
-        (let ((number (message-turn-number message)))
-          (unless (eql number current-number)
+        (let ((timestamp (message-turn-timestamp message)))
+          (unless (eql timestamp current-timestamp)
             (flush)
-            (setf current-number number
+            (setf current-timestamp timestamp
                   current-messages nil))
           (push message current-messages)))
       (flush))
     (reverse turns)))
 
 (defun conversation-turns (conversation)
-  "Returns CONVERSATION's messages grouped into a chronological list of TURN structures."
-  (partition-messages-into-turns (conversation-messages conversation)))
+  "Returns CONVERSATION's messages grouped into a chronological list of TURN structures,
+ordered by increasing turn timestamp."
+  (sort (partition-messages-into-turns (conversation-messages conversation))
+        #'< :key (lambda (a-turn) (or (turn-timestamp a-turn) 0))))
 
 (defun conversation-turn-count (conversation)
   "Returns the number of formal turns recorded in CONVERSATION."
-  (count-if #'turn-number (conversation-turns conversation)))
+  (count-if #'turn-timestamp (conversation-turns conversation)))
 
 (defparameter *max-context-turns* 16
-  "Maximum number of most-recent numbered turns included when building the
+  "Maximum number of most-recent timestamped turns included when building the
 message history sent to the model for one request. This bounds only the
 per-request context window -- CONVERSATION-MESSAGES itself is never
-truncated by this, so turn numbering, checkpointing, and compression
+truncated by this, so turn timestamping, checkpointing, and compression
 continue to operate on full history.")
 
 (defun recent-turns-messages (messages &optional (max-turns *max-context-turns*))
-  "Returns MESSAGES restricted to the MAX-TURNS most recently numbered turns,
+  "Returns MESSAGES restricted to the MAX-TURNS most recently timestamped turns,
 preserving any untagged (e.g. compressed-digest) messages in their original
-position. A no-op when MESSAGES already contains at most MAX-TURNS numbered
+position. A no-op when MESSAGES already contains at most MAX-TURNS timestamped
 turns."
   (let* ((turns (partition-messages-into-turns messages))
-         (numbered-turn-numbers (remove nil (mapcar #'turn-number turns)))
-         (kept-numbers (last numbered-turn-numbers max-turns)))
+         (timestamped-turn-timestamps (remove nil (mapcar #'turn-timestamp turns)))
+         (kept-timestamps (last timestamped-turn-timestamps max-turns)))
     (loop for a-turn in turns
-          when (or (null (turn-number a-turn))
-                   (member (turn-number a-turn) kept-numbers))
+          when (or (null (turn-timestamp a-turn))
+                   (member (turn-timestamp a-turn) kept-timestamps :test #'=))
             append (turn-messages a-turn))))
 
 (defun message-role-string (message)
@@ -680,29 +709,30 @@ role \"user\" but must never be split from their preceding functionCall."
   (and (string= "user" (or (message-role-string message) ""))
        (not (message-function-response-p message))))
 
-(defun backfill-message-turn-numbers (messages)
-  "Returns MESSAGES with every untagged message assigned a turn number, using
-GENUINE-USER-TURN-MESSAGE-P to detect legacy turn boundaries. Already-tagged
-messages are returned unchanged (the common case once every message is tagged
-at append time). This exists purely to migrate history captured before turns
-were formally tracked; new history is always tagged when appended."
-  (if (every #'message-turn-number messages)
+(defun backfill-message-turn-timestamps (messages)
+  "Returns MESSAGES with every untagged message assigned a synthetic, strictly
+increasing turn timestamp, using GENUINE-USER-TURN-MESSAGE-P to detect legacy
+turn boundaries. Already-tagged messages are returned unchanged (the common
+case once every message is tagged at append time). This exists purely to
+migrate history captured before turns were formally tracked; new history is
+always tagged with a real wall-clock timestamp at append time."
+  (if (every #'message-turn-timestamp messages)
       messages
-      (let ((turn-number -1))
+      (let ((turn-timestamp -1))
         (mapcar (lambda (message)
-                  (if (message-turn-number message)
+                  (if (message-turn-timestamp message)
                       message
                       (progn
                         (when (genuine-user-turn-message-p message)
-                          (incf turn-number))
-                        (if (minusp turn-number)
+                          (incf turn-timestamp))
+                        (if (minusp turn-timestamp)
                             message
-                            (message-with-turn-number message turn-number)))))
+                            (message-with-turn-timestamp message turn-timestamp)))))
                 messages))))
 
-(defun get-conversation-turn (conversation number)
-  "Returns CONVERSATION's TURN structure numbered NUMBER, or NIL when absent."
-  (find number (conversation-turns conversation) :key #'turn-number))
+(defun get-conversation-turn (conversation timestamp)
+  "Returns CONVERSATION's TURN structure tagged with TIMESTAMP, or NIL when absent."
+  (find timestamp (conversation-turns conversation) :key #'turn-timestamp :test #'=))
 
 ;;; Not to be confused with the unrelated ROUND-ROBIN-SESSION-TRANSCRIPT,
 ;;; which records shared dialogue across multiple participants rather than
@@ -717,16 +747,17 @@ callers."
   (turns nil :type list :read-only t))
 
 (defun conversation-chat-transcript (conversation)
-  "Returns CONVERSATION's CHAT-TRANSCRIPT: its turns in chronological order."
+  "Returns CONVERSATION's CHAT-TRANSCRIPT: its turns in chronological (increasing
+timestamp) order."
   (%make-chat-transcript :turns (conversation-turns conversation)))
 
 (defun chat-transcript-turn-count (a-chat-transcript)
   "Returns the number of formal turns recorded in A-CHAT-TRANSCRIPT."
-  (count-if #'turn-number (chat-transcript-turns a-chat-transcript)))
+  (count-if #'turn-timestamp (chat-transcript-turns a-chat-transcript)))
 
-(defun get-chat-transcript-turn (a-chat-transcript number)
-  "Returns A-CHAT-TRANSCRIPT's TURN structure numbered NUMBER, or NIL when absent."
-  (find number (chat-transcript-turns a-chat-transcript) :key #'turn-number))
+(defun get-chat-transcript-turn (a-chat-transcript timestamp)
+  "Returns A-CHAT-TRANSCRIPT's TURN structure tagged with TIMESTAMP, or NIL when absent."
+  (find timestamp (chat-transcript-turns a-chat-transcript) :key #'turn-timestamp :test #'=))
 
 (defclass conversation-cache-state ()
   ((cached-content-name

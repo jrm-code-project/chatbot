@@ -114,8 +114,10 @@
 
 (fiveam:test test-continue-stateless-tool-recursion-updates-history-and-preserves-order
   (let* ((conversation (new-chat :backend :openai))
-        (history-messages (list (list (cons "role" "user")
-                                      (cons "content" "hello"))))
+        (history-messages (list (message-with-turn-timestamp
+                                 (list (cons "role" "user")
+                                       (cons "content" "hello"))
+                                 0)))
         (recursion-messages (list (list (cons "role" "assistant")
                                         (cons "content" nil)
                                         (cons "tool_calls" (list (list (cons "id" "call-1")))))
@@ -123,7 +125,7 @@
                                         (cons "tool_call_id" "call-1")
                                         (cons "content" "tool result"))))
         ;; Recursion messages continue the turn already open at the end of
-        ;; HISTORY-MESSAGES (turn 0, since its only message is untagged).
+        ;; HISTORY-MESSAGES (turn 0, its tagged turn timestamp).
         (tagged-recursion-messages (tag-messages-continuing-turn recursion-messages history-messages))
         (captured-history nil)
         (captured-messages nil))
@@ -212,8 +214,10 @@
 
 (fiveam:test test-finish-stateless-text-turn-emits-and-persists-history
   (let* ((conversation (new-chat :backend :google))
-        (history-messages (list (list (cons "role" "user")
-                                      (cons "content" "hello"))))
+        (history-messages (list (message-with-turn-timestamp
+                                 (list (cons "role" "user")
+                                       (cons "content" "hello"))
+                                 0)))
         (stream (make-string-output-stream)))
     (let ((*standard-output* stream))
      (fiveam:is (string= "Shared final"
@@ -230,8 +234,10 @@
 
 (fiveam:test test-finish-stateless-text-turn-sanitizes-visible-and-stored-text
   (let* ((conversation (new-chat :backend :google))
-        (history-messages (list (list (cons "role" "user")
-                                      (cons "content" "hello"))))
+        (history-messages (list (message-with-turn-timestamp
+                                 (list (cons "role" "user")
+                                       (cons "content" "hello"))
+                                 0)))
         (stream (make-string-output-stream)))
     (let ((*standard-output* stream))
      (fiveam:is (string= "Shared final"

@@ -85,35 +85,34 @@ mocked HTTP response queues.")
           (log-message :warn "Could not create or get ChromaDB collection"
                        :context `(("collection" . ,collection-name)))
           (let* ((collection-id (cdr (assoc :id collection)))
-                 (id (format nil "fact-turn-~D" (turn-number a-turn)))
+                 (id (format nil "fact-turn-~A" (turn-timestamp a-turn)))
                  (vector (string->embedding-vector fact-card-text :model "gemini-embedding-2"))
-                 (metadata `((:turn--number . ,(turn-number a-turn))
-                             (:timestamp . ,(get-universal-time)))))
+                 (metadata `((:turn--timestamp . ,(turn-timestamp a-turn)))))
             (log-message :info "Persisting turn fact card to ChromaDB"
                          :context `(("persona" . ,persona-name)
-                                    ("turn" . ,(turn-number a-turn))))
+                                    ("turn" . ,(turn-timestamp a-turn))))
             (chroma-add collection-id (list id)
                         :embeddings (list vector)
                         :documents (list fact-card-text)
                         :metadatas (list metadata)))))))
 
 (defun fact-card-query-result->entry (result)
-  "Returns a (:turn-number :document :distance) plist for one fact-card query RESULT,
-or NIL when RESULT carries no turn-number metadata."
+  "Returns a (:turn-timestamp :document :distance) plist for one fact-card query RESULT,
+or NIL when RESULT carries no turn-timestamp metadata."
   (let* ((meta (getf result :metadata))
-         (turn-number (cdr (assoc :turn--number meta))))
-    (when turn-number
-      (list :turn-number turn-number
+         (turn-timestamp (cdr (assoc :turn--timestamp meta))))
+    (when turn-timestamp
+      (list :turn-timestamp turn-timestamp
             :document (getf result :document)
             :distance (getf result :distance)))))
 
 (defun retrieve-relevant-turn-fact-cards (persona-name query-text &optional (limit 8))
-  "Returns up to LIMIT fact-card entries (:turn-number :document :distance)
+  "Returns up to LIMIT fact-card entries (:turn-timestamp :document :distance)
 from PERSONA-NAME's ChromaDB Facts collection most relevant to QUERY-TEXT by
-cosine similarity, deduplicated by turn number and sorted in ascending
-turn-number order (so callers can prepend them chronologically). Returns NIL
-when PERSONA-NAME or QUERY-TEXT is absent, ChromaDB is unreachable, or no
-Facts collection yet exists for this persona."
+cosine similarity, deduplicated by turn timestamp and sorted in ascending
+(chronological) timestamp order, so callers can prepend them chronologically.
+Returns NIL when PERSONA-NAME or QUERY-TEXT is absent, ChromaDB is
+unreachable, or no Facts collection yet exists for this persona."
   (handler-case
       (when (and persona-name (stringp query-text) (string/= "" query-text) (chroma-alive-p))
         (let* ((collection-name (format nil "~A_Facts" (string persona-name)))
@@ -124,8 +123,8 @@ Facts collection yet exists for this persona."
                    (query-resp (chroma-query collection-id (list query-vector) :n-results limit))
                    (entries (remove nil (mapcar #'fact-card-query-result->entry
                                                (extract-chroma-query-results query-resp)))))
-              (sort (delete-duplicates entries :key (lambda (entry) (getf entry :turn-number)) :test #'= :from-end t)
-                    #'< :key (lambda (entry) (getf entry :turn-number)))))))
+              (sort (delete-duplicates entries :key (lambda (entry) (getf entry :turn-timestamp)) :test #'= :from-end t)
+                    #'< :key (lambda (entry) (getf entry :turn-timestamp)))))))
     (error (e)
       (log-message :warn "Failed to retrieve relevant turn fact cards"
                    :context `(("persona" . ,persona-name) ("error" . ,(princ-to-string e))))
@@ -134,18 +133,19 @@ Facts collection yet exists for this persona."
 (defun fact-card-preload-message (entry)
   "Returns a synthetic preload message presenting one retrieved fact-card ENTRY."
   (list (cons "role" "model")
-        (cons "content" (format nil "[Relevant Memory (Turn ~D)]~%~A"
-                               (getf entry :turn-number)
+        (cons "content" (format nil "[Relevant Memory] ~A~%~A"
+                               (format-prompt-timestamp (floor (getf entry :turn-timestamp)))
                                (getf entry :document)))))
 
 (defun relevant-turn-fact-card-messages (persona-name query-text recent-messages &optional (limit 8))
   "Returns up to LIMIT synthetic preload messages for the fact cards most
-relevant to QUERY-TEXT, in ascending turn-number order. Any fact card whose
-turn number is already present in RECENT-MESSAGES is omitted, so a
-retrieved memory is never sent twice alongside its own literal turn."
-  (let ((excluded-turn-numbers (remove-duplicates (remove nil (mapcar #'message-turn-number recent-messages)))))
+relevant to QUERY-TEXT, in ascending (chronological) turn-timestamp order. Any
+fact card whose turn timestamp is already present in RECENT-MESSAGES is
+omitted, so a retrieved memory is never sent twice alongside its own literal
+turn."
+  (let ((excluded-turn-timestamps (remove-duplicates (remove nil (mapcar #'message-turn-timestamp recent-messages)))))
     (mapcar #'fact-card-preload-message
-            (remove-if (lambda (entry) (member (getf entry :turn-number) excluded-turn-numbers))
+            (remove-if (lambda (entry) (member (getf entry :turn-timestamp) excluded-turn-timestamps :test #'=))
                        (retrieve-relevant-turn-fact-cards persona-name query-text limit)))))
 
 (defun generate-and-persist-turn-fact-card (bot persona-name a-turn)
@@ -155,7 +155,7 @@ retrieved memory is never sent twice alongside its own literal turn."
     (error (e)
       (log-message :warn "Failed to generate turn fact card"
                    :context `(("persona" . ,persona-name)
-                              ("turn" . ,(and a-turn (turn-number a-turn)))
+                              ("turn" . ,(and a-turn (turn-timestamp a-turn)))
                               ("error" . ,(princ-to-string e)))))))
 
 (defun maybe-generate-turn-fact-card-in-background (conversation)
@@ -170,7 +170,7 @@ background thread) never spawn a thread or attempt any I/O."
   (let* ((bot (conversation-chatbot conversation))
          (persona-name (chatbot-persona-name bot))
          (a-turn (car (last (conversation-turns conversation)))))
-    (when (and *fact-cards-enabled-p* persona-name a-turn (turn-number a-turn) (chroma-alive-p))
+    (when (and *fact-cards-enabled-p* persona-name a-turn (turn-timestamp a-turn) (chroma-alive-p))
       (let* ((captured-context (resolve-runtime-context nil))
              (thread (sb-thread:make-thread
                      (lambda ()
