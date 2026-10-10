@@ -36,7 +36,7 @@
              (search "403" msg)
              (search "405" msg)))))
 
-(defmacro with-exponential-backoff-retry ((&key (max-retries 3) (base-delay-ms 100)) &body body)
+(defmacro with-exponential-backoff-retry ((&key (max-retries 3) (base-delay-ms 1000)) &body body)
   "Executes BODY, retrying up to MAX-RETRIES times with exponential back-off on transient errors."
   (let ((retry-var (gensym "RETRY"))
         (delay-var (gensym "DELAY"))
@@ -66,7 +66,7 @@
     (log-message :info "HTTP POST request"
                  :context `(("url" . ,(sanitize-url-for-log url))))
     (let ((http-post-function (current-http-post-function)))
-      (with-exponential-backoff-retry (:max-retries 3 :base-delay-ms 100)
+      (with-exponential-backoff-retry (:max-retries 3 :base-delay-ms 1000)
         (if want-stream
             (funcall http-post-function url
                      :headers headers
@@ -89,7 +89,7 @@
     (log-message :info "HTTP GET request"
                  :context `(("url" . ,(sanitize-url-for-log url))))
     (let ((http-get-function (current-http-get-function)))
-      (with-exponential-backoff-retry (:max-retries 3 :base-delay-ms 100)
+      (with-exponential-backoff-retry (:max-retries 3 :base-delay-ms 1000)
         (if want-stream
             (funcall http-get-function url
                      :headers headers
@@ -110,7 +110,7 @@
     (log-message :info "HTTP PATCH request"
                 :context `(("url" . ,(sanitize-url-for-log url))))
     (let ((http-patch-function (current-http-patch-function)))
-      (with-exponential-backoff-retry (:max-retries 3 :base-delay-ms 100)
+      (with-exponential-backoff-retry (:max-retries 3 :base-delay-ms 1000)
         (funcall http-patch-function url
                 :headers headers
                 :content content
@@ -126,7 +126,7 @@
     (log-message :info "HTTP DELETE request"
                  :context `(("url" . ,(sanitize-url-for-log url))))
     (let ((http-delete-function (current-http-delete-function)))
-      (with-exponential-backoff-retry (:max-retries 3 :base-delay-ms 100)
+      (with-exponential-backoff-retry (:max-retries 3 :base-delay-ms 1000)
         (funcall http-delete-function url
                  :headers headers
                  :connect-timeout connect-timeout
