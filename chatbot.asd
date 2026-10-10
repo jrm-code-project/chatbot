@@ -86,13 +86,14 @@
      (:file "backend-gemini"     :pathname "backends/backend-gemini" :depends-on ("package" "backend-registry" "vars" "data" "logging" "http-utils" "text-utils" "payloads" "gemini-payloads" "mcp" "tool-execution" "turn-runner"))
      (:file "backend-openai"     :pathname "backends/backend-openai" :depends-on ("package" "backend-registry" "vars" "data" "http-utils" "text-utils" "payloads" "openai-payloads" "mcp" "tool-execution" "turn-runner" "fact-cards"))
      (:file "backend-google"     :pathname "backends/backend-google" :depends-on ("package" "backend-registry" "vars" "data" "logging" "http-utils" "payloads" "google-payloads" "google-caching" "mcp" "tool-execution" "turn-runner" "fact-cards"))
-     (:file "chat"               :pathname "core/chat" :depends-on ("package" "backend-registry" "vars" "data" "attachments" "conversation-compression" "chat-entry" "inbox-polling" "backend-gemini" "backend-openai" "backend-google"))
+     (:file "chat"               :pathname "core/chat" :depends-on ("package" "backend-registry" "vars" "data" "attachments" "prompt-decoration" "conversation-compression" "chat-entry" "inbox-polling" "backend-gemini" "backend-openai" "backend-google"))
      (:file "backend-llambda-loader" :pathname "backends/backend-llambda-loader" :depends-on ("chat"))
      (:file "test-runner"        :pathname "core/test-runner" :depends-on ("package"))
      (:file "round-robin"        :pathname "orchestration/round-robin" :depends-on ("package" "data" "attachments" "prompt-decoration" "text-utils" "chat"))
      (:file "sandbox-personas"   :pathname "orchestration/sandbox-personas" :depends-on ("package" "data" "conversation-compression" "prompt-decoration" "text-utils" "chat"))
      (:file "prompt-tools"       :pathname "tools/prompt-tools" :depends-on ("package" "vars" "chat" "attachment-paths"))
      (:file "screenshot-tools"   :pathname "tools/screenshot-tools" :depends-on ("package" "attachment-paths" "chat"))
+     (:file "narc"               :pathname "tools/narc" :depends-on ("package" "attachment-paths" "chat"))
      (:file "news-tools"         :pathname "tools/news-tools" :depends-on ("package" "chat"))))))
 
 (defsystem "chatbot/tests"

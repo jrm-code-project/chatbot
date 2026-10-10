@@ -328,6 +328,25 @@ using QUERY-TEXT as the query, filtering out any that do not pass THRESHOLD (def
     (setf (conversation-prompt-decorations conversation) new-decorations)
     new-conv))
 
+(defparameter +chat-extra-prompt-decoration-ttl+ 4
+  "Number of turns a string passed via CHAT's :EXTRA argument remains active as a
+transient prompt decoration.")
+
+(defun normalize-chat-extra-strings (extra)
+  "Returns EXTRA normalized to a list of strings, accepting a single string, a
+list of strings, or NIL."
+  (cond
+    ((null extra) nil)
+    ((stringp extra) (list extra))
+    ((listp extra) extra)
+    (t (list (princ-to-string extra)))))
+
+(defun add-chat-extra-prompt-decorations (conversation extra)
+  "Adds each string in EXTRA (a string or list of strings) to CONVERSATION as a
+transient prompt decoration lasting +CHAT-EXTRA-PROMPT-DECORATION-TTL+ turns."
+  (dolist (extra-text (normalize-chat-extra-strings extra))
+    (add-prompt-decoration conversation extra-text :ttl +chat-extra-prompt-decoration-ttl+)))
+
 (defun get-active-prompt-decorations-text (conversation)
   "Returns a combined string of active prompt decorations for CONVERSATION without decrementing TTL."
   (let ((decorations (conversation-prompt-decorations conversation))

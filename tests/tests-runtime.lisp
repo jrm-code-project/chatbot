@@ -66,6 +66,68 @@
       (when (probe-file checkpoint-file)
         (delete-file checkpoint-file)))))
 
+(fiveam:test test-normalize-chat-extra-strings-accepts-string-list-or-nil
+  (fiveam:is-false (normalize-chat-extra-strings nil))
+  (fiveam:is (equal '("one string") (normalize-chat-extra-strings "one string")))
+  (fiveam:is (equal '("first" "second") (normalize-chat-extra-strings '("first" "second")))))
+
+(fiveam:test test-chat-extra-string-becomes-a-ttl-4-prompt-decoration
+  (let* ((context (make-runtime-context
+                  :gemini-api-key-function (lambda () "mocked-google-api-key")
+                  :http-post-function
+                  (lambda (url &rest args)
+                    (declare (ignore url args))
+                    (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"ack\"}], \"role\": \"model\"}}]}" 200))))
+        (conv (new-chat :backend :google :runtime-context context)))
+    (chat "Hello" :conversation conv :extra "Remember this for a few turns.")
+    (let ((decorations (conversation-prompt-decorations conv)))
+      (fiveam:is (= 1 (length decorations)))
+      (let ((dec (first decorations)))
+        ;; TTL starts at 4 but is decremented once after this same turn completes.
+        (fiveam:is (= 3 (getf dec :ttl)))
+        (fiveam:is (string= "Remember this for a few turns." (getf dec :text)))))))
+
+(fiveam:test test-chat-extra-list-adds-one-decoration-per-string
+  (let* ((context (make-runtime-context
+                  :gemini-api-key-function (lambda () "mocked-google-api-key")
+                  :http-post-function
+                  (lambda (url &rest args)
+                    (declare (ignore url args))
+                    (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"ack\"}], \"role\": \"model\"}}]}" 200))))
+        (conv (new-chat :backend :google :runtime-context context)))
+    (chat "Hello" :conversation conv :extra '("First extra note" "Second extra note"))
+    (let ((decorations (conversation-prompt-decorations conv)))
+      (fiveam:is (= 2 (length decorations)))
+      (fiveam:is (equal '("First extra note" "Second extra note") (mapcar (lambda (dec) (getf dec :text)) decorations)))
+      ;; TTL starts at 4 but is decremented once after this same turn completes.
+      (fiveam:is (every (lambda (dec) (= 3 (getf dec :ttl))) decorations)))))
+
+(fiveam:test test-chat-extra-appears-in-the-live-request-and-expires-after-four-turns
+  (let* ((captured-contents nil)
+        (context (make-runtime-context
+                  :gemini-api-key-function (lambda () "mocked-google-api-key")
+                  :http-post-function
+                  (lambda (url &rest args)
+                    (declare (ignore url))
+                    (push (getf args :content) captured-contents)
+                    (values "{\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"ack\"}], \"role\": \"model\"}}]}" 200))))
+        (conv (new-chat :backend :google :runtime-context context)))
+    (chat "Turn 0" :conversation conv :extra "Transient note")
+    (chat "Turn 1" :conversation conv)
+    (chat "Turn 2" :conversation conv)
+    (chat "Turn 3" :conversation conv)
+    (chat "Turn 4" :conversation conv)
+    (let* ((payloads (mapcar #'decode-test-json (reverse captured-contents)))
+          (last-message-texts
+            (mapcar (lambda (payload)
+                     (message-part-texts (first (last (google-payload-contents payload)))))
+                   payloads)))
+      ;; Visible for this turn plus the next three (TTL 4 total), gone by the fifth call.
+      (dolist (texts (subseq last-message-texts 0 4))
+        (fiveam:is (member "Transient note" texts :test #'search)))
+      (fiveam:is-false (member "Transient note" (fifth last-message-texts) :test #'search)))
+    (fiveam:is-false (conversation-prompt-decorations conv))))
+
 (fiveam:test test-minions-data-directory-defaults-to-user-runtime-state
   (let* ((temp-dir (uiop:default-temporary-directory))
          (mock-home (merge-pathnames "mock-home-minions-default/" temp-dir))

@@ -108,15 +108,19 @@
                                 conversation
                                 :provider-conversation provider-conversation))))
 
-(defun chat (input &key conversation callback file files (temperature nil temperaturep) (top-p nil top-pp))
+(defun chat (input &key conversation callback file files extra (temperature nil temperaturep) (top-p nil top-pp))
   "Sends user input to the active conversation using the appropriate backend API.
 If a callback is provided, each text token is passed to it in real-time.
+EXTRA (a string or list of strings) is added as transient prompt decorations
+visible for the next +CHAT-EXTRA-PROMPT-DECORATION-TTL+ turns, starting with
+this one.
 Returns the complete response text."
   (let ((context (resolve-chat-entry-context conversation)))
     (execute-chat-entry-shell
      conversation
      context
      (lambda (active-conversation active-context)
+       (add-chat-extra-prompt-decorations active-conversation extra)
        (finalize-chat-turn-result
         (chat-turn input
                    :conversation active-conversation
