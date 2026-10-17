@@ -148,7 +148,7 @@
 
 (defun spawn-mcp-server-thread (thunk name)
   "Starts one MCP supervision thread named NAME running THUNK."
-  (let ((thread (sb-thread:make-thread thunk :name name)))
+  (let ((thread (make-thread-inheriting-streams thunk :name name)))
     (register-supervised-thread (current-resource-supervisor) thread)
     thread))
 

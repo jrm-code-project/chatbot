@@ -27,6 +27,29 @@
 (defvar *default-runtime-context* nil
   "Canonical runtime context used for legacy no-context entry points.")
 
+(defun make-thread-inheriting-streams (thunk &key name)
+  "Like SB-THREAD:MAKE-THREAD, but the new thread sees the creating thread's
+standard streams (new threads otherwise get the global values, i.e. the
+terminal, instead of e.g. the SLY REPL's streams)."
+  (let ((standard-output *standard-output*)
+        (error-output *error-output*)
+        (trace-output *trace-output*)
+        (standard-input *standard-input*)
+        (query-io *query-io*)
+        (debug-io *debug-io*)
+        (terminal-io *terminal-io*))
+    (sb-thread:make-thread
+     (lambda ()
+       (let ((*standard-output* standard-output)
+             (*error-output* error-output)
+             (*trace-output* trace-output)
+             (*standard-input* standard-input)
+             (*query-io* query-io)
+             (*debug-io* debug-io)
+             (*terminal-io* terminal-io))
+         (funcall thunk)))
+     :name name)))
+
 (defvar *active-conversation* nil
   "Deprecated compatibility alias for the active conversation.
 Runtime code no longer consults or mirrors this special; use
@@ -104,11 +127,11 @@ compatibility-only ambient special variables."
                      :log-level (inherit log-level-p
                                          log-level
                                          #'runtime-context-log-level
-                                         :info)
+                                         :warn)
                      :log-stream (inherit log-stream-p
                                           log-stream
                                           #'runtime-context-log-stream
-                                          *error-output*)
+                                          (make-synonym-stream '*error-output*))
                      :http-connect-timeout (inherit http-connect-timeout-p
                                                     http-connect-timeout
                                                     #'runtime-context-http-connect-timeout

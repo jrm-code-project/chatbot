@@ -172,7 +172,7 @@ background thread) never spawn a thread or attempt any I/O."
          (a-turn (car (last (conversation-turns conversation)))))
     (when (and *fact-cards-enabled-p* persona-name a-turn (turn-timestamp a-turn) (chroma-alive-p))
       (let* ((captured-context (resolve-runtime-context nil))
-             (thread (sb-thread:make-thread
+             (thread (make-thread-inheriting-streams
                      (lambda ()
                        (call-with-runtime-context
                         captured-context

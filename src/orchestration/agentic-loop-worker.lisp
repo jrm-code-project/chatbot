@@ -196,7 +196,7 @@ queued, and :EXHAUSTED when LOOP has no restart budget left."
   (setf (agentic-loop-status loop) :running)
   (unless (agentic-loop-started-at loop)
     (setf (agentic-loop-started-at loop) (get-high-precision-timestamp)))
-  (let ((thread (sb-thread:make-thread
+  (let ((thread (make-thread-inheriting-streams
                  (lambda ()
                    (run-agentic-loop-worker loop))
                  :name (format nil "Agentic-Loop-Worker-~A" (agentic-loop-id loop)))))

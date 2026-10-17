@@ -135,7 +135,7 @@
                    *default-runtime-context*))))
         (setf *agentic-loop-monitor-active* t)
         (setf *agentic-loop-monitor-thread*
-              (sb-thread:make-thread
+              (make-thread-inheriting-streams
                (lambda ()
                  (call-with-runtime-context monitor-context
                                             #'run-agentic-loop-monitor

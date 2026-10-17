@@ -7,7 +7,7 @@
 
 (defun default-persona-memory-compression-thread-function (thunk thread-name)
   "Starts a background thread for persona memory compression."
-  (sb-thread:make-thread thunk :name thread-name))
+  (make-thread-inheriting-streams thunk :name thread-name))
 
 (defparameter *persona-memory-compression-thread-function*
   #'default-persona-memory-compression-thread-function

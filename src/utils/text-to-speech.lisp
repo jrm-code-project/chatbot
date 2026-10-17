@@ -3,9 +3,9 @@
 
 (in-package "CHATBOT")
 
-(defparameter *texttospeech-enabled-p* t
-  "Master kill-switch for post-turn Text-to-Speech synthesis and playback.
-When NIL, SPEAK-CHAT-RESPONSE returns immediately without deriving an API key, probing the
+(defparameter *texttospeech-enabled-p* nil
+  "Master switch for post-turn Text-to-Speech synthesis and playback; off by default.
+Set to T to enable. When NIL, SPEAK-CHAT-RESPONSE returns immediately without deriving an API key, probing the
 filesystem, or making any network call. The test suite binds this to NIL so tests never make
 a real call to texttospeech.googleapis.com, regardless of any API key discoverable on disk.")
 
@@ -138,7 +138,7 @@ real API key discovered on disk) instead of honoring the caller's (or a test's) 
          (captured-enabled-p *texttospeech-enabled-p*)
          (captured-api-key *texttospeech-api-key*)
          (captured-play-function *play-audio-file-function*)
-         (thread (sb-thread:make-thread
+         (thread          (make-thread-inheriting-streams
                  (lambda ()
                    (call-with-runtime-context
                     captured-context
