@@ -177,7 +177,10 @@ background thread) never spawn a thread or attempt any I/O."
                        (call-with-runtime-context
                         captured-context
                         (lambda ()
-                          (generate-and-persist-turn-fact-card bot persona-name a-turn))))
+                          ;; Suppress the summarizer's streamed text and token diagnostics.
+                          (let ((*standard-output* (make-broadcast-stream))
+                                (*trace-output* (make-broadcast-stream)))
+                            (generate-and-persist-turn-fact-card bot persona-name a-turn)))))
                      :name "chatbot-fact-card")))
         (register-supervised-thread (current-resource-supervisor) thread)
         thread))))
