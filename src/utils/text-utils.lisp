@@ -205,6 +205,7 @@ If the given model is already the strongest model (or not recognized), returns i
                    "gemini-2.5-flash"
                    "gemini-3.5-flash"
                    "gemini-3-flash-preview"
+                   "gemini-flash-lite-latest"
                    "gemini-flash-latest"
                    "gemini-pro-latest"))
          (pos (position clean-name models :test #'string-equal)))
@@ -215,7 +216,13 @@ If the given model is already the strongest model (or not recognized), returns i
          (if prefix-p
              (concatenate 'string "models/" stronger)
              stronger)))
-      ;; 2. If not explicitly listed, but contains "flash", replace it with "pro"
+      ;; 2. If not explicitly listed, but contains "flash-lite", drop the "-lite" suffix;
+      ;;    otherwise if it contains "flash", replace it with "pro" (no "pro-lite" models exist)
+      ((search "flash-lite" clean-name :test #'char-equal)
+       (let ((stronger (cl-ppcre:regex-replace-all "(?i)flash-lite" clean-name "flash")))
+         (if prefix-p
+             (concatenate 'string "models/" stronger)
+             stronger)))
       ((search "flash" clean-name :test #'char-equal)
        (let ((stronger (cl-ppcre:regex-replace-all "(?i)flash" clean-name "pro")))
          (if prefix-p
