@@ -374,8 +374,9 @@ transient prompt decoration lasting +CHAT-EXTRA-PROMPT-DECORATION-TTL+ turns."
           input
           (let* ((parts nil)
                  (persona (chatbot-persona-name chatbot))
-                 (diary-text (and persona (get-relevant-diary-entries-text persona input)))
-                 (memory-text (and persona (get-relevant-memories-text persona input)))
+                 (rag-p (memory-rag-supported? chatbot))
+                 (diary-text (and persona rag-p (get-relevant-diary-entries-text persona input)))
+                 (memory-text (and persona rag-p (get-relevant-memories-text persona input)))
                  (ttl-decorations-text (when conversation (get-active-prompt-decorations-text conversation))))
             (when (chatbot-include-timestamp-p chatbot)
               (push (funcall *prompt-timestamp-function*) parts))

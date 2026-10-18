@@ -167,6 +167,10 @@
     (unless conversation
       (error 'mcp-tool-execution-error :tool-name tool-name :reason "No active conversation found for loadSkill."))
     
+    (unless (memory-rag-supported? bot)
+      (error 'mcp-tool-execution-error :tool-name tool-name
+             :reason "Skill lookup is only available with the :google and :gemini backends."))
+    
     (let ((skills (get-relevant-skills (chatbot-persona-name bot) description :n-results 1 :threshold nil)))
       (if (null skills)
           (error 'mcp-tool-execution-error :tool-name tool-name :reason (format nil "No skill found matching: ~A" description))

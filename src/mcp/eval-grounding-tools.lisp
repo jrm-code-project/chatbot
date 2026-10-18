@@ -217,6 +217,10 @@ for the top 3 semantic matches to the given query."
       (error 'mcp-tool-execution-error
              :tool-name tool-name
              :reason "Semantic memory is not available (no persona is configured)."))
+    (unless (memory-rag-supported? bot)
+      (error 'mcp-tool-execution-error
+             :tool-name tool-name
+             :reason "Semantic memory is only available with the :google and :gemini backends."))
     (let ((query (normalize-builtin-tool-string-argument
                   (or (mcp-val "query" arguments)
                       (mcp-val :query arguments))

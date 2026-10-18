@@ -150,7 +150,8 @@ Sentence:" entity-name entity-type observation))
   "Intercepts knowledge graph mutations and syncs new observations to the ChromaDB <persona>_Memory collection as complete sentences."
   (handler-case
       (let ((persona (chatbot-persona-name bot)))
-        (when (and persona (member tool-name '("add_observations" "create_entities") :test #'string-equal))
+        (when (and persona (memory-rag-supported? bot)
+                   (member tool-name '("add_observations" "create_entities") :test #'string-equal))
           (let ((observations (extract-observations-from-tool tool-name arguments)))
             (when (and observations (chroma-alive-p))
               (let* ((collection-name (format nil "~A_Memory" (string persona)))

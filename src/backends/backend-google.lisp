@@ -128,7 +128,8 @@
                                                                         :effective-model effective-model
                                                                         :omit-preloaded-history-p (and resolved-cached-content-name t)
                                                                         :relevant-fact-card-messages
-                                                                        (when (stringp input)
+                                                                        (when (and (stringp input)
+                                                                                   (memory-rag-supported? bot))
                                                                           (relevant-turn-fact-card-messages
                                                                            (chatbot-persona-name bot)
                                                                            input

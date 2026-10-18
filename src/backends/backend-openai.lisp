@@ -28,7 +28,8 @@
                                                                :persona-diary-entries persona-diary-entries
                                                                :file-attachments file-attachments
                                                                :relevant-fact-card-messages
-                                                               (when (stringp input)
+                                                               (when (and (stringp input)
+                                                                          (memory-rag-supported? bot))
                                                                  (relevant-turn-fact-card-messages
                                                                   (chatbot-persona-name bot)
                                                                   input

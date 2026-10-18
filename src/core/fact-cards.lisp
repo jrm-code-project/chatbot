@@ -170,7 +170,8 @@ background thread) never spawn a thread or attempt any I/O."
   (let* ((bot (conversation-chatbot conversation))
          (persona-name (chatbot-persona-name bot))
          (a-turn (car (last (conversation-turns conversation)))))
-    (when (and *fact-cards-enabled-p* persona-name a-turn (turn-timestamp a-turn) (chroma-alive-p))
+    (when (and *fact-cards-enabled-p* persona-name a-turn (turn-timestamp a-turn)
+               (memory-rag-supported? bot) (chroma-alive-p))
       (let* ((captured-context (resolve-runtime-context nil))
              (thread (make-thread-inheriting-streams
                      (lambda ()

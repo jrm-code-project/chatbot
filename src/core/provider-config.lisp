@@ -80,6 +80,14 @@ default model.")
 Backends listed here lack a suitable cheap model of their own, so cheap
 summarization requests are instead routed to the overriding backend.")
 
+(defun memory-rag-supported? (bot)
+  "Returns true when BOT's backend can use the ChromaDB memory RAG (diary, memory,
+and fact-card retrieval and indexing). Embeddings come from Google, so only the
+:google and :gemini backends are supported."
+  (and bot
+       (member (chatbot-backend bot) '(:google :gemini))
+       t))
+
 (defun cheap-summarization-backend (backend)
   "Returns the backend that should actually run a cheap summarization request
 on BACKEND's behalf, per *CHEAP-SUMMARIZATION-BACKEND-OVERRIDES*."

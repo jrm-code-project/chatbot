@@ -278,6 +278,12 @@
             ;; irrelevant document (distance 0.9 > 0.5) must be excluded
             (fiveam:is (null (search "Irrelevant doc." decorated)))))))))
 
+(fiveam:def-test test-memory-rag-supported-only-for-google-backends ()
+  (fiveam:is-true (memory-rag-supported? (conversation-chatbot (new-chat :backend :gemini))))
+  (fiveam:is-true (memory-rag-supported? (conversation-chatbot (new-chat :backend :google))))
+  (fiveam:is-false (memory-rag-supported? (conversation-chatbot (new-chat :backend :openai :model "gpt-4o"))))
+  (fiveam:is-false (memory-rag-supported? nil)))
+
 (fiveam:def-test test-stronger-model ()
   "Verifies that stronger-model correctly moves up the Gemini model strength hierarchy."
   (fiveam:is (string= "gemini-2.5-flash" (stronger-model "gemini-1.5-flash")))
