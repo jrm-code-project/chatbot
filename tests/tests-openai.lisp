@@ -1105,6 +1105,38 @@ data: [DONE]")
               (fiveam:is (string= "file-grok-key-from-localappdata" (grok-api-key))))))
       (uiop:delete-directory-tree appdata-dir :validate t))))
 
+(fiveam:test test-xai-management-key-resolution
+  (let ((*xai-management-key* "explicit-mgmt-key"))
+    (fiveam:is (string= "explicit-mgmt-key" (xai-management-key))))
+  (let* ((*xai-management-key* nil)
+         (context
+           (make-runtime-context
+            :getenv-function (lambda (name)
+                               (cond
+                                 ((string= name "LOCALAPPDATA") nil)
+                                 ((string= name "XAI_MANAGEMENT_KEY") "env-mgmt-key")
+                                 (t nil))))))
+    (call-with-runtime-context
+     context
+     (lambda ()
+       (let ((*user-homedir-pathname-function* (lambda () #p"/non-existent-home/")))
+         (fiveam:is (string= "env-mgmt-key" (xai-management-key)))))))
+  (let* ((*xai-management-key* nil)
+         (appdata-dir (merge-pathnames "xai-mock-localappdata/" (uiop:temporary-directory)))
+         (config-dir (merge-pathnames "config/X/" appdata-dir))
+         (key-file (merge-pathnames "management-key" config-dir)))
+    (ensure-directories-exist config-dir)
+    (with-open-file (s key-file :direction :output :if-exists :supersede)
+      (write-line "  file-mgmt-key " s))
+    (unwind-protect
+         (call-with-runtime-context
+          (make-runtime-context
+           :getenv-function (lambda (name)
+                              (and (string= name "LOCALAPPDATA") (namestring appdata-dir))))
+          (lambda ()
+            (fiveam:is (string= "file-mgmt-key" (xai-management-key)))))
+      (uiop:delete-directory-tree appdata-dir :validate t))))
+
 (fiveam:test test-grok-api-base-url-normalization
   (let ((*grok-base-url* "https://api.x.ai/"))
     (fiveam:is (string= "https://api.x.ai/v1" (grok-api-base-url))))

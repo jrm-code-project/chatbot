@@ -107,6 +107,8 @@
            "*GROK-API-KEY*"
            "GROK-API-KEY"
            "GROK-API-BASE-URL"
+           "*XAI-MANAGEMENT-KEY*"
+           "XAI-MANAGEMENT-KEY"
            "+PLANNER-SYSTEM-INSTRUCTION+"
            "*SCREENSHOT-PATH*"
            "*SCREENSHOT-PATH-1*"

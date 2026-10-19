@@ -20,6 +20,9 @@
 (defparameter *grok-api-key* nil
   "The API key for the Grok API. If nil, reads from AppData/Local/config/X/api-key or checks GROK_API_KEY environment variable.")
 
+(defparameter *xai-management-key* nil
+  "The xAI management key. If nil, reads from AppData/Local/config/X/management-key or checks XAI_MANAGEMENT_KEY environment variable.")
+
 (defparameter *texttospeech-base-url* "https://texttospeech.googleapis.com/v1"
   "The base REST endpoint for the Google Cloud Text-to-Speech API.")
 
@@ -140,6 +143,23 @@ and falls back to the GROK_API_KEY environment variable."
         (if (probe-file path)
             (string-trim '(#\Space #\Tab #\Return #\Linefeed) (uiop:read-file-string path))
             (funcall (current-getenv-function) "GROK_API_KEY")))))
+
+(defun xai-management-key-file-path ()
+  "Constructs the target path for the xAI management key stored in AppData/Local/config/X/management-key."
+  (let* ((local-app-data (funcall (current-getenv-function) "LOCALAPPDATA"))
+         (home (funcall *user-homedir-pathname-function*)))
+    (if (and local-app-data (string/= local-app-data ""))
+        (merge-pathnames "config/X/management-key" (uiop:ensure-directory-pathname local-app-data))
+        (merge-pathnames "AppData/Local/config/X/management-key" home))))
+
+(defun xai-management-key ()
+  "Returns the xAI management key. First checks *xai-management-key*, then reads from
+AppData/Local/config/X/management-key, and falls back to the XAI_MANAGEMENT_KEY environment variable."
+  (or *xai-management-key*
+      (let ((path (xai-management-key-file-path)))
+        (if (probe-file path)
+            (string-trim '(#\Space #\Tab #\Return #\Linefeed) (uiop:read-file-string path))
+            (funcall (current-getenv-function) "XAI_MANAGEMENT_KEY")))))
 
 (defun texttospeech-api-key-file-path ()
   "Constructs the target path for the Text-to-Speech API key stored in AppData/Local/config/googleapis/texttospeech/apikey."
